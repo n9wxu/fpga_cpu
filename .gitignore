@@ -1,0 +1,68 @@
+# macOS
+.DS_Store
+
+# Editors
+*.swp
+*~
+.vscode/
+.idea/
+
+# Generated from cpu/isa.yaml
+sim/src/gen/
+sim/tools/*.asm.rules
+
+# Simulator / C builds
+build/
+*.o
+*.d
+*.a
+*.elf
+*.bin
+*.hex
+!fpga/**/*.hex
+
+# Verilog simulation
+*.vcd
+*.fst
+*.vvp
+obj_dir/
+
+# Xilinx ISE outputs
+fpga/build/
+*.ngc
+*.ngd
+*.ncd
+*.pcf
+*.bld
+*.bgn
+*.bit
+*.twr
+*.twx
+*.par
+*.pad
+*.mrp
+*.map
+*.ngm
+*.xrpt
+*.xwbt
+*.lso
+*.srp
+*.syr
+*.ptwx
+*.unroutes
+*.drc
+xst/
+_xmsgs/
+xlnx_auto_0_xdb/
+*.log
+
+# KiCad
+pcb/**/*-backups/
+pcb/**/*.kicad_prl
+pcb/**/fp-info-cache
+pcb/**/*.lck
+pcb/**/gerbers/
+
+# LLVM (the llvm-project checkout and builds live outside or are ignored)
+llvm/llvm-project/
+llvm/build*/
