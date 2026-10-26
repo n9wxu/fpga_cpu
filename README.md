@@ -21,6 +21,7 @@ committed to the FPGA.
 | `pcb/`     | Expansion board (RP2350, SD, sound, I/O) |
 | `basic/`   | BASIC interpreter in C |
 | `llvm/`    | LLVM backend for the CPU |
+| `web/`     | The simulator compiled to WebAssembly: BASIC in a browser |
 | `docs/`    | System architecture and design decisions |
 
 ## Workflow

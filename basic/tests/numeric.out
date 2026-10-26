@@ -1,0 +1,44 @@
+READY.
+PRINT 0, .5, -.25, 100, 1/3, 2/3
+ 0               .5             -.25             100             .3333333 
+ .6666667 
+READY.
+PRINT 123.456, 1234567, 12345678, 9999999, 10000000
+ 123.456         1234567         12345678        9999999         10000000 
+READY.
+PRINT .01, .001, 1E-10, 1.5E20, 3.4E38
+ .01             1E-03           1E-10           1.5E+20         3.4E+38 
+READY.
+PRINT 1E10, 2^31, -2^15, 255/256
+ 1E+10           2.147484E+09   -32768           .9960938 
+READY.
+PRINT INT(3.7), INT(-3.7), ABS(-5), SGN(-2), SGN(0), SQR(16), SQR(2)
+ 3              -4               5              -1               0 
+ 4               1.414214 
+READY.
+PRINT 10 \ 3, -7 \ 2, 7 MOD -3, 5.5 MOD 2
+ 3              -3               1               1.5 
+READY.
+A%=32767: PRINT A%+1, A%*2
+ 32768           65534 
+READY.
+B%=-3.5: PRINT B%
+-4 
+READY.
+PRINT 3 AND 5, 3 OR 5, NOT 0, NOT -1, 1=1, 1=2
+ 1               7              -1               0              -1 
+ 0 
+READY.
+PRINT &HFF, &HF00600, HEX$(255), HEX$(&HF00600), HEX$(-1)
+ 255             15730176       FF              F00600          FFFF
+READY.
+PRINT VAL("12.5E1"), VAL("  -3"), VAL("ABC"), STR$(42)
+ 125            -3               0               42
+READY.
+PRINT INT(SIN(1)*1000), INT(COS(0)*1000), INT(ATN(1)*4000), INT(EXP(1)*1000), INT(LOG(10)*1000)
+ 841             1000            3141            2718            2302 
+READY.
+PRINT 2^0.5, (-8)^(1/3)
+ 1.414214       
+?ILLEGAL QUANTITY ERROR
+READY.

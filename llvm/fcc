@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+"""fcc: C compiler driver for fpga_cpu.
+
+usage: fcc [-v A|B] [-O<n>] [-S] [-I dir] [-D name[=val]] [-o out.bin]
+           [--lst] [--stats] [--keep] [--] files.c|files.s ...
+
+Compiles C with clang --target=fcpu to assembly, then links with
+sim/tools/asm.py: crt0, your files, and only the runtime library files
+that are needed. Writes out.bin plus out.sym (symbols for fsim-gui), and
+with --lst / --stats a listing and per-encoding statistics.
+
+The runtime (llvm/runtime: start-up code, libc subset, libm, integer and
+soft-float helpers from compiler-rt) is compiled on first use into
+llvm/runtime/build/.
+"""
+import argparse
+import os
+import subprocess
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+CLANG = os.path.join(HERE, "build", "bin", "clang")
+RT = os.path.join(HERE, "runtime")
+RT_BUILD = os.path.join(RT, "build")
+CRT_SRC = os.path.join(HERE, "llvm-project", "compiler-rt", "lib", "builtins")
+ASM = os.path.join(ROOT, "sim", "tools", "asm.py")
+PY = os.path.join(ROOT, ".venv", "bin", "python")
+
+CFLAGS = ["--target=fcpu", "-funsigned-char", "-ffreestanding", "-nostdlibinc",
+          "-isystem", os.path.join(RT, "include"), "-fno-asynchronous-unwind-tables",
+          "-fno-unwind-tables", "-fomit-frame-pointer"]
+
+# compiler-rt builtins: single-precision soft-float and 64-bit integer helpers
+CRT_FILES = ["addsf3", "subsf3", "mulsf3", "divsf3", "comparesf2", "negsf2",
+             "fixsfsi", "fixunssfsi", "floatsisf", "floatunsisf", "fixsfdi", "fixunssfdi",
+             "floatdisf", "floatundisf", "muldi3", "divdi3", "moddi3", "udivdi3", "umoddi3",
+             "udivmoddi4", "ashldi3", "lshrdi3", "ashrdi3", "cmpdi2", "ucmpdi2", "negdi2",
+             "popcountsi2", "clzsi2", "ctzsi2", "fp_mode"]
+
+
+def run(cmd):
+    r = subprocess.run(cmd)
+    if r.returncode:
+        sys.exit(r.returncode)
+
+
+def stale(out, *srcs):
+    if not os.path.exists(out):
+        return True
+    t = os.path.getmtime(out)
+    return any(os.path.getmtime(s) > t for s in srcs)
+
+
+def compile_c(src, out, opt, extra):
+    run([CLANG, *CFLAGS, opt, *extra, "-S", src, "-o", out])
+
+
+def runtime():
+    """Build the runtime library on demand; returns (crt0, [library files])."""
+    os.makedirs(RT_BUILD, exist_ok=True)
+    libs = []
+    asm_dir = os.path.join(RT, "asm")
+    for f in sorted(os.listdir(asm_dir)):
+        if f.endswith(".s") and f != "crt0.s":
+            libs.append(os.path.join(asm_dir, f))
+    stamp = [CLANG]
+    for sub in ("libc", "libm"):
+        d = os.path.join(RT, sub)
+        for f in sorted(os.listdir(d)):
+            if f.endswith(".c"):
+                src = os.path.join(d, f)
+                out = os.path.join(RT_BUILD, f"{sub}_{f[:-2]}.s")
+                if stale(out, src, *stamp):
+                    compile_c(src, out, "-O2", [])
+                libs.append(out)
+    for name in CRT_FILES:
+        src = os.path.join(CRT_SRC, name + ".c")
+        if not os.path.exists(src):
+            continue
+        out = os.path.join(RT_BUILD, f"crt_{name}.s")
+        if stale(out, src, *stamp):
+            compile_c(src, out, "-O2", ["-I", CRT_SRC, "-w"])
+        libs.append(out)
+    return os.path.join(asm_dir, "crt0.s"), libs
+
+
+def main(argv):
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("files", nargs="+")
+    ap.add_argument("-v", "--variant", default="A")
+    ap.add_argument("-o", "--out")
+    ap.add_argument("-O", dest="opt", default="2")
+    ap.add_argument("-S", action="store_true", help="compile to assembly only")
+    ap.add_argument("-I", action="append", default=[], dest="incs")
+    ap.add_argument("-D", action="append", default=[], dest="defs")
+    ap.add_argument("--lst", action="store_true")
+    ap.add_argument("--stats", action="store_true")
+    ap.add_argument("--keep", action="store_true", help="keep the generated .s files next to the output")
+    ap.add_argument("-q", "--quiet", action="store_true")
+    args = ap.parse_args(argv)
+
+    out = args.out or os.path.splitext(args.files[0])[0] + ".bin"
+    stem = os.path.splitext(out)[0]
+    work = stem + ".fcc" if args.keep else os.path.join(RT_BUILD, "tmp", os.path.basename(stem))
+    os.makedirs(work, exist_ok=True)
+    extra = [f"-I{i}" for i in args.incs] + [f"-D{d}" for d in args.defs]
+    opt = f"-O{args.opt}"
+
+    objs = []
+    for f in args.files:
+        if f.endswith(".c"):
+            s = os.path.join(work, os.path.splitext(os.path.basename(f))[0] + ".s")
+            if args.S:
+                s = os.path.splitext(f)[0] + ".s" if not args.out or len(args.files) > 1 else args.out
+            compile_c(f, s, opt, extra)
+            objs.append(s)
+        elif f.endswith(".s"):
+            objs.append(f)
+        else:
+            sys.exit(f"fcc: don't know what to do with {f}")
+    if args.S:
+        return
+
+    crt0, libs = runtime()
+    cmd = [PY if os.path.exists(PY) else sys.executable, ASM, "-v", args.variant, crt0, *objs,
+           "--lib", *libs, "-o", out, "--sym", stem + ".sym"]
+    if args.lst:
+        cmd += ["--lst", stem + ".lst"]
+    if args.stats:
+        cmd += ["--stats", stem + ".json"]
+    if args.quiet:
+        cmd += ["-q"]
+    run(cmd)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

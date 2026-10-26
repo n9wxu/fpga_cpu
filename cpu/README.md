@@ -2,7 +2,14 @@
 
 CPU and ISA design.
 
-- `isa.md`: the human-readable ISA specification (formats, opcode map, flag behavior, pipeline). Not written yet.
-- `isa.yaml`: the single source of truth for every instruction: mnemonic, length, fields, operands, semantics. The simulator decoder, disassembler, customasm rules and LLVM TableGen are all generated from it. Not written yet.
+- [`isa.yaml`](isa.yaml) is the single source of truth. Every instruction, its
+  semantics, and every encoding of both variants are defined here. The
+  simulator tables, the assembler and the encoding docs are all generated
+  from it.
+- [`isa.md`](isa.md) is the architecture reference: registers, flags,
+  addressing modes, conventions.
+- [`gen/encoding_A.md`](gen/encoding_A.md) and
+  [`gen/encoding_B.md`](gen/encoding_B.md) list every encoding and the
+  opcode-space usage. They are generated, so don't edit them.
 
-The current decisions are in [../docs/architecture.md](../docs/architecture.md).
+Measured results are in [../docs/measurements.md](../docs/measurements.md).

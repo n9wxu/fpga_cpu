@@ -1,0 +1,17 @@
+30 PRINT "THIRTY"
+10 PRINT "TEN"
+20 PRINT "TWENTY":GOTO30
+25 REM  a comment, kept As Typed
+LIST
+20
+LIST
+SAVE "prog"
+NEW
+LIST
+DIR
+LOAD "PROG"
+LIST
+RUN
+DEL "prog"
+DIR
+LOAD "nothere"

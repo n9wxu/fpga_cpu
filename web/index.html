@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>fpga_cpu BASIC</title>
+<style>
+  :root { --bg: #15171a; --panel: #202328; --fg: #d8dadd; --dim: #8a9099; --accent: #6cc070; --led-off: #1d3a1f; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; }
+  main { max-width: 1312px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  p.sub { margin: 0 0 12px; color: var(--dim); }
+  #screen { display: block; width: 100%; aspect-ratio: 16 / 9; background: #000; image-rendering: pixelated;
+            outline: 2px solid transparent; cursor: text; }
+  #screen:focus { outline-color: var(--accent); }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin: 10px 0; }
+  .bar label { color: var(--dim); }
+  button, select { background: var(--panel); color: var(--fg); border: 1px solid #3a3f46; border-radius: 4px;
+                   padding: 4px 10px; font: inherit; cursor: pointer; }
+  button:hover, select:hover { border-color: var(--accent); }
+  #status { color: var(--dim); font-variant-numeric: tabular-nums; margin-left: auto; }
+  .leds { display: flex; gap: 5px; }
+  .leds i { width: 10px; height: 10px; border-radius: 50%; background: var(--led-off); }
+  .leds i.on { background: #4cff50; box-shadow: 0 0 6px #4cff50; }
+  details { margin-top: 8px; color: var(--dim); }
+  code { color: var(--fg); }
+  #hint { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+          background: rgba(0,0,0,.55); color: #fff; font-size: 20px; pointer-events: none; }
+  .wrap { position: relative; }
+</style>
+</head>
+<body>
+<main>
+  <h1>fpga_cpu BASIC</h1>
+  <p class="sub">The BASIC interpreter compiled for the fpga_cpu 16-bit CPU, running on the cycle-counting simulator
+    compiled to WebAssembly. Click the screen and type.</p>
+  <div class="wrap">
+    <canvas id="screen" width="1280" height="720" tabindex="0"></canvas>
+    <div id="hint">Loading…</div>
+  </div>
+  <div class="bar">
+    <button id="reset">Reset</button>
+    <label>Encoding <select id="variant"><option>A</option><option>B</option></select></label>
+    <label>Speed <select id="speed"><option value="1">50 MHz (real)</option><option value="0">Maximum</option></select></label>
+    <button id="sound">Sound off</button>
+    <label>Disk <select id="files"></select></label>
+    <button id="download">Download</button>
+    <button id="upload">Upload…</button>
+    <input type="file" id="picker" multiple hidden>
+    <span class="leds" id="leds"></span>
+    <span id="status"></span>
+  </div>
+  <details>
+    <summary>Try</summary>
+    <p><code>DIR</code>, <code>RUN "SPIRO.BAS"</code>, <code>RUN "SPRITES.BAS"</code>, <code>RUN "MUSIC.BAS"</code>
+      (turn sound on first), <code>LIST</code>. Esc stops a running program. Programs you <code>SAVE</code> are kept
+      in this browser.</p>
+  </details>
+</main>
+<script>
+const CPU_HZ = 50e6;
+const $ = id => document.getElementById(id);
+const canvas = $('screen'), ctx = canvas.getContext('2d'), hint = $('hint');
+for (let i = 0; i < 8; i++) $('leds').appendChild(document.createElement('i'));
+
+var Module = {
+  print: s => console.log(s), printErr: s => console.warn(s),
+  onRuntimeInitialized() { mountDisk().then(() => boot($('variant').value)); },
+};
+
+// /disk lives in IndexedDB; the first time, it is filled with the examples.
+function mountDisk() {
+  FS.mkdir('/disk');
+  FS.mount(IDBFS, {}, '/disk');
+  return new Promise(res => FS.syncfs(true, err => {
+    if (err) console.warn('disk: ' + err);
+    try {
+    if (!localStorage.getItem('fcpu-disk-init') || FS.readdir('/disk').length <= 2) {
+      for (const f of FS.readdir('/examples'))
+        if (f[0] !== '.' && !FS.analyzePath('/disk/' + f).exists)
+          FS.writeFile('/disk/' + f, FS.readFile('/examples/' + f));
+      try { localStorage.setItem('fcpu-disk-init', '1'); } catch (e) {}
+      saveDisk();
+    }
+    listFiles();
+    } catch (e) { console.error('disk: ' + e); }
+    res();
+  }));
+}
+
+let saving = false;
+function saveDisk() {
+  if (saving || Module._web_files_open()) return;
+  saving = true;
+  FS.syncfs(false, () => { saving = false; });
+}
+
+let diskStamp = '';
+function listFiles() {
+  const names = FS.readdir('/disk').filter(f => f[0] !== '.').sort();
+  const stamp = names.map(n => n + ':' + FS.stat('/disk/' + n).mtime.valueOf()).join();
+  if (stamp === diskStamp) return false;
+  const sel = $('files'), cur = sel.value;
+  sel.innerHTML = '';
+  for (const n of names) sel.add(new Option(n));
+  if (names.includes(cur)) sel.value = cur;
+  const changed = diskStamp !== '';
+  diskStamp = stamp;
+  return changed;
+}
+
+let cyclesPerMs = 50e3, running = false, lastT = 0, lastCycles = 0, lastInsts = 0, rateT = 0;
+function boot(v) {
+  if (Module.ccall('web_boot', 'number', ['string'], [v]) !== 0) { hint.textContent = 'Boot failed'; return; }
+  hint.style.display = 'none';
+  running = true;
+  canvas.focus();
+  // ?keys=TEXT types TEXT after boot (\n = Enter), like fsim-gui --keys
+  for (const ch of (new URLSearchParams(location.search).get('keys') || '').replace(/\\n/g, '\n'))
+    Module._web_key(ch === '\n' ? 13 : ch.charCodeAt(0));
+}
+
+function frame(t) {
+  requestAnimationFrame(frame);
+  if (!running) return;
+  const dt = Math.min(lastT ? (t - lastT) / 1000 : 1 / 60, 0.1);
+  lastT = t;
+  let budget = CPU_HZ * dt;
+  if ($('speed').value === '0') budget = cyclesPerMs * 12;   // fill about 12 ms of each frame
+  const t0 = performance.now(), c0 = Module._web_cycles();
+  const p = Module._web_frame(budget);
+  const ms = performance.now() - t0;
+  if (ms > 1) cyclesPerMs = 0.8 * cyclesPerMs + 0.2 * (Module._web_cycles() - c0) / ms;
+  if (p) ctx.putImageData(new ImageData(new Uint8ClampedArray(HEAPU8.buffer, p, 1280 * 720 * 4), 1280, 720), 0, 0);
+  const leds = Module._web_leds();
+  [...$('leds').children].forEach((e, i) => e.classList.toggle('on', !!(leds >> (7 - i) & 1)));
+  if (Module._web_halted()) {
+    running = false;
+    hint.textContent = 'Stopped: ' + UTF8ToString(Module._web_halt_reason()) + ' (Reset to restart)';
+    hint.style.display = '';
+  }
+  if (t - rateT > 1000) {
+    const c = Module._web_cycles(), n = Module._web_insts(), s = (t - rateT) / 1000;
+    if (rateT) $('status').textContent =
+      `${((c - lastCycles) / s / 1e6).toFixed(1)} MHz  ·  ${((n - lastInsts) / s / 1e6).toFixed(1)} MIPS  ·  ` +
+      `${ms.toFixed(1)} ms/frame`;
+    lastCycles = c; lastInsts = n; rateT = t;
+    if (listFiles()) saveDisk();
+  }
+}
+requestAnimationFrame(frame);
+
+// ---- keyboard: the codes of docs/io.md ----
+const SPECIAL = { Enter: 13, Backspace: 8, Tab: 9, Escape: 27, Delete: 0x7F, ArrowUp: 0x80, ArrowDown: 0x81,
+  ArrowLeft: 0x82, ArrowRight: 0x83, Home: 0x84, End: 0x85, PageUp: 0x86, PageDown: 0x87, Insert: 0x88 };
+canvas.addEventListener('keydown', e => {
+  if (e.metaKey) return;                 // leave browser shortcuts alone
+  let code = -1;
+  if (e.key in SPECIAL) code = SPECIAL[e.key];
+  else if (/^F([1-9]|1[0-2])$/.test(e.key)) code = 0x90 + +e.key.slice(1) - 1;
+  else if (e.ctrlKey && /^[a-z]$/i.test(e.key)) code = e.key.toLowerCase().charCodeAt(0) - 96;
+  else if (e.key.length === 1 && !e.altKey) { const c = e.key.charCodeAt(0); if (c >= 32 && c < 127) code = c; }
+  if (code < 0) return;
+  e.preventDefault();
+  Module._web_key(code);
+});
+canvas.addEventListener('paste', e => {
+  e.preventDefault();
+  for (const ch of e.clipboardData.getData('text').replace(/\r\n?/g, '\n'))
+    Module._web_key(ch === '\n' ? 13 : ch.charCodeAt(0));
+});
+
+// ---- sound ----
+let audio = null;
+$('sound').onclick = () => {
+  if (!audio) {
+    audio = new AudioContext();
+    const node = audio.createScriptProcessor(1024, 0, 1);
+    let buf = 0;
+    node.onaudioprocess = ev => {
+      const out = ev.outputBuffer.getChannelData(0);
+      if (!buf) buf = Module._malloc(out.length * 4);
+      Module._web_sound(buf, out.length, audio.sampleRate);
+      out.set(HEAPF32.subarray(buf >> 2, (buf >> 2) + out.length));
+    };
+    node.connect(audio.destination);
+    $('sound').textContent = 'Sound on';
+  } else if (audio.state === 'running') {
+    audio.suspend(); $('sound').textContent = 'Sound off';
+  } else {
+    audio.resume(); $('sound').textContent = 'Sound on';
+  }
+  canvas.focus();
+};
+
+// ---- controls ----
+$('reset').onclick = () => boot($('variant').value);
+$('variant').onchange = () => boot($('variant').value);
+$('speed').onchange = () => canvas.focus();
+$('download').onclick = () => {
+  const n = $('files').value;
+  if (!n) return;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([FS.readFile('/disk/' + n)]));
+  a.download = n;
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
+$('upload').onclick = () => $('picker').click();
+$('picker').onchange = async () => {
+  for (const f of $('picker').files) {
+    const base = f.name.toUpperCase().replace(/[^A-Z0-9._-]/g, ''), dot = base.lastIndexOf('.');
+    const name = dot > 0 ? base.slice(0, Math.min(dot, 8)) + base.slice(dot, dot + 4) : base.slice(0, 8);
+    FS.writeFile('/disk/' + name, new Uint8Array(await f.arrayBuffer()));
+  }
+  $('picker').value = '';
+  listFiles();
+  saveDisk();
+  canvas.focus();
+};
+window.addEventListener('pagehide', saveDisk);
+</script>
+<script src="fsim.js"></script>
+</body>
+</html>

@@ -1,0 +1,310 @@
+# fpga_cpu ISA: the single source of truth.
+#
+# Everything is generated from this file:
+#   sim/tools/gen.py   -> C decoder, executor and disassembler tables,
+#                         plus the encoding docs in cpu/gen/
+#   sim/tools/asm.py   -> the assembler (it reads this file directly)
+#
+# Two encodings ("variants") of the same instruction set are defined, so the
+# simulator can measure both:
+#   A: opcode 1101 and 111x mark a 32-bit instruction (3/16 of the opcode
+#      space); everything else is 16-bit.
+#   B: an MSB of 0 marks a 32-bit instruction (half the space); 16-bit
+#      instructions have MSB 1. B has direct [abs24] loads and stores.
+#
+# Pattern strings: MSB first, spaces are ignored. 0/1 are fixed bits and
+# letters are fields. {P} is replaced by the variant's prefix for the
+# group. A 32-bit pattern is the first 16-bit parcel (lower address)
+# followed by the second parcel.
+#
+# Field specs (the values in a form's "f" map):
+#   rd / [rd, rs]      register operand. A list means the operands must be
+#                      equal (two-operand form).
+#   pd/2               pair number stored in a 4-bit field: raw = 2*pd
+#   imm:s / imm:u      signed / unsigned immediate
+#   imm:w              any 16-bit pattern: signed or unsigned accepted
+#   disp:u*2           value = raw*2: the encoded value is scaled
+#   target:s*2@pc      PC-relative: raw = (target - pc) / 2
+#   null               field must be zero
+
+meta:
+  name: fpga_cpu
+  version: 0.1
+
+conditions: [EQ, NE, CS, CC, MI, PL, VS, VC, HI, LS, GE, LT, GT, LE, AL]
+
+tables:
+  ALUFN: [ADD, ADC, SUB, SBC, AND, OR, XOR, MOV, CMP, CPC, SHL, SHR, SAR, MUL, NEG, NOT]
+
+# Operand classes: assembly operand order, and which operands are read or
+# written. Hazard and fusion analysis uses the read/write sets. A "mem"
+# operand also reads pn (and rx in x mode); in pi/pd modes it writes pn.
+classes:
+  bin:   {opnds: [rd, rs, rt], reads: [rs, rt], writes: [rd]}
+  un:    {opnds: [rd, rs],     reads: [rs],     writes: [rd]}
+  cmp:   {opnds: [rs, rt],     reads: [rs, rt], writes: []}
+  bini:  {opnds: [rd, rs, imm], reads: [rs],    writes: [rd]}
+  movi:  {opnds: [rd, imm],    reads: [],       writes: [rd]}
+  cmpi:  {opnds: [rs, imm],    reads: [rs],     writes: []}
+  ld:    {opnds: [rd, mem],    reads: [],       writes: [rd]}
+  st:    {opnds: [rd, mem],    reads: [rd],     writes: []}
+  ldp:   {opnds: [pd, mem],    reads: [],       writes: [pd]}
+  stp:   {opnds: [pd, mem],    reads: [pd],     writes: []}
+  lea:   {opnds: [pd, mem],    reads: [],       writes: [pd]}
+  leapc: {opnds: [pd, target], reads: [],       writes: [pd]}
+  movp:  {opnds: [pd, ps],     reads: [ps],     writes: [pd]}
+  addp:  {opnds: [pd, ps, rx], reads: [ps, rx], writes: [pd]}
+  addpp: {opnds: [pd, ps, pt], reads: [ps, pt], writes: [pd]}
+  addpi: {opnds: [pd, ps, imm], reads: [ps],    writes: [pd]}
+  br:    {opnds: [target],     reads: [],       writes: []}
+  jal:   {opnds: [target],     reads: [],       writes: [lr]}
+  jr:    {opnds: [pn],         reads: [pn],     writes: []}
+  jalr:  {opnds: [pn],         reads: [pn],     writes: [lr]}
+  sys:   {opnds: [imm],        reads: [],       writes: []}
+  none:  {opnds: [],           reads: [],       writes: []}
+  mfsr:  {opnds: [rd, sr],     reads: [],       writes: [rd]}
+  mtsr:  {opnds: [sr, rs],     reads: [rs],     writes: []}
+
+# Semantics: C statements executed by the simulator. Helper macros are in
+# sim/src/cpu.h. Operand names (rd, rs, imm, ...) are the decoded fields.
+#
+# Flags: arithmetic sets NZCV, where C = carry out (for SUB, C=1 means no
+# borrow). Logic ops set NZ, clear V and leave C alone. Shifts set NZ and
+# C = the last bit shifted out. SBC and CPC chain Z (Z stays set only if it
+# was already set), so multi-word compares work. MOV, MOVI, loads and
+# pointer ops leave the flags alone.
+ops:
+  ADD:   {cls: bin, comm: true, sem: "W(rd, ADD16(R(rs), R(rt), 0));"}
+  ADC:   {cls: bin, comm: true, sem: "W(rd, ADD16(R(rs), R(rt), CF));"}
+  SUB:   {cls: bin, sem: "W(rd, SUB16(R(rs), R(rt), 1, 0));"}
+  SBC:   {cls: bin, sem: "W(rd, SUB16(R(rs), R(rt), CF, 1));"}
+  AND:   {cls: bin, comm: true, sem: "W(rd, LOGIC(R(rs) & R(rt)));"}
+  OR:    {cls: bin, comm: true, sem: "W(rd, LOGIC(R(rs) | R(rt)));"}
+  XOR:   {cls: bin, comm: true, sem: "W(rd, LOGIC(R(rs) ^ R(rt)));"}
+  SHL:   {cls: bin, sem: "W(rd, SHL16(R(rs), R(rt) & 15));"}
+  SHR:   {cls: bin, sem: "W(rd, SHR16(R(rs), R(rt) & 15));"}
+  SAR:   {cls: bin, sem: "W(rd, SAR16(R(rs), R(rt) & 15));"}
+  MUL:   {cls: bin, comm: true, sem: "W(rd, (uint32_t)R(rs) * R(rt));"}
+  MULH:  {cls: bin, comm: true, sem: "W(rd, (uint32_t)((int32_t)(int16_t)R(rs) * (int16_t)R(rt)) >> 16);"}
+  MULHU: {cls: bin, comm: true, sem: "W(rd, ((uint32_t)R(rs) * R(rt)) >> 16);"}
+  MOV:   {cls: un, sem: "W(rd, R(rs));"}
+  NEG:   {cls: un, sem: "W(rd, SUB16(0, R(rs), 1, 0));"}
+  NOT:   {cls: un, sem: "W(rd, LOGIC(~R(rs)));"}
+  CMP:   {cls: cmp, sem: "SUB16(R(rs), R(rt), 1, 0);"}
+  CPC:   {cls: cmp, sem: "SUB16(R(rs), R(rt), CF, 1);"}
+
+  ADDI:  {cls: bini, sem: "W(rd, ADD16(R(rs), imm & 0xFFFF, 0));"}
+  ANDI:  {cls: bini, sem: "W(rd, LOGIC(R(rs) & imm));"}
+  ORI:   {cls: bini, sem: "W(rd, LOGIC(R(rs) | imm));"}
+  XORI:  {cls: bini, sem: "W(rd, LOGIC(R(rs) ^ imm));"}
+  SHLI:  {cls: bini, sem: "W(rd, SHL16(R(rs), imm & 15));"}
+  SHRI:  {cls: bini, sem: "W(rd, SHR16(R(rs), imm & 15));"}
+  SARI:  {cls: bini, sem: "W(rd, SAR16(R(rs), imm & 15));"}
+  MOVI:  {cls: movi, sem: "W(rd, imm);"}
+  CMPI:  {cls: cmpi, sem: "SUB16(R(rs), imm & 0xFFFF, 1, 0);"}
+
+  LDBU:  {cls: ld,  size: 1, sem: "W(rd, LDU8(EA(1)));"}
+  LDBS:  {cls: ld,  size: 1, sem: "W(rd, LDS8(EA(1)));"}
+  LDW:   {cls: ld,  size: 2, sem: "W(rd, LD16(EA(2)));"}
+  LDP:   {cls: ldp, size: 4, sem: "WP32(pd, LD32(EA(4)));"}
+  STB:   {cls: st,  size: 1, sem: "ST8(EA(1), R(rd));"}
+  STW:   {cls: st,  size: 2, sem: "ST16(EA(2), R(rd));"}
+  STP:   {cls: stp, size: 4, sem: "ST32(EA(4), P32(pd));"}
+  LEA:   {cls: lea, modes: [d, x, a], sem: "WP32(pd, LEA32());"}
+  LEAPC: {cls: leapc, sem: "WP32(pd, PC + imm);"}
+
+  MOVP:  {cls: movp,  sem: "WP32(pd, P32(ps));"}
+  ADDP:  {cls: addp,  sem: "WP32(pd, P32(ps) + SEXT16(R(rx)));"}
+  ADDPU: {cls: addp,  sem: "WP32(pd, P32(ps) + R(rx));"}
+  ADDPP: {cls: addpp, sem: "WP32(pd, P32(ps) + P32(pt));"}
+  ADDPI: {cls: addpi, sem: "WP32(pd, P32(ps) + imm);"}
+
+  B:     {cls: br,   sem: "if (COND(cc)) JUMP(PC + imm);"}
+  JAL:   {cls: jal,  sem: "WP32(6, NPC); JUMP(PC + imm);"}
+  JALR:  {cls: jalr, sem: "{ uint32_t t_ = P(pn); WP32(6, NPC); JUMP(t_); }"}
+  JR:    {cls: jr,   sem: "JUMP(P(pn));"}
+  SYS:   {cls: sys,  sem: "TRAP(imm);"}
+  RETI:  {cls: none, sem: "TRAP(-1);"}
+  SYNC:  {cls: none, sem: "SYNC();"}
+  NOP:   {cls: none, sem: ";"}
+  MFSR:  {cls: mfsr, sem: "W(rd, SRR(sr));"}
+  MTSR:  {cls: mtsr, sem: "SRW(sr, R(rs));"}
+
+# Addressing modes for "mem" operands, and the operands each one needs.
+modes:
+  d:  {needs: [pn, disp],          syntax: "[pN + disp]"}
+  x:  {needs: [pn, rx, scale, ext], syntax: "[pN + rX*s]  /  [pN + rX.z*s]"}
+  pi: {needs: [pn],                syntax: "[pN]+"}
+  pd: {needs: [pn],                syntax: "-[pN]"}
+  a:  {needs: [abs],               syntax: "[abs24]"}
+
+# Groups shared by both variants. {P} is the variant's prefix for the
+# group, 4 bits for 16-bit groups and 5 bits for 32-bit groups.
+groups:
+  ALU2:
+    - pat: "{P} dddd ssss ffff"
+      opsel: {f: ALUFN}
+      f: {d: [rd, rs], s: rt}
+      fo: {un: {d: rd, s: rs}, cmp: {d: rs, s: rt}}
+  ADDI:
+    - {pat: "{P} dddd iiii iiii", op: ADDI, f: {d: [rd, rs], i: "imm:s"}}
+  MOVI:
+    - {pat: "{P} dddd iiii iiii", op: MOVI, f: {d: rd, i: "imm:s"}}
+  CMPI:
+    - {pat: "{P} dddd iiii iiii", op: CMPI, f: {d: rs, i: "imm:s"}}
+  SPREL:
+    - pat: "{P} dddd u ooooooo"
+      opsel: {u: [LDW, STW]}
+      mode: d
+      fix: {pn: 7}
+      f: {d: rd, o: "disp:u*2"}
+  BCC:
+    - {pat: "{P} cccc oooo oooo", op: B, f: {c: cc, o: "target:s*2@pc"}}
+  MISC:
+    - {pat: "{P} 0000 0000 0ppp", op: JR,   f: {p: pn}}
+    - {pat: "{P} 0001 0000 0ppp", op: JALR, f: {p: pn}}
+    - {pat: "{P} 0010 iiii iiii", op: SYS,  f: {i: "imm:u"}}
+    - {pat: "{P} 0011 0000 0000", op: RETI}
+    - {pat: "{P} 0011 0000 0001", op: SYNC}
+    - {pat: "{P} 0011 0000 0010", op: NOP}
+    # sub-op 0100 is variant-specific
+    - {pat: "{P} 0101 0ddd 0sss", op: MOVP, f: {d: pd, s: ps}}
+    - {pat: "{P} 0110 0ddd xxxx", op: ADDP, f: {d: [pd, ps], x: rx}}
+    - {pat: "{P} 0111 dddd iiii", op: SHLI, f: {d: [rd, rs], i: "imm:u"}}
+    - {pat: "{P} 1000 dddd iiii", op: SHRI, f: {d: [rd, rs], i: "imm:u"}}
+    - {pat: "{P} 1001 dddd iiii", op: SARI, f: {d: [rd, rs], i: "imm:u"}}
+    # sub-op 1010 is variant-specific
+    - {pat: "{P} 1011 dddd 0ppp", op: LDW,  mode: pi, f: {d: rd, p: pn}}
+    - {pat: "{P} 1100 dddd 0ppp", op: STW,  mode: pd, f: {d: rd, p: pn}}
+    - {pat: "{P} 1101 dddd 0ppp", op: LDBU, mode: pi, f: {d: rd, p: pn}}
+    - {pat: "{P} 1110 dddd 0ppp", op: STB,  mode: pi, f: {d: rd, p: pn}}
+    - pat: "{P} 1111 dddd u sss"
+      opsel: {u: [MFSR, MTSR]}
+      f: {s: sr}
+      fo: {mfsr: {d: rd}, mtsr: {d: rs}}
+
+  # ---- 32-bit groups ----
+  MEM:
+    - pat: "{P} uuu dddd ppp 0  oooo oooo oooo oooo"
+      opsel: {u: [LDBU, LDBS, LDW, LDP, STB, STW, STP, LEA]}
+      mode: d
+      f: {d: rd, p: pn, o: "disp:s"}
+      fo: {ldp: {d: pd/2}, stp: {d: pd/2}, lea: {d: pd/2}}
+    - pat: "{P} uuu dddd ppp 1  xxxx kkkk 0000 0000"
+      opsel: {u: [LDBU, LDBS, LDW, LDP, STB, STW, STP, LEA]}
+      mode: x
+      enum:
+        k:
+          0: {scale: 1, ext: 0}
+          1: {scale: 2, ext: 0}
+          2: {scale: 4, ext: 0}
+          4: {scale: 1, ext: 1}
+          5: {scale: 2, ext: 1}
+          6: {scale: 4, ext: 1}
+      f: {d: rd, p: pn, x: rx}
+      fo: {ldp: {d: pd/2}, stp: {d: pd/2}, lea: {d: pd/2}}
+    - pat: "{P} uuu dddd ppp 1  0000 1000 0000 0000"
+      opsel: {u: [LDBU, LDBS, LDW, LDP, STB, STW, STP, LEA]}
+      mode: pi
+      f: {d: rd, p: pn}
+      fo: {ldp: {d: pd/2}, stp: {d: pd/2}}
+    - pat: "{P} uuu dddd ppp 1  0000 1001 0000 0000"
+      opsel: {u: [LDBU, LDBS, LDW, LDP, STB, STW, STP, LEA]}
+      mode: pd
+      f: {d: rd, p: pn}
+      fo: {ldp: {d: pd/2}, stp: {d: pd/2}}
+  ALUI:
+    - pat: "{P} fff dddd ssss  iiii iiii iiii iiii"
+      opsel: {f: [ADDI, ANDI, ORI, XORI, CMPI, MOVI, ADDPI, null]}
+      f: {d: rd, s: rs, i: "imm:w"}
+      fo:
+        movi:  {s: null}
+        cmpi:  {d: null}
+        addpi: {d: pd/2, s: ps/2, i: "imm:s"}
+  BR:
+    - {pat: "{P} cccc ooooooo  oooo oooo oooo oooo", op: B,   f: {c: cc, o: "target:s*2@pc"}}
+    - {pat: "{P} 1111 ooooooo  oooo oooo oooo oooo", op: JAL, f: {o: "target:s*2@pc"}}
+  REG3:
+    - pat: "{P} 000 dddd ssss  tttt ffff 0000 0000"
+      opsel: {f: ALUFN}
+      f: {d: rd, s: rs, t: rt}
+      fo: {un: {t: null}, cmp: {d: null}}
+    - pat: "{P} 001 dddd ssss  0000 ffff 0000 iiii"
+      opsel: {f: [SHLI, SHRI, SARI]}
+      f: {d: rd, s: rs, i: "imm:u"}
+    - pat: "{P} 010 dddd ssss  tttt ffff 0000 0000"
+      opsel: {f: [ADDP, ADDPU, ADDPP]}
+      f: {d: pd/2, s: ps/2, t: rx}
+      fo: {addpp: {t: pt/2}}
+    - pat: "{P} 011 dddd ssss  tttt ffff 0000 0000"
+      opsel: {f: [MULH, MULHU]}
+      f: {d: rd, s: rs, t: rt}
+
+variants:
+  A:
+    doc: "3/16 of the opcode map is 32-bit (1101, 111x); rich 16-bit set"
+    long: ["111", "1101"]            # first-parcel prefixes that mean 32-bit
+    prefix:
+      ALU2: "0000"
+      ADDI: "0001"
+      MOVI: "0010"
+      CMPI: "0011"
+      SPREL: "1000"
+      BCC: "1001"
+      MISC: "1010"
+      MEM: "11100"
+      ALUI: "11101"
+      BR: "11110"
+      REG3: "11111"
+    forms:
+      - {pat: "0100 dddd ppp ooooo", op: LDW, mode: d, f: {d: rd, p: pn, o: "disp:u*2"}}
+      - {pat: "0101 dddd ppp ooooo", op: STW, mode: d, f: {d: rd, p: pn, o: "disp:u*2"}}
+      - pat: "0110 dddd ppp u oooo"
+        opsel: {u: [LDBU, STB]}
+        mode: d
+        f: {d: rd, p: pn, o: "disp:u"}
+      - pat: "0111 ddd ppp u ooooo"
+        opsel: {u: [LDP, STP]}
+        mode: d
+        f: {d: pd, p: pn, o: "disp:u*2"}
+      - pat: "1011 dddd ppp u xxxx"
+        opsel: {u: [LDW, STW]}
+        mode: x
+        fix: {scale: 2, ext: 0}
+        f: {d: rd, p: pn, x: rx}
+      - {pat: "1100 ddd iiiiiiiii", op: ADDPI, f: {d: [pd, ps], i: "imm:s"}}
+      - {pat: "1101 ddd 0 aaaa aaaa  aaaa aaaa aaaa aaaa", op: LEA, mode: a, f: {d: pd, a: abs}}
+      - {pat: "1101 ddd 1 oooo oooo  oooo oooo oooo oooo", op: LEAPC, f: {d: pd, o: "target:s@pc"}}
+
+  B:
+    doc: "MSB=0 means 32-bit (half the opcode map); direct [abs24] loads and stores"
+    long: ["0"]
+    prefix:
+      ALU2: "1000"
+      ADDI: "1001"
+      MOVI: "1010"
+      CMPI: "1011"
+      SPREL: "1101"
+      BCC: "1110"
+      MISC: "1111"
+      MEM: "01000"
+      ALUI: "01010"
+      BR: "01100"
+      REG3: "01110"
+    forms:
+      - pat: "1100 dddd ppp u oooo"
+        opsel: {u: [LDW, STW]}
+        mode: d
+        f: {d: rd, p: pn, o: "disp:u*2"}
+      - {grp: MISC, pat: "{P} 0100 ddd iiiii", op: ADDPI, f: {d: [pd, ps], i: "imm:s"}}
+      - grp: MISC
+        pat: "{P} 1010 0ddd u ppp"
+        opsel: {u: [LDP, STP]}
+        mode: d
+        fix: {disp: 0}
+        f: {d: pd, p: pn}
+      - pat: "00 uu dddd aaaa aaaa  aaaa aaaa aaaa aaaa"
+        opsel: {u: [LDW, STW, LDP, LEA]}
+        mode: a
+        f: {d: rd, a: abs}
+        fo: {ldp: {d: pd/2}, lea: {d: pd/2}}

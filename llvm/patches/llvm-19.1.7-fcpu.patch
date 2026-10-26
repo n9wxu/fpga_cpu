@@ -1,0 +1,159 @@
+diff --git a/clang/lib/Basic/CMakeLists.txt b/clang/lib/Basic/CMakeLists.txt
+index f30680552..c7e2bcacb 100644
+--- a/clang/lib/Basic/CMakeLists.txt
++++ b/clang/lib/Basic/CMakeLists.txt
+@@ -100,6 +100,7 @@ add_clang_library(clangBasic
+   Targets/BPF.cpp
+   Targets/CSKY.cpp
+   Targets/DirectX.cpp
++  Targets/FCPU.cpp
+   Targets/Hexagon.cpp
+   Targets/Lanai.cpp
+   Targets/Le64.cpp
+diff --git a/clang/lib/Basic/Targets.cpp b/clang/lib/Basic/Targets.cpp
+index 29133f9ee..1a968cedb 100644
+--- a/clang/lib/Basic/Targets.cpp
++++ b/clang/lib/Basic/Targets.cpp
+@@ -26,6 +26,7 @@
+ #include "Targets/Le64.h"
+ #include "Targets/LoongArch.h"
+ #include "Targets/M68k.h"
++#include "Targets/FCPU.h"
+ #include "Targets/MSP430.h"
+ #include "Targets/Mips.h"
+ #include "Targets/NVPTX.h"
+@@ -263,6 +264,9 @@ std::unique_ptr<TargetInfo> AllocateTarget(const llvm::Triple &Triple,
+   case llvm::Triple::bpfel:
+     return std::make_unique<BPFTargetInfo>(Triple, Opts);
+ 
++  case llvm::Triple::fcpu:
++    return std::make_unique<FCPUTargetInfo>(Triple, Opts);
++
+   case llvm::Triple::msp430:
+     return std::make_unique<MSP430TargetInfo>(Triple, Opts);
+ 
+diff --git a/llvm/include/llvm/CodeGen/RDFGraph.h b/llvm/include/llvm/CodeGen/RDFGraph.h
+index cf7344e8c..30c38da96 100644
+--- a/llvm/include/llvm/CodeGen/RDFGraph.h
++++ b/llvm/include/llvm/CodeGen/RDFGraph.h
+@@ -447,7 +447,7 @@ private:
+   AllocatorTy MemPool;
+ };
+ 
+-using RegisterSet = std::set<RegisterRef>;
++using RegisterSet = std::set<RegisterRef, RegisterRefLess>;
+ 
+ struct TargetOperandInfo {
+   TargetOperandInfo(const TargetInstrInfo &tii) : TII(tii) {}
+diff --git a/llvm/include/llvm/CodeGen/RDFRegisters.h b/llvm/include/llvm/CodeGen/RDFRegisters.h
+index 7eed0b4e1..d6374ad89 100644
+--- a/llvm/include/llvm/CodeGen/RDFRegisters.h
++++ b/llvm/include/llvm/CodeGen/RDFRegisters.h
+@@ -371,7 +371,18 @@ private:
+ } // namespace std
+ 
+ namespace llvm::rdf {
+-using RegisterSet = std::set<RegisterRef, std::less<RegisterRef>>;
++// A named comparator instead of std::less<RegisterRef>: newer libc++
++// requires std::less<Key> used by std::set to be an empty class.
++struct RegisterRefLess {
++  RegisterRefLess(const PhysicalRegisterInfo &pri) : PRI(&pri) {}
++  bool operator()(RegisterRef A, RegisterRef B) const {
++    return PRI->less(A, B);
++  }
++
++private:
++  const PhysicalRegisterInfo *PRI;
++};
++using RegisterSet = std::set<RegisterRef, RegisterRefLess>;
+ } // namespace llvm::rdf
+ 
+ #endif // LLVM_CODEGEN_RDFREGISTERS_H
+diff --git a/llvm/include/llvm/TargetParser/Triple.h b/llvm/include/llvm/TargetParser/Triple.h
+index d2126a03d..2ea8a6d4d 100644
+--- a/llvm/include/llvm/TargetParser/Triple.h
++++ b/llvm/include/llvm/TargetParser/Triple.h
+@@ -56,6 +56,7 @@ public:
+     bpfel,          // eBPF or extended BPF or 64-bit BPF (little endian)
+     bpfeb,          // eBPF or extended BPF or 64-bit BPF (big endian)
+     csky,           // CSKY: csky
++    fcpu,           // fpga_cpu: fcpu
+     dxil,           // DXIL 32-bit DirectX bytecode
+     hexagon,        // Hexagon: hexagon
+     loongarch32,    // LoongArch (32-bit): loongarch32
+diff --git a/llvm/lib/TargetParser/Triple.cpp b/llvm/lib/TargetParser/Triple.cpp
+index 21d6c74b5..5b490e6d7 100644
+--- a/llvm/lib/TargetParser/Triple.cpp
++++ b/llvm/lib/TargetParser/Triple.cpp
+@@ -37,6 +37,7 @@ StringRef Triple::getArchTypeName(ArchType Kind) {
+   case avr:            return "avr";
+   case bpfeb:          return "bpfeb";
+   case bpfel:          return "bpfel";
++  case fcpu:           return "fcpu";
+   case csky:           return "csky";
+   case dxil:           return "dxil";
+   case hexagon:        return "hexagon";
+@@ -456,6 +457,7 @@ Triple::ArchType Triple::getArchTypeForLLVMName(StringRef Name) {
+     .Case("renderscript32", renderscript32)
+     .Case("renderscript64", renderscript64)
+     .Case("ve", ve)
++    .Case("fcpu", fcpu)
+     .Case("csky", csky)
+     .Case("loongarch32", loongarch32)
+     .Case("loongarch64", loongarch64)
+@@ -602,6 +604,7 @@ static Triple::ArchType parseArch(StringRef ArchName) {
+           .Case("ve", Triple::ve)
+           .Case("wasm32", Triple::wasm32)
+           .Case("wasm64", Triple::wasm64)
++          .Case("fcpu", Triple::fcpu)
+           .Case("csky", Triple::csky)
+           .Case("loongarch32", Triple::loongarch32)
+           .Case("loongarch64", Triple::loongarch64)
+@@ -908,6 +911,7 @@ static Triple::ObjectFormatType getDefaultFormat(const Triple &T) {
+   case Triple::avr:
+   case Triple::bpfeb:
+   case Triple::bpfel:
++  case Triple::fcpu:
+   case Triple::csky:
+   case Triple::hexagon:
+   case Triple::hsail64:
+@@ -1606,6 +1610,7 @@ unsigned Triple::getArchPointerBitWidth(llvm::Triple::ArchType Arch) {
+   case llvm::Triple::arc:
+   case llvm::Triple::arm:
+   case llvm::Triple::armeb:
++  case llvm::Triple::fcpu:
+   case llvm::Triple::csky:
+   case llvm::Triple::dxil:
+   case llvm::Triple::hexagon:
+@@ -1698,6 +1703,7 @@ Triple Triple::get32BitArchVariant() const {
+   case Triple::arc:
+   case Triple::arm:
+   case Triple::armeb:
++  case Triple::fcpu:
+   case Triple::csky:
+   case Triple::dxil:
+   case Triple::hexagon:
+@@ -1766,6 +1772,7 @@ Triple Triple::get64BitArchVariant() const {
+   case Triple::UnknownArch:
+   case Triple::arc:
+   case Triple::avr:
++  case Triple::fcpu:
+   case Triple::csky:
+   case Triple::dxil:
+   case Triple::hexagon:
+@@ -1881,6 +1888,7 @@ Triple Triple::getBigEndianArchVariant() const {
+   case Triple::x86_64:
+   case Triple::xcore:
+   case Triple::ve:
++  case Triple::fcpu:
+   case Triple::csky:
+   case Triple::xtensa:
+ 
+@@ -1956,6 +1964,7 @@ bool Triple::isLittleEndian() const {
+   case Triple::arm:
+   case Triple::avr:
+   case Triple::bpfel:
++  case Triple::fcpu:
+   case Triple::csky:
+   case Triple::dxil:
+   case Triple::hexagon:

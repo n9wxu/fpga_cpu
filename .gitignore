@@ -9,7 +9,7 @@
 
 # Generated from cpu/isa.yaml
 sim/src/gen/
-sim/tools/*.asm.rules
+cpu/gen/*.tmp
 
 # Simulator / C builds
 build/
@@ -66,3 +66,10 @@ pcb/**/gerbers/
 # LLVM (the llvm-project checkout and builds live outside or are ignored)
 llvm/llvm-project/
 llvm/build*/
+
+# Python virtual environment for the tools
+.venv/
+__pycache__/
+
+# Editor/clangd caches
+.cache/

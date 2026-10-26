@@ -112,11 +112,17 @@ goes first.
 
 ## Toolchain
 
-- Simulator: written from scratch in C. QEMU was ruled out because the
-  simulator needs cycle, cache and fusion timing. It is table-driven from
-  `cpu/isa.yaml`, with SDL, headless, trace and gdb-stub front ends.
-- Assembler: customasm, with its rules generated from `isa.yaml`.
-- RTL simulation: Icarus and Verilator, running in lockstep against the
-  simulator's trace.
-- FPGA build: ISE 14.7 command-line flow on a Linux host. Program the
-  board from the Mac with openFPGALoader and a JTAG adapter.
+- **Simulator:** written from scratch in C, table-driven from `cpu/isa.yaml`.
+  - Headless `fsim`, for tests and measurements.
+  - `fsim-gui` (SDL2 + Dear ImGui) with the display, registers, disassembly with symbols, breakpoints, step/over/out, memory, serial console, board I/O and statistics.
+  - Devices per [io.md](io.md).
+  - CPU and SRAM share one 50 MHz clock.
+- **Assembler/linker:** `sim/tools/asm.py`.
+  - Picks the shortest encoding for each instruction, in either opcode-map variant.
+  - Links several files (local symbols, sections, archive-style libraries) and writes `.sym` files for the GUI.
+- **C compiler:** LLVM 19 backend plus `llvm/fcc`. See [llvm/README.md](../llvm/README.md).
+- **BASIC:** `basic/`, written in C. It runs on the host and in the simulator with identical test output.
+- **Measurement:** `make -C sim measure` runs every benchmark × variant × timing configuration and checks each output. Results are in [measurements.md](measurements.md).
+- **Not built yet:**
+  - RTL simulation (Icarus/Verilator in lockstep against the simulator's trace)
+  - The FPGA build: ISE 14.7 on the Linux host, programmed from the Mac with openFPGALoader
