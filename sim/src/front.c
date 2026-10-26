@@ -1,4 +1,5 @@
 /* fpga_cpu simulator: helpers shared by the front ends. */
+#define _POSIX_C_SOURCE 200809L /* strdup under -std=c11 on glibc */
 #include "front.h"
 
 #include <stdlib.h>
@@ -14,7 +15,10 @@ void opts_usage(int gui)
             "  --icache BYTES    I-cache size, 0 = none (default 2048)\n"
             "  --line BYTES      I-cache line size (default 16)\n"
             "  --no-prefetch     disable the stream buffer\n"
-            "  --fuse            apply macro-op fusion (candidates are always counted)\n"
+            "  --fuse            apply every kind of macro-op fusion (candidates are always counted)\n"
+            "  --fuse=LIST       apply only these kinds: cmpbr,addadc,leamem,ldpair,alubr\n"
+            "  --dual[=banked|ports]  in-order dual issue; banked (default) = even/odd write banks,\n"
+            "                    ports = a full second register write port\n"
             "  --branch-pen N    taken-branch penalty (default 2)\n"
             "  --video P:B       video steals B of every P port cycles (default 56:4 = 7%%, 0:0 = off)\n"
             "  --max-cycles N    stop after N cycles (default %s)\n"
@@ -41,10 +45,31 @@ void opts_usage(int gui)
 
 static uint32_t num(const char *s) { return (uint32_t)strtoul(s, NULL, 0); }
 
+/* "cmpbr,alubr" -> FU_* bit mask */
+static int parse_fuse(const char *s, int *mask)
+{
+    *mask = 0;
+    while (*s) {
+        size_t n = strcspn(s, ",");
+        int k = 0;
+        while (k < FU__COUNT && (strlen(fuse_keys[k]) != n || strncmp(s, fuse_keys[k], n)))
+            k++;
+        if (k == FU__COUNT) {
+            fprintf(stderr, "--fuse: unknown kind '%.*s'\n", (int)n, s);
+            return -1;
+        }
+        *mask |= 1 << k;
+        s += n;
+        if (*s == ',')
+            s++;
+    }
+    return 0;
+}
+
 int opts_parse(opts_t *o, int argc, char **argv, int gui)
 {
     memset(o, 0, sizeof *o);
-    o->cfg = (tcfg_t){ 2048, 16, 1, 0, 2, 1, 2, 56, 4 };
+    o->cfg = (tcfg_t){ 2048, 16, 1, 0, 2, 1, 2, 56, 4, DUAL_OFF };
     o->vname = "A";
     o->load = 0x1000;
     o->entry = 0xFFFFFFFF;
@@ -59,7 +84,12 @@ int opts_parse(opts_t *o, int argc, char **argv, int gui)
         else if (!strcmp(a, "--icache") && more) o->cfg.icache_bytes = num(argv[++i]);
         else if (!strcmp(a, "--line") && more) o->cfg.line_bytes = num(argv[++i]);
         else if (!strcmp(a, "--no-prefetch")) o->cfg.prefetch = 0;
-        else if (!strcmp(a, "--fuse")) o->cfg.fuse = 1;
+        else if (!strcmp(a, "--fuse")) o->cfg.fuse = FU_ALL;
+        else if (!strncmp(a, "--fuse=", 7)) {
+            if (parse_fuse(a + 7, &o->cfg.fuse))
+                return -1;
+        } else if (!strcmp(a, "--dual") || !strcmp(a, "--dual=banked")) o->cfg.dual = DUAL_BANKED;
+        else if (!strcmp(a, "--dual=ports")) o->cfg.dual = DUAL_PORTS;
         else if (!strcmp(a, "--branch-pen") && more) o->cfg.branch_pen = (int)num(argv[++i]);
         else if (!strcmp(a, "--video") && more) {
             char *colon;

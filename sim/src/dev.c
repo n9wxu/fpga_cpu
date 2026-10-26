@@ -1,4 +1,5 @@
 /* fpga_cpu simulator: I/O devices.  The register map is docs/io.md. */
+#define _POSIX_C_SOURCE 200809L /* strdup under -std=c11 on glibc */
 #include "cpu.h"
 
 #include <ctype.h>

@@ -4,7 +4,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-const char *const fuse_names[FU__COUNT] = { "cmp+branch", "add+adc pair", "lea+mem", "ldw/stw pair" };
+const char *const fuse_names[FU__COUNT] = { "cmp+branch", "add+adc pair", "lea+mem", "ldw/stw pair", "alu+branch" };
+const char *const fuse_keys[FU__COUNT] = { "cmpbr", "addadc", "leamem", "ldpair", "alubr" };
+const char *const pair_block_names[PB__COUNT] = { "window", "slot1", "slot2", "raw", "waw", "bank", "flags" };
+const char *const pair_slot_names[PS__COUNT] = { "alu", "movi", "branch" };
 
 /* ---- decoder (table-driven, tables from gen/isa_gen.c) ---- */
 
@@ -321,6 +324,7 @@ static void timing_fetch(cpu_t *c, uint32_t pc, int len)
     stats_t *s = &c->st;
     if (!c->ic_lines) {
         int words = (int)(((pc + len - 1) >> 2) - (pc >> 2) + 1);
+        s->port_ifetch += (uint64_t)words;
         uint64_t t = port_time(c, s->cycles, words) - s->cycles;
         uint64_t stall = t > 1 ? t - 1 : 0;
         s->cycles += stall;
@@ -341,10 +345,12 @@ static void timing_fetch(cpu_t *c, uint32_t pc, int len)
                 stall = 1;
             } else {
                 s->sb_partial++;
+                s->port_ifetch += (uint64_t)c->sb_left;
                 stall = port_time(c, s->cycles, c->sb_left) - s->cycles + 1;
             }
         } else {
             s->ic_miss++;
+            s->port_ifetch += words;
             stall = port_time(c, s->cycles + 1, (int)words) - s->cycles;
         }
         c->sb_valid = 0;
@@ -390,17 +396,59 @@ static uint16_t reads_mask(const dinst_t *d)
     return m;
 }
 
-static int check_fusion(cpu_t *c, const dinst_t *d, uint32_t pc)
+static int is_cond_branch(const dinst_t *d) { return d->op == OP_B && d->cc != 14; }
+
+/* Flags written / read.  Arithmetic, logic and shifts write flags; ADC,
+ * SBC and CPC read C (and SBC/CPC chain Z); a conditional branch reads them. */
+static int writes_flags(const dinst_t *d)
 {
-    if (!c->prev_valid || c->prev_fused)
-        return -1;
+    switch (d->op) {
+    case OP_ADD: case OP_ADC: case OP_SUB: case OP_SBC: case OP_CMP: case OP_CPC: case OP_NEG:
+    case OP_ADDI: case OP_CMPI:
+    case OP_AND: case OP_OR: case OP_XOR: case OP_NOT: case OP_ANDI: case OP_ORI: case OP_XORI:
+    case OP_SHL: case OP_SHR: case OP_SAR: case OP_SHLI: case OP_SHRI: case OP_SARI:
+        return 1;
+    case OP_MTSR:
+        return d->sr == 0;
+    }
+    return 0;
+}
+
+static int reads_flags(const dinst_t *d)
+{
+    switch (d->op) {
+    case OP_ADC: case OP_SBC: case OP_CPC: return 1;
+    case OP_B: return d->cc != 14;
+    case OP_MFSR: return d->sr == 0;
+    }
+    return 0;
+}
+
+static uint16_t writes_mask(const dinst_t *d)
+{
+    const opinfo_t *oi = &op_info[d->op];
+    uint16_t m = role_regs(d, oi->writes);
+    if ((oi->flags & F_MEM) && (d->mode == M_PI || d->mode == M_PD))
+        m |= pair_bits(d->pn);
+    return m;
+}
+
+/* Bytes of the 64-bit fetch window left after the instruction at pc. */
+static int window_fits(const cpu_t *c, const dinst_t *d, uint32_t pc)
+{
     const dinst_t *p = &c->prev;
     if (((c->prev_pc + p->len) & 0xFFFFFF) != pc)
-        return -1; /* not sequential */
-    int avail = (c->prev_pc & 2) ? 6 : 8; /* bytes left in the 64-bit fetch window */
-    if (p->len + d->len > avail)
+        return 0; /* not sequential */
+    int avail = (c->prev_pc & 2) ? 6 : 8;
+    return p->len + d->len <= avail;
+}
+
+static int check_fusion(cpu_t *c, const dinst_t *d, uint32_t pc)
+{
+    if (!c->prev_valid || c->prev_grouped || !window_fits(c, d, pc))
         return -1;
-    if ((p->op == OP_CMP || p->op == OP_CMPI || p->op == OP_CPC) && d->op == OP_B && d->cc != 14)
+    const dinst_t *p = &c->prev;
+    if ((p->op == OP_CMP || p->op == OP_CMPI || p->op == OP_CPC) && is_cond_branch(d))
         return FU_CMPBR;
     if (((p->op == OP_ADD && d->op == OP_ADC) || (p->op == OP_SUB && d->op == OP_SBC)) &&
         !(p->rd & 1) && !(p->rs & 1) && !(p->rt & 1) &&
@@ -413,21 +461,103 @@ static int check_fusion(cpu_t *c, const dinst_t *d, uint32_t pc)
         d->pn == p->pn && d->imm == p->imm + 2 && (c->prev_ea & 3) == 0 &&
         !(p->op == OP_LDW && (p->rd >> 1) == p->pn))
         return FU_LDPAIR;
+    /* A flag-setting ALU op whose result the branch tests: DEC r; BNE loop.
+     * Same datapath as CMP+Bcc, plus the register write. */
+    if (is_cond_branch(d) && writes_flags(p) && p->op != OP_MTSR &&
+        op_info[p->op].cls != CLS_CMP && op_info[p->op].cls != CLS_CMPI)
+        return FU_ALUBR;
     return -1;
+}
+
+/* Slot-2 pipe: a 16-bit adder and logic unit, no shifter, multiplier or
+ * pointer adder, no memory port.  Returns the PS_* class or -1. */
+static int slot2_class(const dinst_t *d)
+{
+    switch (d->op) {
+    case OP_ADD: case OP_ADC: case OP_SUB: case OP_SBC: case OP_AND: case OP_OR: case OP_XOR:
+    case OP_MOV: case OP_NEG: case OP_NOT: case OP_CMP: case OP_CPC:
+    case OP_ADDI: case OP_ANDI: case OP_ORI: case OP_XORI: case OP_CMPI:
+        return PS_ALU;
+    case OP_MOVI:
+        return PS_MOVI;
+    case OP_B:
+        return PS_BRANCH;
+    }
+    return -1;
+}
+
+static int bank_set(uint16_t regs) { return ((regs & 0x5555) ? 1 : 0) | ((regs & 0xAAAA) ? 2 : 0); }
+
+/* Can d issue in slot 2 beside the previous instruction?  Returns the PS_*
+ * class, or -1 after counting why not.  In-order: slot 1 is the older one. */
+static int check_pair(cpu_t *c, const dinst_t *d, uint32_t pc)
+{
+    if (!c->prev_valid || c->prev_grouped)
+        return -1;
+    stats_t *s = &c->st;
+    const dinst_t *p = &c->prev;
+    if (!window_fits(c, d, pc)) {
+        if (((c->prev_pc + p->len) & 0xFFFFFF) == pc)
+            s->pair_block[PB_WINDOW]++;
+        return -1;
+    }
+    const opinfo_t *po = &op_info[p->op];
+    if ((po->flags & (F_BRANCH | F_JUMP)) || po->cls == CLS_SYS || po->cls == CLS_NONE || p->op == OP_MTSR) {
+        s->pair_block[PB_SLOT1]++;
+        return -1;
+    }
+    int k = slot2_class(d);
+    if (k < 0) {
+        s->pair_block[PB_SLOT2]++;
+        return -1;
+    }
+    uint16_t pw = writes_mask(p), dw = writes_mask(d);
+    if (reads_mask(d) & pw) {
+        s->pair_block[PB_RAW]++;
+        return -1;
+    }
+    if (dw & pw) {
+        s->pair_block[PB_WAW]++;
+        return -1;
+    }
+    if (c->cfg.dual == DUAL_BANKED && (bank_set(pw) & bank_set(dw))) {
+        s->pair_block[PB_BANK]++;
+        return -1;
+    }
+    if (reads_flags(d) && writes_flags(p)) {
+        s->pair_block[PB_FLAGS]++;
+        return -1;
+    }
+    return k;
 }
 
 static void timing_exec(cpu_t *c, const dinst_t *d, uint32_t pc)
 {
     stats_t *s = &c->st;
     uint64_t cyc = 1;
-    int fk = check_fusion(c, d, pc);
-    if (fk >= 0) {
+    int fk = check_fusion(c, d, pc), grouped = 0;
+    /* Candidates are counted without overlap (as if every kind were fused),
+     * so the counts do not depend on which kinds --fuse applies. */
+    int counted = fk >= 0 && !c->prev_cand;
+    if (counted)
         s->fuse_cand[fk]++;
-        if (c->cfg.fuse) {
+    if (fk >= 0) {
+        if (c->cfg.fuse & (1 << fk)) {
             s->fused++;
-            cyc = 0; /* issues together with the previous instruction */
+            grouped = 1;
         }
     }
+    if (!grouped && c->cfg.dual) {
+        int k = check_pair(c, d, pc);
+        if (k >= 0) {
+            s->paired++;
+            s->pair_slot[k]++;
+            grouped = 1;
+        }
+    }
+    if (grouped)
+        cyc = 0; /* issues together with the previous instruction */
+    s->fetch_bytes += d->len;
     if (c->prev_load_regs & reads_mask(d)) {
         cyc += c->cfg.loaduse_pen;
         s->st_loaduse += c->cfg.loaduse_pen;
@@ -453,16 +583,24 @@ static void timing_exec(cpu_t *c, const dinst_t *d, uint32_t pc)
     }
     if (c->cfg.prefetch && c->sb_valid && c->sb_left > 0) {
         int idle = (int)cyc - c->dwords;
-        if (idle > 0)
+        if (idle > c->sb_left)
+            idle = c->sb_left;
+        if (idle > 0) {
             c->sb_left -= idle;
+            s->port_ifetch += (uint64_t)idle;
+        }
     }
     s->cycles += cyc;
-    c->prev_load_regs = (op_info[d->op].flags & F_LOAD) ? role_regs(d, op_info[d->op].writes) : 0;
+    uint16_t lr = (op_info[d->op].flags & F_LOAD) ? role_regs(d, op_info[d->op].writes) : 0;
+    /* A group's results all arrive together: a load in slot 1 still delays
+     * the next instruction that uses it. */
+    c->prev_load_regs = grouped ? (uint16_t)(c->prev_load_regs | lr) : lr;
     c->prev = *d;
     c->prev_pc = pc;
     c->prev_ea = c->ea;
     c->prev_valid = 1;
-    c->prev_fused = fk >= 0;
+    c->prev_grouped = grouped;
+    c->prev_cand = counted;
 }
 
 /* ---- run loop ---- */
@@ -580,7 +718,7 @@ void cpu_reset(cpu_t *c)
     c->sb_valid = c->sb_left = 0;
     c->sb_line = 0;
     c->prev_load_regs = 0;
-    c->prev_valid = c->prev_fused = 0;
+    c->prev_valid = c->prev_grouped = c->prev_cand = 0;
     pdc_flush();
     dev_reset(&c->dev);
 }

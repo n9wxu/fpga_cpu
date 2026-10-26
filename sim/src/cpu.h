@@ -28,15 +28,33 @@ typedef struct {
     uint32_t icache_bytes; /* 0 = no I-cache: every fetch goes to SRAM */
     uint32_t line_bytes;
     int prefetch;          /* one-line stream buffer, fills in idle port cycles */
-    int fuse;              /* apply macro-op fusion (candidates are always counted) */
+    int fuse;              /* bit mask of FU_* kinds to apply (candidates are always counted) */
     int branch_pen;        /* cycles lost on a taken branch or jump */
     int loaduse_pen;       /* cycles lost when an instruction uses the previous load */
     int io_pen;            /* extra cycles per I/O access */
     uint32_t vperiod, vburst; /* video steals vburst port cycles every vperiod */
+    int dual;              /* in-order dual issue: DUAL_OFF, DUAL_BANKED or DUAL_PORTS */
 } tcfg_t;
 
-enum { FU_CMPBR, FU_ADDADC, FU_LEAMEM, FU_LDPAIR, FU__COUNT };
+/* Macro-op fusion kinds.  ALUBR is a flag-setting ALU op (not CMP) followed
+ * by a conditional branch: DEC+BNE as a loop counter, i.e. DBNZ by fusion. */
+enum { FU_CMPBR, FU_ADDADC, FU_LEAMEM, FU_LDPAIR, FU_ALUBR, FU__COUNT };
+#define FU_ALL ((1 << FU__COUNT) - 1)
 extern const char *const fuse_names[FU__COUNT];
+extern const char *const fuse_keys[FU__COUNT]; /* short names for --fuse LIST */
+
+/* Dual issue.  Slot 2 is a small pipe: simple ALU ops (no shifts, no
+ * multiply, no pointer ops), MOVI, or a branch.  BANKED gives the register
+ * file one write port per even/odd bank, so the two instructions must write
+ * opposite banks; PORTS models a full second write port. */
+enum { DUAL_OFF, DUAL_BANKED, DUAL_PORTS };
+
+/* Why an adjacent sequential pair did not dual-issue (first reason found). */
+enum { PB_WINDOW, PB_SLOT1, PB_SLOT2, PB_RAW, PB_WAW, PB_BANK, PB_FLAGS, PB__COUNT };
+extern const char *const pair_block_names[PB__COUNT];
+/* What slot 2 held when a pair issued. */
+enum { PS_ALU, PS_MOVI, PS_BRANCH, PS__COUNT };
+extern const char *const pair_slot_names[PS__COUNT];
 
 typedef struct {
     uint64_t insts, cycles, len16, len32;
@@ -46,6 +64,9 @@ typedef struct {
     uint64_t st_ifetch, st_video, st_branch, st_loaduse, st_io, st_pair;
     uint64_t data_words, branches, taken;
     uint64_t fuse_cand[FU__COUNT], fused;
+    uint64_t paired, pair_slot[PS__COUNT], pair_block[PB__COUNT];
+    uint64_t fetch_bytes;   /* instruction bytes consumed by the core (demand) */
+    uint64_t port_ifetch;   /* SRAM port words used by I-cache fills and the stream buffer */
 } stats_t;
 
 typedef struct cpu {
@@ -73,7 +94,8 @@ typedef struct cpu {
     uint16_t prev_load_regs;
     dinst_t prev;
     uint32_t prev_pc, prev_ea;
-    int prev_valid, prev_fused;
+    int prev_valid, prev_grouped; /* prev issued together with the one before it */
+    int prev_cand;                /* prev completed a counted fusion candidate */
 } cpu_t;
 
 /* ---- helpers used by the generated semantics (exec_gen.c) ---- */

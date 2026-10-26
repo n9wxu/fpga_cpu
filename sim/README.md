@@ -112,3 +112,11 @@ CPU and SRAM share one 50 MHz clock and one 32-bit memory port.
   - Each I/O access: 2 cycles.
   - A 32-bit pair access that spans two SRAM words: 1 cycle.
 - **Fusion candidates are always counted.** `--fuse` applies them: the second instruction issues free when both instructions fit in the 64-bit fetch window.
+  - Kinds: `cmpbr` (CMP/CMPI/CPC + Bcc), `addadc` (ADD+ADC or SUB+SBC on a pair), `leamem` (LEA + a load or store through that pair), `ldpair` (two LDW or STW to adjacent words) and `alubr` (any other flag-setting ALU op + Bcc, so `DEC r; BNE loop` behaves like a DBNZ instruction).
+  - `--fuse=cmpbr,alubr` applies only the listed kinds. Candidates are counted the same way whatever is applied.
+- **Dual issue** (`--dual`): an instruction issues free beside the one before it when slot 2 can take it and the two are independent.
+  - Slot 1 takes anything except a control transfer. Slot 2 takes a simple ALU op (no shift, multiply or pointer op), `MOVI`, or a branch.
+  - The pair must fit the fetch window, and slot 2 must not read a register or the flags that slot 1 writes, or write the same register.
+  - `--dual` (banked) gives the register file one write port per even/odd bank, so the two must write opposite banks. `--dual=ports` models a full second write port.
+  - Fusion is tried first. An instruction joins at most one group, so there is no three-way issue.
+- **SRAM port counters:** words used by I-fetch (misses, stream buffer) and data, plus the instruction bytes the core consumes per cycle. `make measure` reports them, and estimates speed per LUT for each option.

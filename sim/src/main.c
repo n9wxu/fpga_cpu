@@ -18,9 +18,9 @@ static void write_json(const cpu_t *c, const char *path, const char *image)
     const tcfg_t *g = &c->cfg;
     fprintf(f, "{\n  \"image\": \"%s\", \"variant\": \"%s\",\n", image, c->var->name);
     fprintf(f, "  \"config\": {\"icache\": %u, \"line\": %u, \"prefetch\": %d, \"fuse\": %d, "
-               "\"branch_pen\": %d, \"loaduse_pen\": %d, \"vperiod\": %u, \"vburst\": %u},\n",
+               "\"branch_pen\": %d, \"loaduse_pen\": %d, \"vperiod\": %u, \"vburst\": %u, \"dual\": %d},\n",
             g->icache_bytes, g->line_bytes, g->prefetch, g->fuse, g->branch_pen, g->loaduse_pen,
-            g->vperiod, g->vburst);
+            g->vperiod, g->vburst, g->dual);
     fprintf(f, "  \"exit\": %d, \"halt\": \"%s\",\n", c->exit_code, c->halt_reason);
     fprintf(f, "  \"insts\": %llu, \"cycles\": %llu, \"len16\": %llu, \"len32\": %llu,\n",
             (unsigned long long)s->insts, (unsigned long long)s->cycles,
@@ -38,6 +38,15 @@ static void write_json(const cpu_t *c, const char *path, const char *image)
     for (int i = 0; i < FU__COUNT; i++)
         fprintf(f, "%s\"%s\": %llu", i ? ", " : "", fuse_names[i], (unsigned long long)s->fuse_cand[i]);
     fprintf(f, ", \"applied\": %llu},\n", (unsigned long long)s->fused);
+    fprintf(f, "  \"dual\": {\"paired\": %llu, \"slot2\": {", (unsigned long long)s->paired);
+    for (int i = 0; i < PS__COUNT; i++)
+        fprintf(f, "%s\"%s\": %llu", i ? ", " : "", pair_slot_names[i], (unsigned long long)s->pair_slot[i]);
+    fprintf(f, "}, \"blocked\": {");
+    for (int i = 0; i < PB__COUNT; i++)
+        fprintf(f, "%s\"%s\": %llu", i ? ", " : "", pair_block_names[i], (unsigned long long)s->pair_block[i]);
+    fprintf(f, "}},\n");
+    fprintf(f, "  \"port\": {\"fetch_bytes\": %llu, \"ifetch_words\": %llu},\n",
+            (unsigned long long)s->fetch_bytes, (unsigned long long)s->port_ifetch);
     fprintf(f, "  \"ops\": {");
     int first = 1;
     for (int i = 0; i < OP__COUNT; i++)
@@ -73,6 +82,13 @@ static void summary(const cpu_t *c)
     for (int i = 0; i < FU__COUNT; i++)
         fprintf(stderr, "  %s %llu", fuse_names[i], (unsigned long long)s->fuse_cand[i]);
     fprintf(stderr, "%s\n", c->cfg.fuse ? "  (applied)" : "");
+    if (c->cfg.dual)
+        fprintf(stderr, "dual issue (%s): %llu paired, %.1f%% of instructions\n",
+                c->cfg.dual == DUAL_BANKED ? "banked" : "ports", (unsigned long long)s->paired,
+                pct(s->paired, s->insts));
+    fprintf(stderr, "SRAM port: ifetch %.1f%%  data %.1f%%  of cycles; core consumes %.2f instruction bytes/cycle\n",
+            pct(s->port_ifetch, s->cycles), pct(s->data_words, s->cycles),
+            s->cycles ? (double)s->fetch_bytes / (double)s->cycles : 0.0);
 }
 
 int main(int argc, char **argv)

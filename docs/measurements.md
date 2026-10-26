@@ -55,35 +55,82 @@ CPU and SRAM share one 50 MHz clock. Every run was checked against the Python re
 
 ## Fusion candidates (variant A), per 100 instructions
 
-| benchmark | cmp+branch | add+adc pair | lea+mem | ldw/stw pair | speedup with fusion |
-|---|---|---|---|---|---|
-| arith32 | 14.3 | 14.2 | 0.0 | 0.0 | 1.285x |
-| fib | 10.5 | 0.0 | 0.0 | 0.0 | 1.078x |
-| hello | 18.3 | 0.0 | 1.2 | 0.0 | 1.076x |
-| lines | 7.9 | 0.0 | 0.0 | 0.0 | 1.042x |
-| memops | 0.0 | 0.0 | 0.0 | 0.0 | 1.000x |
-| sieve | 20.0 | 0.0 | 0.0 | 0.0 | 1.135x |
-| tokenize | 28.7 | 0.0 | 0.0 | 0.0 | 1.232x |
-| **geomean** |  |  |  |  | **1.117x** |
+| benchmark | cmp+branch | add+adc pair | lea+mem | ldw/stw pair | alu+branch | speedup with fusion |
+|---|---|---|---|---|---|---|
+| arith32 | 14.3 | 14.2 | 0.0 | 0.0 | 0.1 | 1.285x |
+| fib | 10.5 | 0.0 | 0.0 | 0.0 | 0.0 | 1.078x |
+| hello | 18.3 | 0.0 | 1.2 | 0.0 | 0.0 | 1.076x |
+| lines | 7.9 | 0.0 | 0.0 | 0.0 | 18.2 | 1.169x |
+| memops | 0.0 | 0.0 | 0.0 | 0.0 | 22.3 | 1.153x |
+| sieve | 20.0 | 0.0 | 0.0 | 0.0 | 4.5 | 1.166x |
+| tokenize | 28.7 | 0.0 | 0.0 | 0.0 | 0.0 | 1.232x |
+| **geomean** |  |  |  |  |  | **1.163x** |
 
 ## Fusion candidates (variant B), per 100 instructions
 
-| benchmark | cmp+branch | add+adc pair | lea+mem | ldw/stw pair | speedup with fusion |
-|---|---|---|---|---|---|
-| arith32 | 14.3 | 14.2 | 0.0 | 0.0 | 1.285x |
-| fib | 10.5 | 0.0 | 0.0 | 0.0 | 1.078x |
-| hello | 18.3 | 0.0 | 1.2 | 0.0 | 1.078x |
-| lines | 7.9 | 0.0 | 0.0 | 0.0 | 1.042x |
-| memops | 0.0 | 0.0 | 0.0 | 0.0 | 1.000x |
-| sieve | 20.0 | 0.0 | 0.0 | 0.0 | 1.135x |
-| tokenize | 28.7 | 0.0 | 0.0 | 0.0 | 1.232x |
-| **geomean** |  |  |  |  | **1.118x** |
+| benchmark | cmp+branch | add+adc pair | lea+mem | ldw/stw pair | alu+branch | speedup with fusion |
+|---|---|---|---|---|---|---|
+| arith32 | 14.3 | 14.2 | 0.0 | 0.0 | 0.1 | 1.285x |
+| fib | 10.5 | 0.0 | 0.0 | 0.0 | 0.0 | 1.078x |
+| hello | 18.3 | 0.0 | 1.2 | 0.0 | 0.0 | 1.078x |
+| lines | 7.9 | 0.0 | 0.0 | 0.0 | 18.2 | 1.169x |
+| memops | 0.0 | 0.0 | 0.0 | 0.0 | 22.3 | 1.153x |
+| sieve | 20.0 | 0.0 | 0.0 | 0.0 | 4.5 | 1.166x |
+| tokenize | 28.7 | 0.0 | 0.0 | 0.0 | 0.0 | 1.232x |
+| **geomean** |  |  |  |  |  | **1.164x** |
+
+## Dual issue (variant A)
+
+Slot 2 takes simple ALU ops, MOVI or a branch; slot 1 takes anything but a control transfer. Paired instructions must be independent (no register or flag dependence). Banked: the two must write opposite even/odd register banks.
+
+| benchmark | paired, banked | paired, ports | slot 2 alu / movi / branch | top blockers (banked) | speedup banked | speedup ports | dual + branch fusion |
+|---|---|---|---|---|---|---|---|
+| arith32 | 28.5% | 28.5% | 100 / 0 / 0% | flags 14%, slot2 14% | 1.284x | 1.285x | 1.499x |
+| fib | 5.3% | 10.5% | 100 / 0 / 0% | slot2 32%, flags 11% | 1.039x | 1.078x | 1.102x |
+| hello | 17.1% | 17.1% | 0 / 0 / 100% | raw 18%, flags 18% | 1.070x | 1.070x | 1.193x |
+| lines | 21.6% | 23.9% | 100 / 0 / 0% | raw 14%, flags 8% | 1.125x | 1.153x | 1.206x |
+| memops | 5.3% | 22.4% | 100 / 0 / 0% | bank 22%, flags 17% | 1.038x | 1.153x | 1.153x |
+| sieve | 15.5% | 20.6% | 71 / 0 / 29% | flags 24%, slot1 15% | 1.099x | 1.133x | 1.326x |
+| tokenize | 4.9% | 4.9% | 7 / 3 / 90% | flags 29%, raw 26% | 1.042x | 1.042x | 1.254x |
+| **geomean** | | | | | **1.097x** | **1.128x** | **1.242x** |
+
+Blockers are counted per instruction: window = the pair does not fit the fetch window, slot1/slot2 = an instruction class the slot cannot take, raw/waw = register dependence, bank = both write the same bank, flags = slot 2 reads flags that slot 1 writes.
+
+## SRAM port use (variant A, all benchmarks)
+
+Share of all cycles. Video is the fixed scan-out reservation (4 of every 56 cycles). Demand is the instruction bytes the core consumes per cycle; the port can supply 4.
+
+| configuration | instruction fetch | data | video | idle | demand B/cycle | cycles vs base |
+|---|---|---|---|---|---|---|
+| base | 0.0% | 13.5% | 7.1% | 79.4% | 1.46 | 1.000 |
+| fuse-br | 0.0% | 15.8% | 7.1% | 77.0% | 1.71 | 0.877 |
+| dual+br | 0.0% | 16.8% | 7.1% | 76.1% | 1.82 | 0.805 |
+| ic64 | 2.3% | 13.3% | 7.1% | 77.3% | 1.44 | 1.008 |
+| ic64+dual+br | 2.8% | 16.5% | 7.1% | 73.6% | 1.78 | 0.814 |
+| nocache | 62.0% | 12.2% | 7.1% | 18.7% | 1.32 | 1.063 |
+| nocache+br | 72.5% | 14.3% | 7.1% | 6.1% | 1.54 | 0.935 |
+| nocache+dual | 68.0% | 13.4% | 7.1% | 11.5% | 1.45 | 0.969 |
+
+The benchmarks fit in a 64 B cache except `tokenize` and `hello`, so the miss path is only really exercised by the no-cache rows until compiled BASIC is measured.
+
+## Speed per LUT (variant A, estimates)
+
+LUT figures are design estimates in `sim/tools/measure.py`, not synthesis results. Speedup is the geomean over benchmarks against base.
+
+| option | speedup | extra LUTs (est.) | speedup % per 100 LUTs | what the LUTs buy |
+|---|---|---|---|---|
+| bp1 | 1.140x | 30–80 | 25.5 | resolve taken branches one stage earlier: target adder and redirect in decode |
+| fuse-cmpbr | 1.095x | 30–60 | 21.2 | pair detect, flags forwarded straight into the branch decision |
+| fuse-br | 1.141x | 40–80 | 23.4 | as fuse-cmpbr, plus the register write of the ALU half |
+| fuse | 1.163x | 150–250 | 8.2 | all kinds: adds a 32-bit carry across ADD+ADC, LEA into the AGU, paired LDW/STW |
+| dual | 1.097x | 300–450 | 2.6 | slot-2 decoder and 16-bit ALU, two more register-file read copies, forwarding, pairing check, flag merge |
+| dual-ports | 1.128x | 360–570 | 2.8 | as dual, plus a second full write port (replicated file or LVT) |
 
 ## Configuration sweep: cycles relative to base (geomean over benchmarks)
 
 | configuration | description | A | B |
 |---|---|---|---|
-| fuse | base + macro-op fusion | 0.895 | 0.895 |
+| fuse | base + macro-op fusion | 0.859 | 0.859 |
 | noprefetch | base without the stream buffer | 1.000 | 1.000 |
 | nocache | no I-cache: every fetch from SRAM | 1.063 | 1.075 |
 | ic512 | 512 B I-cache | 1.000 | 1.000 |
@@ -93,6 +140,18 @@ CPU and SRAM share one 50 MHz clock. Every run was checked against the Python re
 | line32 | 32 B lines | 1.002 | 0.999 |
 | novideo | no video traffic | 0.983 | 0.983 |
 | bp1 | 1-cycle taken-branch penalty | 0.877 | 0.877 |
+| fuse-cmpbr | fuse CMP+Bcc only | 0.913 | 0.913 |
+| fuse-br | fuse CMP+Bcc and ALU+Bcc (DEC+BNE = DBNZ) | 0.877 | 0.876 |
+| dual | dual issue, even/odd write banks | 0.912 | 0.911 |
+| dual-ports | dual issue, full second write port | 0.886 | 0.886 |
+| dual+br | dual issue (banked) + branch fusion | 0.805 | 0.805 |
+| bp1+br | 1-cycle branch + branch fusion | 0.745 | 0.744 |
+| bp1+dual+br | 1-cycle branch + dual (banked) + branch fusion | 0.677 | 0.676 |
+| nocache+br | no I-cache + branch fusion | 0.935 | 0.945 |
+| nocache+dual | no I-cache + dual issue | 0.969 | 0.978 |
+| ic64 | 64 B I-cache (miss-path stress) | 1.008 | 1.009 |
+| ic64+br | 64 B I-cache + branch fusion | 0.886 | 0.886 |
+| ic64+dual+br | 64 B I-cache + dual + branch fusion | 0.814 | 0.814 |
 
 ## I-cache misses per 1000 instructions
 
