@@ -4,6 +4,10 @@ FPGA BASIC: a line-numbered BASIC with an 8-bit feel, written in portable C
 for the fpga_cpu target (16-bit `int`, 32-bit pointers, soft float). It runs
 on the development machine too, which is how it is tested.
 
+A structured dialect with optional line numbers, procedures and a
+full-screen editor is proposed in
+[docs/basic-language.md](../docs/basic-language.md).
+
 ```sh
 make -C basic              # host build: basic/build/basic-host
 make -C basic test         # feed tests/*.bas to the prompt, diff against tests/*.out
