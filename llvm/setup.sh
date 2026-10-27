@@ -24,4 +24,5 @@ cmake -G Ninja -S llvm-project/llvm -B build -DCMAKE_BUILD_TYPE=Release $CCACHE 
   -DLLVM_INCLUDE_BENCHMARKS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF \
   -DCLANG_ENABLE_STATIC_ANALYZER=OFF -DCLANG_ENABLE_ARCMT=OFF \
   -DLLVM_ENABLE_ZSTD=OFF -DLLVM_ENABLE_LIBXML2=OFF -DLLVM_ENABLE_ZLIB=OFF
-ninja -C build clang llc
+# NINJA_JOBS limits parallel jobs; some clang files need 2-3 GB each to compile
+ninja -C build ${NINJA_JOBS:+-j $NINJA_JOBS} clang llc

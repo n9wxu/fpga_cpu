@@ -71,6 +71,8 @@ jobs:
 
       - name: Build LLVM (cache miss)
         if: steps.llvm.outputs.cache-hit != 'true'
+        env:
+          NINJA_JOBS: 4   # the 16 GB runner runs out of memory with more
         run: llvm/setup.sh
 
       # With a cached build, only compiler-rt's builtins are needed from the

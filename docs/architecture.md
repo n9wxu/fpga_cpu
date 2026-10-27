@@ -29,6 +29,15 @@ RP2350 expansion board, on headers A2/B1:
 Future expansion, **not designed yet**: better video (VRAM, HDMI), sound,
 storage and game-controller input.
 
+## Later hardware targets
+
+The Spartan-3 board plus one expansion PCB is the first build: a single,
+sturdy assembly. A larger board comes after it, probably a Digilent Arty
+A7-100T (XC7A100T, DDR3, no video or PS/2) or a Tang Nano 9K (GW1NR-9,
+8 MB PSRAM, onboard HDMI). Either has room for issues #6 (hardware sprites)
+and #2 (dual issue), but needs its own memory and video design. Keep the CPU
+RTL vendor-neutral, with memory, video and pins in a per-board layer.
+
 ## CPU
 
 - 16-bit datapath, load/store design.
