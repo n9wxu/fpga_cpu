@@ -49,6 +49,8 @@ Changes to the sources are few and marked `fpga_cpu:`:
   (`FCPU_EXACT_TIMER` drops their 2-second minimum). The runner also
   records the simulator's total cycles for every run.
 - **Input.** No keyboard input: Dhrystone's run count is built in.
+- **Exit status.** Dhrystone's K&R `main` gained a `return 0`; it fell
+  off the end, so the exit status was garbage.
 - **CoreMark** runs too briefly to be a reportable CoreMark score (EEMBC
   asks for 10 seconds). Its iterations per second per MHz are an ISA
   measurement here, nothing more. The core files are unmodified.
@@ -58,8 +60,11 @@ Changes to the sources are few and marked `fpga_cpu:`:
 fpga_cpu's C has a 16-bit `int`; `fcc --int32` gives a 32-bit `int` for
 code written for 32-bit machines. The C benchmarks are built both ways
 where they work both ways, which measures what a 16-bit `int` buys on
-this CPU. A 16-bit build whose output differs from the reference (a
-program that assumes 32-bit `int`) is marked in the results.
+this CPU. The Stanford programs assume a 32-bit `int` (their random
+numbers and data overflow 16 bits), so their 16-bit builds print
+different numbers from the reference; those builds are checked by the
+programs' own `Error ...` tests instead. CoreMark is checked against its
+published CRCs for the performance seeds, at either width.
 
 ## BASIC
 

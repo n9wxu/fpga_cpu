@@ -299,6 +299,7 @@ main ()
     printf ("\n");
   }
   
+  return 0; /* fpga_cpu: K&R main fell off the end (exit status was garbage) */
 }
 
 

@@ -50,7 +50,7 @@ SECTIONS = ("text", "rodata", "data", "bss")
 IDENT = re.compile(r"(?<![\w.$])([A-Za-z_.$][\w.$]*)")
 EXPR_FUNCS = ("lo", "hi", "lo8", "hi8")
 IGNORED = {".file", ".ident", ".type", ".size", ".addrsig", ".addrsig_sym", ".hidden",
-           ".protected", ".local", ".loc", ".cfi_sections", ".cfi_startproc", ".cfi_endproc",
+           ".protected", ".loc", ".cfi_sections", ".cfi_startproc", ".cfi_endproc",
            ".cfi_def_cfa_offset", ".cfi_offset", ".cfi_def_cfa", ".end"}
 
 
@@ -338,6 +338,7 @@ class Assembler:
     def parse(self, lines, src):
         stmts = []
         globs = set()
+        locs = set()   # .local: a following .comm stays file-local (C statics)
         section = "text"
         for i, raw in lines:
             line = strip_comment(raw).strip()
@@ -368,6 +369,10 @@ class Assembler:
                 globs.update(x.strip() for x in rest.split(","))
                 if labels:
                     stmts.append(Stmt(i, raw, "dir", ".label", [], labels, src, section))
+            elif d == ".local":
+                locs.update(x.strip() for x in rest.split(","))
+                if labels:
+                    stmts.append(Stmt(i, raw, "dir", ".label", [], labels, src, section))
             elif d in (".text", ".data", ".bss", ".rodata", ".section"):
                 sec = section_of(split_operands(rest)[0]) if d == ".section" else d[1:]
                 section = sec if sec else "discard"
@@ -375,7 +380,7 @@ class Assembler:
                     stmts.append(Stmt(i, raw, "dir", ".label", [], labels, src, section))
             elif d in (".comm", ".lcomm"):
                 args = split_operands(rest)
-                if d == ".comm":
+                if d == ".comm" and args[0] not in locs:
                     globs.add(args[0])
                 al = args[2] if len(args) > 2 else "2"
                 stmts.append(Stmt(i, raw, "dir", ".balign", [al], [], src, "bss"))

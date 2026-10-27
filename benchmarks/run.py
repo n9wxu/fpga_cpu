@@ -57,6 +57,9 @@ C = os.path.join(HERE, "c")
 def stanford(name, iters, floaty=False):
     return dict(name=f"stanford-{name.lower()}", kind="c", srcs=[f"{C}/stanford/{name}.c"],
                 defs=[f"ITERS={iters}"], ints=[16, 32], compare="float" if floaty else "exact",
+                # written for 32-bit int: Rand() and the data overflow 16 bits, so a 16-bit
+                # build can't match the host's output; it must pass its own checks instead
+                compare16="selfcheck",
                 about=f"Stanford {name} (Hennessy), {iters} iterations")
 
 
@@ -82,7 +85,10 @@ BENCHMARKS = [
          srcs=[f"{C}/coremark/{f}.c" for f in ("core_list_join", "core_main", "core_matrix", "core_state",
                                                "core_util")] + [f"{C}/coremark/fcpu/core_portme.c"],
          incs=[f"{C}/coremark", f"{C}/coremark/fcpu"], defs=["ITERATIONS=10", 'FLAGS_STR="-O2"'],
-         ints=[16, 32], compare="check", require=r"Correct operation validated",
+         ints=[16, 32], compare="check",
+         # the reference CRCs for the performance seeds (0, 0, 0x66); the run is too
+         # short for CoreMark's 10 s rule, which is all "Errors detected" means here
+         require=r"crclist\s*:\s*0xe714[\s\S]*crcmatrix\s*:\s*0x1fd7[\s\S]*crcstate\s*:\s*0x8e3a",
          ignore=r".", metric=("CoreMark/MHz", None),
          about="CoreMark 1.0 (EEMBC 2009), 10 iterations: an ISA measurement, not a reportable score"),
     dict(name="basic-dhrystone", kind="basic", file="DHRY", compare="exact",
@@ -153,7 +159,9 @@ def same_float(a, b):
     return True
 
 
-def compare(b, got, want):
+def compare(b, got, want, bits=32):
+    if bits == 16 and b.get("compare16") == "selfcheck":
+        return "Error" not in got
     if b["compare"] == "check":
         return bool(re.search(b["require"], got)) and "ERROR!" not in got.replace(
             "ERROR! Must execute for at least 10 secs", "")
@@ -196,7 +204,7 @@ def metric(b, out, st):
 
 
 def record(b, variant, bits, cfg, out, rc, st, want, stats):
-    ok = rc == 0 and compare(b, out, want) if want is not None else rc == 0
+    ok = rc == 0 and compare(b, out, want, bits) if want is not None else rc == 0
     return dict(bench=b["name"], variant=variant, int=bits, config=cfg, ok=ok, rc=rc,
                 cycles=st["cycles"], insts=st["insts"], len16=st["len16"],
                 code_bytes=stats.get("code_bytes") if stats else None,
@@ -287,7 +295,8 @@ def run_doom(b, variants, configs):
     link = os.path.join(hdir, wad)
     if not os.path.exists(link):
         os.symlink(os.path.join(DOOMDIR, "wad", wad), link)
-    want = sh([hb, "-iwad", wad, *args.split()], cwd=hdir, timeout=900).stdout
+    r = sh([hb, "-iwad", wad, *args.split()], cwd=hdir, timeout=900)
+    want = r.stdout + r.stderr  # the "timed ..." line comes from I_Error, on stderr
     host_frame = open(os.path.join(hdir, "LASTFRAME.IDX"), "rb").read()
     # the simulator's disk: the IWAD and the arguments
     disk = os.path.join(BUILD, "doom", "disk")

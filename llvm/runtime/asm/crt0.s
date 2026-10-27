@@ -21,7 +21,8 @@ _start:
         STP     p1, [0xF0020C]
         MOVI    r2, 0x21                ; text layer and cursor on
         STW     r2, [0xF00200]
-        MOVI    r2, 0
+        MOVI    r2, 0                   ; argc = 0 (r3 too: int may be 32 bits)
+        MOVI    r3, 0
         MOVI    r4, 0
         MOVI    r5, 0
         CALL    main
