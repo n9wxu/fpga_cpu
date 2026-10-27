@@ -11,6 +11,11 @@
 
 include "llvm/Target/Target.td"
 
+// int32: clang's 32-bit int mode (fcc --int32). Only the front end uses it;
+// it is declared here so the backend accepts the feature string.
+def FeatureInt32 : SubtargetFeature<"int32", "HasInt32", "true",
+                                    "32-bit int (front end only)">;
+
 def : ProcessorModel<"generic", NoSchedModel, []>;
 
 include "FCPURegisterInfo.td"

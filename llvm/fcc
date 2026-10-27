@@ -5,8 +5,8 @@ usage: fcc [-v A|B] [-O<n>] [-S] [-I dir] [-D name[=val]] [-o out.bin]
            [--int32] [--base ADDR] [--stack ADDR] [--cflag FLAG ...]
            [--lst] [--stats] [--keep] [--] files.c|files.s ...
 
---int32 compiles with a 32-bit int (the clang target fcpu-unknown-unknown-
-int32) against a runtime built the same way, for C written for 32-bit
+--int32 compiles with a 32-bit int (clang's int32 target feature)
+against a runtime built the same way, for C written for 32-bit
 machines. --cflag passes a flag to clang for your files (for example
 -std=gnu89 for K&R C). --base sets the load address (default 0x1000) and --stack the
 initial stack pointer (default 0x053400); the heap runs from the end of
@@ -32,8 +32,8 @@ ROOT = os.path.dirname(HERE)
 CLANG = os.path.join(HERE, "build", "bin", "clang")
 RT = os.path.join(HERE, "runtime")
 RT_BUILD = os.path.join(RT, "build")
-TRIPLE16 = "--target=fcpu"
-TRIPLE32 = "--target=fcpu-unknown-unknown-int32"
+TRIPLE16 = ["--target=fcpu"]
+TRIPLE32 = ["--target=fcpu", "-Xclang", "-target-feature", "-Xclang", "+int32"]
 CRT_SRC = os.path.join(HERE, "llvm-project", "compiler-rt", "lib", "builtins")
 ASM = os.path.join(ROOT, "sim", "tools", "asm.py")
 PY = os.path.join(ROOT, ".venv", "bin", "python")
@@ -67,7 +67,7 @@ INT32 = False
 
 
 def compile_c(src, out, opt, extra):
-    run([CLANG, TRIPLE32 if INT32 else TRIPLE16, *CFLAGS, opt, *extra, "-S", src, "-o", out])
+    run([CLANG, *(TRIPLE32 if INT32 else TRIPLE16), *CFLAGS, opt, *extra, "-S", src, "-o", out])
 
 
 def runtime():

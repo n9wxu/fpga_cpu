@@ -21,6 +21,7 @@ class FCPUSubtarget : public FCPUGenSubtargetInfo {
   FCPUFrameLowering FrameLowering;
   FCPUTargetLowering TLInfo;
   SelectionDAGTargetInfo TSInfo;
+  bool HasInt32 = false; // front-end only (clang's 32-bit int mode)
 
 public:
   FCPUSubtarget(const Triple &TT, const std::string &CPU,
