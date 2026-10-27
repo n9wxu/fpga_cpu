@@ -9,7 +9,8 @@
 ;   uses r6-r9 (callers save p4)
 ; __fcpu_udiv32z starts from remainder 0 (a plain 32 / 32 division).
 ; Steps whose quotient bit is certainly 0 are skipped 16 or 8 at a time:
-; for Doom's 0xFFFFFFFF / scale that halves the loop.
+; for Doom's 0xFFFFFFFF / scale that halves the loop. With extension X
+; (fcc --ext) each step is one DSTEP plus two ADCs, unrolled.
         .globl  __fcpu_udiv32z
 __fcpu_udiv32z:
         MOVI    r0, 0
@@ -27,6 +28,155 @@ __fcpu_udiv32:
         MOV     r3, r2
         MOVI    r2, 0
         MOVI    r6, 16
+.ifdef FCPU_X_DSTEP
+; Extension X: DSTEP does one step. The dividend shifts out of r3:r2 into
+; C, and the quotient bit shifts back in from C, by the ADC pair.
+.Ludiv32_byte:                          ; skip 8 steps while (rem << 8 | N >> 24) < D
+        SHRI    r7, r1, 8
+        BNE     .Ludiv32_go
+        SHLI    r8, r1, 8
+        SHRI    r7, r0, 8
+        OR      r8, r8, r7
+        SHLI    r9, r0, 8
+        SHRI    r7, r3, 8
+        OR      r9, r9, r7
+        CMP     r9, r4
+        CPC     r8, r5
+        BHS     .Ludiv32_go
+        MOV     r1, r8
+        MOV     r0, r9
+        SHLI    r3, r3, 8
+        SHRI    r7, r2, 8
+        OR      r3, r3, r7
+        SHLI    r2, r2, 8
+        ADDI    r6, r6, -8
+        BNE     .Ludiv32_byte
+        RET
+.Ludiv32_go:                            ; r6 = 32, 24, 16 or 8 steps left
+        CMPI    r6, 16
+        BEQ     .Lde16
+        BLO     .Lde8
+        CMPI    r6, 24
+        BEQ     .Lde24
+        ADD     r2, r2, r2
+        ADC     r3, r3, r3
+        BRA     .Lds32
+.Lde24:
+        ADD     r2, r2, r2
+        ADC     r3, r3, r3
+        BRA     .Lds24
+.Lde16:
+        ADD     r2, r2, r2
+        ADC     r3, r3, r3
+        BRA     .Lds16
+.Lde8:
+        ADD     r2, r2, r2
+        ADC     r3, r3, r3
+        BRA     .Lds8
+.Lds32:
+        DSTEP   p0, p2                  ; remainder*2 + C; subtract D if it fits; C = quotient bit
+        ADC     r2, r2, r2              ; quotient bit in, next dividend bit out
+        ADC     r3, r3, r3
+        DSTEP   p0, p2
+        ADC     r2, r2, r2
+        ADC     r3, r3, r3
+        DSTEP   p0, p2
+        ADC     r2, r2, r2
+        ADC     r3, r3, r3
+        DSTEP   p0, p2
+        ADC     r2, r2, r2
+        ADC     r3, r3, r3
+        DSTEP   p0, p2
+        ADC     r2, r2, r2
+        ADC     r3, r3, r3
+        DSTEP   p0, p2
+        ADC     r2, r2, r2
+        ADC     r3, r3, r3
+        DSTEP   p0, p2
+        ADC     r2, r2, r2
+        ADC     r3, r3, r3
+        DSTEP   p0, p2
+        ADC     r2, r2, r2
+        ADC     r3, r3, r3
+.Lds24:
+        DSTEP   p0, p2
+        ADC     r2, r2, r2
+        ADC     r3, r3, r3
+        DSTEP   p0, p2
+        ADC     r2, r2, r2
+        ADC     r3, r3, r3
+        DSTEP   p0, p2
+        ADC     r2, r2, r2
+        ADC     r3, r3, r3
+        DSTEP   p0, p2
+        ADC     r2, r2, r2
+        ADC     r3, r3, r3
+        DSTEP   p0, p2
+        ADC     r2, r2, r2
+        ADC     r3, r3, r3
+        DSTEP   p0, p2
+        ADC     r2, r2, r2
+        ADC     r3, r3, r3
+        DSTEP   p0, p2
+        ADC     r2, r2, r2
+        ADC     r3, r3, r3
+        DSTEP   p0, p2
+        ADC     r2, r2, r2
+        ADC     r3, r3, r3
+.Lds16:
+        DSTEP   p0, p2
+        ADC     r2, r2, r2
+        ADC     r3, r3, r3
+        DSTEP   p0, p2
+        ADC     r2, r2, r2
+        ADC     r3, r3, r3
+        DSTEP   p0, p2
+        ADC     r2, r2, r2
+        ADC     r3, r3, r3
+        DSTEP   p0, p2
+        ADC     r2, r2, r2
+        ADC     r3, r3, r3
+        DSTEP   p0, p2
+        ADC     r2, r2, r2
+        ADC     r3, r3, r3
+        DSTEP   p0, p2
+        ADC     r2, r2, r2
+        ADC     r3, r3, r3
+        DSTEP   p0, p2
+        ADC     r2, r2, r2
+        ADC     r3, r3, r3
+        DSTEP   p0, p2
+        ADC     r2, r2, r2
+        ADC     r3, r3, r3
+.Lds8:
+        DSTEP   p0, p2
+        ADC     r2, r2, r2
+        ADC     r3, r3, r3
+        DSTEP   p0, p2
+        ADC     r2, r2, r2
+        ADC     r3, r3, r3
+        DSTEP   p0, p2
+        ADC     r2, r2, r2
+        ADC     r3, r3, r3
+        DSTEP   p0, p2
+        ADC     r2, r2, r2
+        ADC     r3, r3, r3
+        DSTEP   p0, p2
+        ADC     r2, r2, r2
+        ADC     r3, r3, r3
+        DSTEP   p0, p2
+        ADC     r2, r2, r2
+        ADC     r3, r3, r3
+        DSTEP   p0, p2
+        ADC     r2, r2, r2
+        ADC     r3, r3, r3
+        DSTEP   p0, p2
+        ADC     r2, r2, r2
+        ADC     r3, r3, r3
+        RET
+.Ludiv32_loop:                          ; (the 16-step skip above jumps here
+        BRA     .Ludiv32_go             ;  when the remainder is too big for it)
+.else
 .Ludiv32_byte:                            ; skip 8 steps while (rem << 8 | N >> 24) < D
         SHRI    r7, r1, 8
         BNE     .Ludiv32_loop
@@ -65,6 +215,7 @@ __fcpu_udiv32:
         ADDI    r6, r6, -1
         BNE     .Ludiv32_loop
         RET
+.endif
 
         .globl  __udivsi3
 __udivsi3:

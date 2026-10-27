@@ -20,6 +20,7 @@ void opts_usage(int gui)
             "  --dual[=banked|ports]  in-order dual issue; banked (default) = even/odd write banks,\n"
             "                    ports = a full second register write port\n"
             "  --branch-pen N    taken-branch penalty (default 2)\n"
+            "  --ext             allow extension X (DSTEP, MULPU, FSHR, FSHL, CLZ; see cpu/isa.yaml)\n"
             "  --video P:B       video steals B of every P port cycles (default 56:4 = 7%%, 0:0 = off)\n"
             "  --xram MB         simulator-only expansion RAM at 0x100000, up to 14 MB (default none)\n"
             "  --max-cycles N    stop after N cycles (default %s)\n"
@@ -71,7 +72,7 @@ static int parse_fuse(const char *s, int *mask)
 int opts_parse(opts_t *o, int argc, char **argv, int gui)
 {
     memset(o, 0, sizeof *o);
-    o->cfg = (tcfg_t){ 2048, 16, 1, 0, 2, 1, 2, 56, 4, DUAL_OFF };
+    o->cfg = (tcfg_t){ 2048, 16, 1, 0, 2, 1, 2, 56, 4, DUAL_OFF, 0, 0 };
     o->vname = "A";
     o->load = 0x1000;
     o->entry = 0xFFFFFFFF;
@@ -93,6 +94,7 @@ int opts_parse(opts_t *o, int argc, char **argv, int gui)
                 return -1;
         } else if (!strcmp(a, "--dual") || !strcmp(a, "--dual=banked")) o->cfg.dual = DUAL_BANKED;
         else if (!strcmp(a, "--dual=ports")) o->cfg.dual = DUAL_PORTS;
+        else if (!strcmp(a, "--ext")) o->cfg.ext = 1;
         else if (!strcmp(a, "--branch-pen") && more) o->cfg.branch_pen = (int)num(argv[++i]);
         else if (!strcmp(a, "--video") && more) {
             char *colon;

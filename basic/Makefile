@@ -15,6 +15,8 @@ HDRS    := src/basic.h src/hal.h
 TESTS   := $(sort $(wildcard tests/*.bas))
 SRCS    := $(COMMON) src/hal_fcpu.c
 FCC     := ../llvm/fcc
+# the C runtime that fcc links in: rebuild the target binaries when it changes
+RUNTIME := $(FCC) $(wildcard ../llvm/runtime/asm/*.s ../llvm/runtime/libc/*.c ../llvm/runtime/libm/*.c ../llvm/runtime/include/*.h)
 FSIM    := ../sim/build/fsim
 VARIANTS := A B
 
@@ -52,13 +54,24 @@ bless: $(BUILD)/basic-host
 # quiet like the host's -q and has the host's 256 KB arena, for the tests.
 target: $(VARIANTS:%=$(BUILD)/basic.%.bin)
 
-$(BUILD)/basic.%.bin: $(SRCS) $(HDRS)
+$(BUILD)/basic.%.bin: $(SRCS) $(HDRS) $(RUNTIME)
 	@mkdir -p $(BUILD)
 	$(FCC) -q -v $* -O2 $(SRCS) -o $@ --stats
 
-$(BUILD)/basic-test.%.bin: $(SRCS) $(HDRS)
+$(BUILD)/basic-test.%.bin: $(SRCS) $(HDRS) $(RUNTIME)
 	@mkdir -p $(BUILD)
 	$(FCC) -q -v $* -O2 -DBASIC_QUIET=1 -DBASIC_ARENA_MAX=262144UL $(SRCS) -o $@
+
+# The same with the runtime that uses ISA extension X (benchmarks/run.py):
+# basic-test-ext.<v>.bin uses all of it, basic-test-x-<part>.<v>.bin one part
+# (EXT=<part>, as for fcc --ext=<part>).
+$(BUILD)/basic-test-ext.%.bin: $(SRCS) $(HDRS) $(RUNTIME)
+	@mkdir -p $(BUILD)
+	$(FCC) -q -v $* --ext -O2 -DBASIC_QUIET=1 -DBASIC_ARENA_MAX=262144UL $(SRCS) -o $@
+
+$(BUILD)/basic-test-x-%.bin: $(SRCS) $(HDRS) $(RUNTIME)
+	@mkdir -p $(BUILD)
+	$(FCC) -q -v $(lastword $(subst ., ,$*)) --ext=$(EXT) -O2 -DBASIC_QUIET=1 -DBASIC_ARENA_MAX=262144UL $(SRCS) -o $@
 
 test-target: $(VARIANTS:%=$(BUILD)/basic-test.%.bin)
 	@fail=0; for v in $(VARIANTS); do for t in $(TESTS); do \

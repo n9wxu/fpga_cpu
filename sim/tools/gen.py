@@ -27,8 +27,8 @@ def mode_enum(m):
     return "M_" + (m.upper() if m else "NONE")
 
 
-def flags_for(cls):
-    f = []
+def flags_for(cls, ext=False):
+    f = ["F_EXT"] if ext else []
     if cls in ("ld", "ldp"):
         f.append("F_LOAD")
     if cls in ("st", "stp"):
@@ -54,7 +54,7 @@ def gen_header(isa):
     L.append("enum { " + ", ".join(opnd_enum(o) for o in OPNDS) + ", O__COUNT };")
     L.append("enum { " + ", ".join(mode_enum(m) for m in MODES) + " };")
     L.append("enum { " + ", ".join(f"ROLE_{r.upper()} = 1 << {i}" for i, r in enumerate(ROLES)) + " };")
-    L.append("enum { F_LOAD = 1, F_STORE = 2, F_MEM = 4, F_BRANCH = 8, F_JUMP = 16 };")
+    L.append("enum { F_LOAD = 1, F_STORE = 2, F_MEM = 4, F_BRANCH = 8, F_JUMP = 16, F_EXT = 32 };")
     L.append(f"#define NUM_CONDITIONS {len(isa.conditions)}")
     L += ["",
           "typedef struct {",
@@ -110,7 +110,7 @@ def gen_tables(isa):
         reads = "|".join(f"ROLE_{r.upper()}" for r in c["reads"]) or "0"
         writes = "|".join(f"ROLE_{r.upper()}" for r in c["writes"]) or "0"
         L.append(f'    [OP_{op}] = {{ "{op}", CLS_{o["cls"].upper()}, {o.get("size", 0)}, '
-                 f'{flags_for(o["cls"])}, {reads}, {writes} }},')
+                 f'{flags_for(o["cls"], o.get("ext"))}, {reads}, {writes} }},')
     L += ["};", ""]
     L.append("const char *const cond_names[NUM_CONDITIONS] = { " +
              ", ".join(c_str(c) for c in isa.conditions) + " };")

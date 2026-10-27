@@ -1,6 +1,51 @@
 ; 16-bit division. a = r2, b = r3; result r2. Division by zero gives
 ; quotient 0xFFFF and remainder a, like the shift-subtract loop does.
         .text
+.ifdef FCPU_X_DSTEP
+; .Ludiv16: r2 = r2 / r3, r4 = r2 % r3. Extension X: 16 DSTEPs, the
+; dividend shifting out of r2 into C and the quotient back in. Uses r5, p4.
+.Ludiv16:
+        PUSHP   p4
+        MOV     r8, r3                  ; D = p4
+        MOVI    r9, 0
+        MOVI    r4, 0                   ; remainder = p2
+        MOVI    r5, 0
+        ADD     r2, r2, r2              ; first dividend bit -> C
+        DSTEP   p2, p4
+        ADC     r2, r2, r2
+        DSTEP   p2, p4
+        ADC     r2, r2, r2
+        DSTEP   p2, p4
+        ADC     r2, r2, r2
+        DSTEP   p2, p4
+        ADC     r2, r2, r2
+        DSTEP   p2, p4
+        ADC     r2, r2, r2
+        DSTEP   p2, p4
+        ADC     r2, r2, r2
+        DSTEP   p2, p4
+        ADC     r2, r2, r2
+        DSTEP   p2, p4
+        ADC     r2, r2, r2
+        DSTEP   p2, p4
+        ADC     r2, r2, r2
+        DSTEP   p2, p4
+        ADC     r2, r2, r2
+        DSTEP   p2, p4
+        ADC     r2, r2, r2
+        DSTEP   p2, p4
+        ADC     r2, r2, r2
+        DSTEP   p2, p4
+        ADC     r2, r2, r2
+        DSTEP   p2, p4
+        ADC     r2, r2, r2
+        DSTEP   p2, p4
+        ADC     r2, r2, r2
+        DSTEP   p2, p4
+        ADC     r2, r2, r2
+        POPP    p4
+        RET
+.else
 ; .Ludiv16: r2 = r2 / r3, r4 = r2 % r3. Uses r5.
 .Ludiv16:
         MOVI    r4, 0
@@ -18,6 +63,7 @@
         ADDI    r5, r5, -1
         BNE     .Lu16_loop
         RET
+.endif
 
         .globl  __udivhi3
 __udivhi3:

@@ -69,6 +69,39 @@ that is 2 mod 4 costs an extra cycle, because it spans two SRAM words.
   forms are the common special cases: two-operand ALU, small immediates,
   short displacements, SP-relative access, short branches.
 
+## Extension X (optional)
+
+Four arithmetic helpers, all 32-bit encodings in the `REG3` group, for the
+runtime library's multiply, divide, shift and soft-float routines. They
+are candidates, not committed hardware: the simulator runs them only with
+`fsim --ext` (otherwise they trap as illegal), and `fcc --ext[=parts]`
+builds a runtime that uses them. `benchmarks/run.py` measures each one
+(configurations `x-dstep`, `x-mulpu`, `x-fsh`, `x-clz`, `ext`).
+
+| Instruction | Operation | Flags | Used by |
+|---|---|---|---|
+| `DSTEP pD, pS` | one restoring-division step: t = pD*2 + C (33 bits); if t >= pS then pD = t - pS, C = 1, else pD = t, C = 0 | C | 32- and 64-bit divide, 16-bit divide, float divide |
+| `MULPU pD, rS, rT` | pD = rS * rT, the full unsigned 32-bit product | none | 32- and 64-bit multiply, float multiply |
+| `FSHR rD, pS, rT` | rD = low 16 bits of pS >> (rT & 15) (funnel shift) | none | variable 32-bit shifts, float add alignment |
+| `FSHL rD, pS, rT` | rD = high 16 bits of pS << (rT & 15) | none | variable 32-bit shifts |
+| `CLZ rD, rS` | rD = number of leading zero bits of rS (16 for 0) | none | int-to-float conversion |
+
+`DSTEP` is used with the dividend shifted through C: `ADD`/`ADC` move the
+next dividend bit into C, `DSTEP` consumes it and leaves the quotient bit
+in C, and the next `ADC` pair shifts that bit in while moving the next
+dividend bit out. A 32-bit quotient bit costs three instructions
+(`DSTEP`, `ADC`, `ADC`) instead of about thirteen.
+
+Rough extra cost on the XC3S200 (LUT4), design estimates rather than
+synthesis results:
+
+| Instruction | Extra LUTs (est.) | What the LUTs buy |
+|---|---|---|
+| `MULPU` | 15–30 | the multiplier already forms all 32 product bits; a path for the high half to the pair write port |
+| `CLZ` | 25–40 | a 16-bit priority encoder and its result mux |
+| `FSHR`/`FSHL` | 40–90 | widen the existing 16-bit barrel shifter to take its fill bits from the other half of a pair, and a pair operand into the shifter |
+| `DSTEP` | 70–120 | a 33-bit subtract and select on two pair operands (the pointer adder may be shareable), and the C update |
+
 ## Memory map
 
 | Range | Use |
@@ -83,4 +116,5 @@ that is 2 mod 4 costs an extra cycle, because it spans two SRAM words.
 - Interrupts and exceptions. `RETI` traps in the simulator.
 - System registers beyond SR0 = flags, SR1/SR2 = cycle counter, SR3 = instructions retired.
 - MMU/banking.
-- Division instructions. Division is in software for now.
+- Division instructions. Division is in software (extension X's `DSTEP`
+  is a candidate step instruction).

@@ -6,7 +6,7 @@ their output and record what they cost.
   run.py --doom                  add Doom (minutes per run)
   run.py --configs base,fuse-br  timing configurations (see CONFIGS)
   run.py --variants A            encoding variants
-  run.py --quick                 base configuration only
+  run.py --quick                 base configuration only (and ext)
   run.py --list                  list the benchmarks
 
 Every benchmark is also built for the development machine, and the
@@ -48,8 +48,27 @@ CONFIGS = {
     "nocache":  (["--icache", "0"], "no I-cache"),
     "ic512":    (["--icache", "512"], "512 B I-cache"),
     "ic4k":     (["--icache", "4096"], "4 KB I-cache"),
+    # extension X: the runtime library built to use DSTEP, MULPU, FSHR/FSHL
+    # and CLZ (fcc --ext), run with fsim --ext; otherwise like base. The
+    # third field is fcc's --ext argument.
+    "ext":      (["--ext"], "base + ISA extension X in the runtime (fcc --ext)", "all"),
+    "x-dstep":  (["--ext"], "base + DSTEP only", "dstep"),
+    "x-mulpu":  (["--ext"], "base + MULPU only", "mulpu"),
+    "x-fsh":    (["--ext"], "base + FSHR/FSHL only", "fsh"),
+    "x-clz":    (["--ext"], "base + CLZ only", "clz"),
+    "ext+dual+br": (["--ext", "--dual", "--fuse=cmpbr,alubr"], "extension X + dual issue + branch fusion", "all"),
 }
-DEFAULT_CONFIGS = ["base", "fuse-br", "bp1+br", "dual+br", "nocache", "ic512"]
+DEFAULT_CONFIGS = ["base", "fuse-br", "bp1+br", "dual+br", "nocache", "ic512",
+                   "ext", "x-dstep", "x-mulpu", "x-fsh", "x-clz", "ext+dual+br"]
+
+
+def is_ext(cfg):
+    """fcc's --ext argument for this configuration's binaries ("" = none)."""
+    return CONFIGS[cfg][2] if len(CONFIGS[cfg]) > 2 else ""
+
+
+def ext_tag(ext):
+    return "" if not ext else ".ext" if ext == "all" else ".x-" + ext.replace(",", "-")
 
 C = os.path.join(HERE, "c")
 
@@ -114,11 +133,13 @@ def fail(msg):
 
 # ---- building ----
 
-def fcc(b, variant, bits, out):
+def fcc(b, variant, bits, out, ext=False):
     os.makedirs(os.path.dirname(out), exist_ok=True)
     cmd = [PY, FCC, "-q", "-v", variant, "-O2", "--stats", "-o", out]
     if bits == 32:
         cmd.append("--int32")
+    if ext:
+        cmd.append(f"--ext={ext}")
     cmd += [f"-D{d}" for d in b.get("defs", [])] + [f"-I{i}" for i in b.get("incs", [])]
     cmd += [f"--cflag={f}" for f in b.get("cflags", []) + ["-w"]]
     cmd += b.get("fcc_extra", []) + b["srcs"]
@@ -223,22 +244,27 @@ def run_c(b, variants, configs):
         want = ""
     for bits in b["ints"]:
         for v in variants:
-            binp = os.path.join(BUILD, b["name"], f"{b['name']}.int{bits}.{v}.bin")
-            stats = fcc(b, v, bits, binp)
+            built = {}
             for cfg in configs:
+                ext = is_ext(cfg)
+                if ext not in built:
+                    binp = os.path.join(BUILD, b["name"], f"{b['name']}.int{bits}.{v}{ext_tag(ext)}.bin")
+                    built[ext] = binp, fcc(b, v, bits, binp, ext)
+                binp, stats = built[ext]
                 out, rc, st = fsim(binp, v, cfg)
                 rows.append(record(b, v, bits, cfg, out, rc, st, want, stats))
     return rows
 
 
-def basic_bins(variants):
+def basic_bins(variants, configs):
     bins = {}
     for v in variants:
-        p = os.path.join(BASIC, "build", f"basic-test.{v}.bin")
-        r = sh(["make", "-C", BASIC, f"build/basic-test.{v}.bin"])
-        if r.returncode:
-            raise RuntimeError(f"BASIC target build failed [{v}]:\n{r.stdout[-2000:]}{r.stderr[-2000:]}")
-        bins[v] = p
+        for ext in sorted({is_ext(c) for c in configs}):
+            name = f"build/basic-test{ext_tag(ext).replace('.', '-')}.{v}.bin"
+            r = sh(["make", "-C", BASIC, name] + ([f"EXT={ext}"] if ext else []))
+            if r.returncode:
+                raise RuntimeError(f"BASIC target build failed [{v}]:\n{r.stdout[-2000:]}{r.stderr[-2000:]}")
+            bins[v, ext] = os.path.join(BASIC, name)
     host = os.path.join(BASIC, "build", "basic-host")
     if sh(["make", "-C", BASIC, "build/basic-host"]).returncode:
         raise RuntimeError("BASIC host build failed")
@@ -252,12 +278,13 @@ def run_basic(b, variants, configs, bins, host):
     want = subprocess.run([host, "-q"], input=cmd, capture_output=True, text=True, env=env).stdout
     rows = []
     for v in variants:
-        stats = json.load(open(bins[v][:-4] + ".json")) if os.path.exists(bins[v][:-4] + ".json") else {}
         for cfg in configs:
+            src = bins[v, is_ext(cfg)]
+            stats = json.load(open(src[:-4] + ".json")) if os.path.exists(src[:-4] + ".json") else {}
             # a scratch copy of the binary per run so the run JSONs don't collide
-            binp = os.path.join(BUILD, b["name"], f"{b['name']}.{v}.bin")
+            binp = os.path.join(BUILD, b["name"], f"{b['name']}.{v}{ext_tag(is_ext(cfg))}.bin")
             os.makedirs(os.path.dirname(binp), exist_ok=True)
-            shutil.copyfile(bins[v], binp)
+            shutil.copyfile(src, binp)
             out, rc, st = fsim(binp, v, cfg, disk=disk, stdin=cmd)
             rows.append(record(b, v, 16, cfg, out, rc, st, want, stats))
     return rows
@@ -310,9 +337,13 @@ def run_doom(b, variants, configs):
              fcc_extra=["--base", "0x100000", "--stack", "0xF00000"])
     rows = []
     for v in variants:
-        binp = os.path.join(BUILD, "doom", f"doom.int32.{v}.bin")
-        stats = fcc(b, v, 32, binp)
+        built = {}
         for cfg in configs:
+            ext = is_ext(cfg)
+            if ext not in built:
+                p = os.path.join(BUILD, "doom", f"doom.int32.{v}{ext_tag(ext)}.bin")
+                built[ext] = p, fcc(b, v, 32, p, ext)
+            binp, stats = built[ext]
             dump = binp[:-4] + f".{cfg}.frame"
             out, rc, st = fsim_doom(binp, v, cfg, disk, dump)
             ok_text = re.search(r"timed (\d+) gametics", out)
@@ -442,7 +473,7 @@ def main():
         return
     if a.names:
         benches = [b for b in benches if any(b["name"] == n or b["name"].startswith(n) for n in a.names)]
-    configs = ["base"] if a.quick else a.configs.split(",")
+    configs = ["base", "ext"] if a.quick else a.configs.split(",")
     variants = a.variants.split(",")
     for c in configs:
         if c not in CONFIGS:
@@ -454,7 +485,7 @@ def main():
     t0 = time.time()
     bins = host = None
     if any(b["kind"] == "basic" for b in benches):
-        bins, host = basic_bins(variants)
+        bins, host = basic_bins(variants, configs)
     rows = []
     with cf.ThreadPoolExecutor(max_workers=a.j) as ex:
         futs = {}

@@ -1,4 +1,4 @@
-/* Float add, subtract and multiply, bit for bit: random operands over the
+/* Float add, subtract, multiply, divide and int->float, bit for bit: random operands over the
  * whole exponent range (zeros, subnormals, infinities and NaNs included),
  * near-equal pairs for cancellation, and rounding ties. NaNs hash as one
  * value (their payloads are not specified). */
@@ -27,7 +27,7 @@ static uint32_t rf(void)
 
 int main(void)
 {
-    uint32_t h[4] = {0};
+    uint32_t h[6] = {0};
     volatile float x, y;
     int i;
     for (i = 0; i < 6000; i++) {
@@ -42,7 +42,10 @@ int main(void)
         h[1] = mix(h[1], canon(x - y));
         h[2] = mix(h[2], canon(x * y));
         h[3] = mix(h[3], canon(y * x) ^ canon(y - x));
+        h[4] = mix(h[4], canon(x / y));
+        h[5] = mix(h[5], bits((float)(int32_t)a) ^ bits((float)(a >> (rnd() % 32))));
     }
     PH("add", h[0]); PH("sub", h[1]); PH("mul", h[2]); PH("mixed", h[3]);
+    PH("div", h[4]); PH("i2f", h[5]);
     return 0;
 }

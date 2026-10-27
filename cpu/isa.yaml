@@ -63,6 +63,10 @@ classes:
   sys:   {opnds: [imm],        reads: [],       writes: []}
   none:  {opnds: [],           reads: [],       writes: []}
   mfsr:  {opnds: [rd, sr],     reads: [],       writes: [rd]}
+  # extension X (see ops below)
+  mulp:  {opnds: [pd, rs, rt], reads: [rs, rt], writes: [pd]}
+  fsh:   {opnds: [rd, ps, rt], reads: [ps, rt], writes: [rd]}
+  dstep: {opnds: [pd, ps],     reads: [pd, ps], writes: [pd]}
   mtsr:  {opnds: [sr, rs],     reads: [rs],     writes: []}
 
 # Semantics: C statements executed by the simulator. Helper macros are in
@@ -129,6 +133,23 @@ ops:
   NOP:   {cls: none, sem: ";"}
   MFSR:  {cls: mfsr, sem: "W(rd, SRR(sr));"}
   MTSR:  {cls: mtsr, sem: "SRW(sr, R(rs));"}
+
+  # Extension X: optional arithmetic helpers, all in the 32-bit REG3 space.
+  # The simulator runs them only with --ext; fcc --ext builds a runtime
+  # that uses them. None of them sets flags except DSTEP, which uses C.
+  #   MULPU pd, rs, rt   pd = rs * rt, the full 32-bit unsigned product
+  #   FSHR rd, ps, rt    rd = low 16 bits of ps >> (rt & 15)    (funnel shift)
+  #   FSHL rd, ps, rt    rd = high 16 bits of ps << (rt & 15)
+  #   CLZ  rd, rs        rd = leading zero bits of rs (16 for 0)
+  #   DSTEP pd, ps       one restoring-division step: pd = pd*2 + C; if that
+  #                      (33 bits) >= ps, subtract ps and set C, else clear C.
+  #                      With the dividend shifted through C by ADC, the
+  #                      quotient bits come back through C.
+  MULPU: {cls: mulp, ext: X, sem: "WP32(pd, (uint32_t)R(rs) * R(rt));"}
+  FSHR:  {cls: fsh,  ext: X, sem: "W(rd, P32(ps) >> (R(rt) & 15));"}
+  FSHL:  {cls: fsh,  ext: X, sem: "W(rd, (P32(ps) << (R(rt) & 15)) >> 16);"}
+  CLZ:   {cls: un,   ext: X, sem: "{ uint16_t v_ = R(rs); int n_ = 16; while (v_) { v_ >>= 1; n_--; } W(rd, n_); }"}
+  DSTEP: {cls: dstep, ext: X, sem: "{ uint64_t r_ = (uint64_t)P32(pd) << 1 | CF; uint32_t d_ = P32(ps); CF = r_ >= d_; if (CF) r_ -= d_; WP32(pd, (uint32_t)r_); }"}
 
 # Addressing modes for "mem" operands, and the operands each one needs.
 modes:
@@ -237,8 +258,15 @@ groups:
       f: {d: pd/2, s: ps/2, t: rx}
       fo: {addpp: {t: pt/2}}
     - pat: "{P} 011 dddd ssss  tttt ffff 0000 0000"
-      opsel: {f: [MULH, MULHU]}
+      opsel: {f: [MULH, MULHU, MULPU]}
       f: {d: rd, s: rs, t: rt}
+      fo: {mulpu: {d: pd/2}}
+    # extension X
+    - pat: "{P} 100 dddd ssss  tttt ffff 0000 0000"
+      opsel: {f: [FSHR, FSHL]}
+      f: {d: rd, s: ps/2, t: rt}
+    - {pat: "{P} 101 dddd ssss  0000 0000 0000 0000", op: CLZ, f: {d: rd, s: rs}}
+    - {pat: "{P} 101 dddd ssss  0000 0001 0000 0000", op: DSTEP, f: {d: pd/2, s: ps/2}}
 
 variants:
   A:

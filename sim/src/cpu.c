@@ -407,6 +407,7 @@ static int writes_flags(const dinst_t *d)
     case OP_ADDI: case OP_CMPI:
     case OP_AND: case OP_OR: case OP_XOR: case OP_NOT: case OP_ANDI: case OP_ORI: case OP_XORI:
     case OP_SHL: case OP_SHR: case OP_SAR: case OP_SHLI: case OP_SHRI: case OP_SARI:
+    case OP_DSTEP:
         return 1;
     case OP_MTSR:
         return d->sr == 0;
@@ -417,7 +418,7 @@ static int writes_flags(const dinst_t *d)
 static int reads_flags(const dinst_t *d)
 {
     switch (d->op) {
-    case OP_ADC: case OP_SBC: case OP_CPC: return 1;
+    case OP_ADC: case OP_SBC: case OP_CPC: case OP_DSTEP: return 1;
     case OP_B: return d->cc != 14;
     case OP_MFSR: return d->sr == 0;
     }
@@ -662,6 +663,10 @@ int cpu_step(cpu_t *c)
     const dinst_t *d = predecode(c, pc);
     if (!d)
         return 0;
+    if ((op_info[d->op].flags & F_EXT) && !c->cfg.ext) {
+        cpu_trap(c, -2);    /* extension X needs --ext */
+        return 0;
+    }
     uint64_t cyc0 = c->st.cycles;
     timing_fetch(c, pc, d->len);
     c->npc = (pc + d->len) & 0xFFFFFF;
@@ -792,6 +797,9 @@ void disasm(const dinst_t *d, uint32_t pc, char *b, size_t n)
     case CLS_SYS: snprintf(b, n, "%s %d", oi->name, d->imm); break;
     case CLS_MFSR: snprintf(b, n, "%s r%d, sr%d", oi->name, d->rd, d->sr); break;
     case CLS_MTSR: snprintf(b, n, "%s sr%d, r%d", oi->name, d->sr, d->rs); break;
+    case CLS_MULP: snprintf(b, n, "%s p%d, r%d, r%d", oi->name, d->pd, d->rs, d->rt); break;
+    case CLS_FSH: snprintf(b, n, "%s r%d, p%d, r%d", oi->name, d->rd, d->ps, d->rt); break;
+    case CLS_DSTEP: snprintf(b, n, "%s p%d, p%d", oi->name, d->pd, d->ps); break;
     default: snprintf(b, n, "%s", oi->name); break;
     }
 }

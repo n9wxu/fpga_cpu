@@ -24,6 +24,7 @@ Syntax summary (see sim/README.md):
   directives: .org .equ .set .byte .word .short .long .ascii .asciz .string
               .align .p2align .balign .space .zero .include .globl .comm
               .text .data .bss .section
+              .ifdef NAME / .ifndef NAME / .else / .endif   (asm.py -D NAME)
 """
 import ast
 import json
@@ -543,18 +544,43 @@ class Assembler:
         self.here = pc
         return changed
 
+    defines = set()  # names for .ifdef / .ifndef (asm.py -D NAME)
+
     @staticmethod
     def preprocess(path, depth=0):
-        """Inline .include "file" (relative to the including file). Returns (lineno, text) pairs."""
+        """Inline .include "file" (relative to the including file) and apply
+        .ifdef NAME / .ifndef NAME / .else / .endif. Returns (lineno, text) pairs."""
         if depth > 8:
             raise AsmError(".include nested too deeply")
         out = []
+        stack = []  # (taking lines, any enclosing level not taking)
         for n, line in enumerate(open(path).read().splitlines(), 1):
+            m = re.match(r"\s*\.(ifdef|ifndef|else|endif)\b\s*([A-Za-z_]\w*)?", line)
+            if m:
+                d, name = m.group(1), m.group(2)
+                skipping = bool(stack) and not stack[-1][0]
+                if d in ("ifdef", "ifndef"):
+                    if not name:
+                        raise AsmError(f"{path}:{n}: .{d} needs a name")
+                    want = (name in Assembler.defines) == (d == "ifdef")
+                    stack.append((want and not skipping, skipping))
+                elif not stack:
+                    raise AsmError(f"{path}:{n}: .{d} without .ifdef")
+                elif d == "else":
+                    take, outer = stack.pop()
+                    stack.append((not take and not outer, outer))
+                else:
+                    stack.pop()
+                continue
+            if stack and not stack[-1][0]:
+                continue
             m = re.match(r'\s*\.include\s+"([^"]+)"', line)
             if m:
                 out += Assembler.preprocess(os.path.join(os.path.dirname(path), m.group(1)), depth + 1)
             else:
                 out.append((n, line))
+        if stack:
+            raise AsmError(f"{path}: .ifdef without .endif")
         return out
 
     def scan(self, path):
@@ -658,7 +684,10 @@ def main(argv):
     ap.add_argument("--base", type=lambda s: int(s, 0), default=0x1000)
     ap.add_argument("--lib", nargs="+", default=[], help="library files, linked only if needed")
     ap.add_argument("-q", "--quiet", action="store_true")
+    ap.add_argument("-D", action="append", default=[], dest="defines",
+                    help="define NAME for .ifdef / .ifndef")
     args = ap.parse_args(argv)
+    Assembler.defines = set(args.defines)
     isa = Isa()
     a = Assembler(isa, args.variant)
     try:

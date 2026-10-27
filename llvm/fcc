@@ -2,12 +2,15 @@
 """fcc: C compiler driver for fpga_cpu.
 
 usage: fcc [-v A|B] [-O<n>] [-S] [-I dir] [-D name[=val]] [-o out.bin]
-           [--int32] [--base ADDR] [--stack ADDR] [--cflag FLAG ...]
+           [--int32] [--ext[=LIST]] [--base ADDR] [--stack ADDR] [--cflag FLAG ...]
            [--lst] [--stats] [--keep] [--] files.c|files.s ...
 
 --int32 compiles with a 32-bit int (clang's int32 target feature)
 against a runtime built the same way, for C written for 32-bit
-machines. --cflag passes a flag to clang for your files (for example
+machines. --ext links runtime routines that use the optional extension X
+instructions (DSTEP, MULPU, FSHR/FSHL, CLZ; run with fsim --ext);
+--ext=dstep,mulpu,fsh,clz picks some of them.
+--cflag passes a flag to clang for your files (for example
 -std=gnu89 for K&R C). --base sets the load address (default 0x1000) and --stack the
 initial stack pointer (default 0x053400); the heap runs from the end of
 BSS to 16 KB below the stack. Programs placed in expansion RAM (base
@@ -45,14 +48,20 @@ CFLAGS = ["-funsigned-char", "-ffreestanding", "-nostdlibinc",
 # compiler-rt builtins: single-precision soft-float and 64-bit integer helpers
 # compiler-rt builtins compiled from C. 64-bit multiply and divide are
 # hand-written in runtime/asm (muldi3.s, divdi3.s) instead, and so are the
-# fast paths of float add, subtract and multiply (addsf3.s, mulsf3.s); the
+# fast paths of float add, subtract, multiply and divide (addsf3.s, mulsf3.s,
+# divsf3.s) and __clzsi2; the
 # C versions stay, renamed, for the cases those hand off (CRT_RENAME).
 CRT_FILES = ["addsf3", "mulsf3", "divsf3", "comparesf2", "negsf2",
              "fixsfsi", "fixunssfsi", "floatsisf", "floatunsisf", "fixsfdi", "fixunssfdi",
              "floatdisf", "floatundisf", "udivmoddi4", "ashldi3", "lshrdi3", "ashrdi3", "cmpdi2", "ucmpdi2", "negdi2",
-             "popcountsi2", "clzsi2", "ctzsi2", "fp_mode"]
+             "popcountsi2", "ctzsi2", "fp_mode"]
 
-CRT_RENAME = {"addsf3": ["-D__addsf3=__fcpu_addsf3_c"], "mulsf3": ["-D__mulsf3=__fcpu_mulsf3_c"]}
+# extension X instructions the runtime can use: fcc --ext[=dstep,...]
+# defines FCPU_X_<NAME> for the assembler (.ifdef in runtime/asm)
+EXT_PARTS = ["dstep", "mulpu", "fsh", "clz"]
+
+CRT_RENAME = {"addsf3": ["-D__addsf3=__fcpu_addsf3_c"], "mulsf3": ["-D__mulsf3=__fcpu_mulsf3_c"],
+              "divsf3": ["-D__divsf3=__fcpu_divsf3_c"]}
 
 
 def run(cmd):
@@ -120,6 +129,9 @@ def main(argv):
     ap.add_argument("--keep", action="store_true", help="keep the generated .s files next to the output")
     ap.add_argument("-q", "--quiet", action="store_true")
     ap.add_argument("--int32", action="store_true", help="32-bit int")
+    ap.add_argument("--ext", nargs="?", const="all", default=None,
+                    help="runtime uses ISA extension X: all of it, or a list of "
+                         "dstep,mulpu,fsh,clz (run with fsim --ext)")
     ap.add_argument("--cflag", action="append", default=[], help="extra clang flag for your files")
     ap.add_argument("--base", default="0x1000", help="load address")
     ap.add_argument("--stack", default="0x053400", help="initial stack pointer")
@@ -161,6 +173,12 @@ def main(argv):
         cmd += ["--stats", stem + ".json"]
     if args.quiet:
         cmd += ["-q"]
+    if args.ext:
+        parts = EXT_PARTS if args.ext == "all" else args.ext.lower().split(",")
+        for x in parts:
+            if x not in EXT_PARTS:
+                sys.exit(f"fcc: --ext: unknown part {x!r} (have {', '.join(EXT_PARTS)})")
+            cmd += ["-D", "FCPU_X_" + x.upper()]
     run(cmd)
 
 

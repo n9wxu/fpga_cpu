@@ -1,5 +1,50 @@
 ; 32-bit shifts by a variable amount: value p1 (r3:r2), count r4.
         .text
+.ifdef FCPU_X_FSH
+; Extension X: a funnel shift (FSHL/FSHR) moves the bits that cross between
+; the halves in one instruction.
+        .globl  __ashlsi3
+__ashlsi3:
+        ANDI    r4, r4, 31
+        CMPI    r4, 16
+        BHS     .Lshl_big
+        FSHL    r3, p1, r4
+        SHL     r2, r2, r4
+        RET
+.Lshl_big:
+        ADDI    r4, r4, -16
+        SHL     r3, r2, r4
+        MOVI    r2, 0
+        RET
+
+        .globl  __lshrsi3
+__lshrsi3:
+        ANDI    r4, r4, 31
+        CMPI    r4, 16
+        BHS     .Lshr_big
+        FSHR    r2, p1, r4
+        SHR     r3, r3, r4
+        RET
+.Lshr_big:
+        ADDI    r4, r4, -16
+        SHR     r2, r3, r4
+        MOVI    r3, 0
+        RET
+
+        .globl  __ashrsi3
+__ashrsi3:
+        ANDI    r4, r4, 31
+        CMPI    r4, 16
+        BHS     .Lsar_big
+        FSHR    r2, p1, r4
+        SAR     r3, r3, r4
+        RET
+.Lsar_big:
+        ADDI    r4, r4, -16
+        SAR     r2, r3, r4
+        SARI    r3, r3, 15
+        RET
+.else
         .globl  __ashlsi3
 __ashlsi3:
         ANDI    r4, r4, 31
@@ -62,3 +107,4 @@ __ashrsi3:
         SAR     r2, r3, r4
         SARI    r3, r3, 15
         RET
+.endif

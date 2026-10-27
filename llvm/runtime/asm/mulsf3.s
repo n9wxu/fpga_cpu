@@ -37,8 +37,12 @@ __mulsf3:
         ORI     r5, r5, 0x80
         PUSHP   p4
         ; P = r8:r1:r0 (48 bits) = ml*nl + (mh*nl + nh*ml) << 16 + mh*nh << 32
+.ifdef FCPU_X_MULPU
+        MULPU   p0, r2, r4
+.else
         MUL     r0, r2, r4
         MULHU   r1, r2, r4
+.endif
         MUL     r8, r3, r5              ; mh*nh < 2^16
         MUL     r9, r3, r4
         ADD     r1, r1, r9

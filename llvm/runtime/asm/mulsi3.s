@@ -3,6 +3,14 @@
         .text
         .globl  __mulsi3
 __mulsi3:
+.ifdef FCPU_X_MULPU
+        MUL     r6, r2, r5              ; alo * bhi (low half)
+        MUL     r7, r3, r4              ; ahi * blo (low half)
+        ADD     r6, r6, r7
+        MULPU   p1, r2, r4              ; alo * blo, both halves
+        ADD     r3, r3, r6
+        RET
+.else
         MUL     r6, r2, r5              ; alo * bhi (low half)
         MUL     r7, r3, r4              ; ahi * blo (low half)
         ADD     r6, r6, r7
@@ -10,3 +18,4 @@ __mulsi3:
         MUL     r2, r2, r4              ; low half of alo * blo
         ADD     r3, r7, r6
         RET
+.endif

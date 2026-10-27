@@ -55,6 +55,7 @@ front ends take the same options (`fsim -h`):
 | `--true-color` | show hi-color palette colors instead of the 3-bit dither |
 | `--trace`, `--json FILE`, `-q` | headless only: instruction trace, statistics, no summary |
 | `--dump A:N:FILE` | headless only: write N bytes of memory from A at exit |
+| `--ext` | allow the optional extension X instructions (`DSTEP`, `MULPU`, `FSHR`, `FSHL`, `CLZ`; [cpu/isa.md](../cpu/isa.md)); without it they trap as illegal |
 | `--profile FILE` | headless only: instructions and cycles per address; `tools/profile.py prog.sym FILE` totals them by function |
 
 The I/O registers and the memory layout are in [docs/io.md](../docs/io.md).
@@ -99,7 +100,7 @@ checks breakpoints, Step Over/Out and key translation on `demo/video.s`.
 
 - Registers are `r0`–`r15`. Pairs are `p0`–`p7`, with `sp` = `p7` and `lr` = `p6`.
 - Pseudo-instructions: `LI LA CALL RET PUSH POP PUSHP POPP INC DEC CLR TST`.
-- Directives: `.org .equ .byte .word .long .ascii .asciz .align .space .include`.
+- Directives: `.org .equ .byte .word .long .ascii .asciz .align .space .include`, and `.ifdef NAME` / `.ifndef NAME` / `.else` / `.endif` with names from `asm.py -D NAME`.
 
 ## Timing model
 

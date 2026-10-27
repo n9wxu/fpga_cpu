@@ -35,6 +35,7 @@ typedef struct {
     int io_pen;            /* extra cycles per I/O access */
     uint32_t vperiod, vburst; /* video steals vburst port cycles every vperiod */
     int dual;              /* in-order dual issue: DUAL_OFF, DUAL_BANKED or DUAL_PORTS */
+    int ext;               /* extension X instructions allowed (isa.yaml: DSTEP, MULPU, FSHR/FSHL, CLZ) */
     uint32_t xram_mb;      /* simulator-only RAM after the SRAM (100000-), same timing; 0 = none */
 } tcfg_t;
 

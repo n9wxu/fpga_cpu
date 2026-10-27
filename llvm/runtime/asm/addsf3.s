@@ -73,11 +73,15 @@ __addsf3:
         BEQ     .Laligned
         MOVI    r9, 16
         SUB     r9, r9, r0              ; 16 - d
-        SHL     r1, r4, r9
+        SHL     r1, r4, r9              ; the bits shifted out
         OR      r7, r7, r1
+.ifdef FCPU_X_FSH
+        FSHR    r4, p2, r0
+.else
         SHR     r4, r4, r0
         SHL     r1, r5, r9
         OR      r4, r4, r1
+.endif
         SHR     r5, r5, r0
 .Laligned:
         CMPI    r7, 0

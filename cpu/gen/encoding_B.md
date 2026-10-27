@@ -9,9 +9,9 @@ MSB=0 means 32-bit (half the opcode map); direct [abs24] loads and stores.
 | | parcels | share | used |
 |---|---|---|---|
 | 16-bit | 32768 | 50.0% | 31059 (94.8%) |
-| 32-bit prefix | 32768 | 50.0% | 22816 (69.6%) |
+| 32-bit prefix | 32768 | 50.0% | 23328 (71.2%) |
 
-151 encodings: 44 16-bit, 107 32-bit.
+156 encodings: 44 16-bit, 112 32-bit.
 
 ## MISC
 
@@ -204,6 +204,11 @@ MSB=0 means 32-bit (half the opcode map); direct [abs24] loads and stores.
 | `ADDPP/32` | 32 | `0111 0010 dddd ssss tttt 0010 0000 0000` | `ADDPP pd, ps, pt` |
 | `MULH/32` | 32 | `0111 0011 dddd ssss tttt 0000 0000 0000` | `MULH rd, rs, rt` |
 | `MULHU/32` | 32 | `0111 0011 dddd ssss tttt 0001 0000 0000` | `MULHU rd, rs, rt` |
+| `MULPU/32` | 32 | `0111 0011 dddd ssss tttt 0010 0000 0000` | `MULPU pd, rs, rt` |
+| `FSHR/32` | 32 | `0111 0100 dddd ssss tttt 0000 0000 0000` | `FSHR rd, ps, rt` |
+| `FSHL/32` | 32 | `0111 0100 dddd ssss tttt 0001 0000 0000` | `FSHL rd, ps, rt` |
+| `CLZ/32` | 32 | `0111 0101 dddd ssss 0000 0000 0000 0000` | `CLZ rd, rs` |
+| `DSTEP/32` | 32 | `0111 0101 dddd ssss 0000 0001 0000 0000` | `DSTEP pd, ps` |
 
 ## ALUI
 
