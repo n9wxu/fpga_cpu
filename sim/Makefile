@@ -9,7 +9,7 @@ ROOT    := ..
 VENV    := $(ROOT)/.venv
 PY      := $(VENV)/bin/python
 CC      ?= cc
-CFLAGS  ?= -O2 -g -std=c11 -Wall -Wextra -Wno-unused-parameter
+CFLAGS  ?= -O2 -g -std=gnu11 -Wall -Wextra -Wno-unused-parameter
 BUILD   := build
 
 ISA     := $(ROOT)/cpu/isa.yaml

@@ -14,7 +14,10 @@ fi
 ln -sfn ../../../../target/FCPU llvm-project/llvm/lib/Target/FCPU
 ln -sfn ../../../../../clang/FCPU.h llvm-project/clang/lib/Basic/Targets/FCPU.h
 ln -sfn ../../../../../clang/FCPU.cpp llvm-project/clang/lib/Basic/Targets/FCPU.cpp
-cmake -G Ninja -S llvm-project/llvm -B build -DCMAKE_BUILD_TYPE=Release \
+# ccache, when installed, makes rebuilds after a backend change quick (used by CI)
+CCACHE=""
+command -v ccache >/dev/null && CCACHE="-DLLVM_CCACHE_BUILD=ON"
+cmake -G Ninja -S llvm-project/llvm -B build -DCMAKE_BUILD_TYPE=Release $CCACHE \
   -DLLVM_ENABLE_ASSERTIONS=ON -DLLVM_ENABLE_PROJECTS=clang \
   -DLLVM_TARGETS_TO_BUILD="" -DLLVM_EXPERIMENTAL_TARGETS_TO_BUILD=FCPU \
   -DBUILD_SHARED_LIBS=ON -DLLVM_OPTIMIZED_TABLEGEN=ON -DLLVM_INCLUDE_TESTS=OFF \

@@ -8,12 +8,14 @@ fast as the browser allows.
 ```sh
 make -C web          # needs emcc; builds BASIC first if needed
 make -C web serve    # http://localhost:8000
-make -C web deploy   # copy to the retro container (DEPLOY=user@host:dir to change)
+make -C web deploy DEPLOY=user@host:/srv/www/basic/   # rsync to a web server
 ```
 
-The deployed copy is at https://retro.julicher.net/basic/. Serve it over
-HTTPS (or from localhost): Safari runs WebAssembly from plain `http://`
-sites about 16 times slower, without compiling it.
+CI publishes every push to `main` to GitHub Pages:
+https://n9wxu.github.io/fpga_cpu/
+
+Serve it over HTTPS (or from localhost). Safari runs WebAssembly from
+plain `http://` sites about 16 times slower, without compiling it.
 
 The output is `web/build/`: `index.html`, `fsim.js`, `fsim.wasm`, and
 `fsim.data` (both BASIC images and the examples), about 280 KB in all.

@@ -1,0 +1,136 @@
+# Build and test everything; publish the WebAssembly simulator to GitHub Pages.
+#
+#   sim        ISA self-test, benchmarks on both encodings, device tests
+#   basic      BASIC on the host: tests and the extra-warnings build
+#   toolchain  LLVM with the FCPU backend, compiler tests, BASIC in the
+#              simulator, and the web build (uploaded for Pages on main)
+#   pages      deploy the web build (pushes to main only)
+#
+# The LLVM build (clang + llc, FCPU only) is cached on a hash of everything
+# that goes into it. A cache miss rebuilds with ccache, so a backend change
+# only recompiles what changed.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  EMSDK_VERSION: 5.0.3
+
+jobs:
+  sim:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build
+        run: make -C sim
+      - name: Test
+        run: make -C sim test
+
+  basic:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Test on the host
+        run: make -C basic test
+      - name: Extra-warnings build
+        run: make -C basic check
+
+  toolchain:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install build tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build ccache
+
+      - name: Restore the LLVM build
+        id: llvm
+        uses: actions/cache@v6
+        with:
+          path: llvm/build
+          key: llvm-${{ runner.os }}-${{ hashFiles('llvm/setup.sh', 'llvm/patches/**', 'llvm/target/**', 'llvm/clang/**') }}
+
+      - name: ccache for LLVM
+        if: steps.llvm.outputs.cache-hit != 'true'
+        uses: hendrikmuhs/ccache-action@v1.2.24
+        with:
+          key: llvm-${{ runner.os }}
+          max-size: 2G
+
+      - name: Build LLVM (cache miss)
+        if: steps.llvm.outputs.cache-hit != 'true'
+        run: llvm/setup.sh
+
+      # With a cached build, only compiler-rt's builtins are needed from the
+      # LLVM sources (llvm/fcc compiles them into the runtime library).
+      - name: Fetch compiler-rt builtins (cache hit)
+        if: steps.llvm.outputs.cache-hit == 'true'
+        run: |
+          git clone --depth 1 --branch llvmorg-19.1.7 --filter=blob:none --sparse \
+            https://github.com/llvm/llvm-project.git llvm/llvm-project
+          git -C llvm/llvm-project sparse-checkout set compiler-rt/lib/builtins
+
+      - name: Build the simulator
+        run: make -C sim
+
+      - name: Compiler tests (host vs both encodings)
+        run: .venv/bin/python llvm/runtime/tests/run.py
+
+      - name: BASIC in the simulator
+        run: make -C basic test-target
+
+      - name: Restore emsdk
+        id: emsdk
+        uses: actions/cache@v6
+        with:
+          path: emsdk
+          key: emsdk-${{ runner.os }}-${{ env.EMSDK_VERSION }}
+
+      - name: Install emsdk
+        if: steps.emsdk.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git
+          emsdk/emsdk install ${EMSDK_VERSION}
+
+      - name: Build the web simulator
+        run: |
+          emsdk/emsdk activate ${EMSDK_VERSION} >/dev/null
+          source emsdk/emsdk_env.sh >/dev/null
+          make -C basic target
+          make -C web
+
+      - name: Upload the site
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: web/build
+
+  pages:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [sim, basic, toolchain]
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v5
