@@ -662,6 +662,7 @@ int cpu_step(cpu_t *c)
     const dinst_t *d = predecode(c, pc);
     if (!d)
         return 0;
+    uint64_t cyc0 = c->st.cycles;
     timing_fetch(c, pc, d->len);
     c->npc = (pc + d->len) & 0xFFFFFF;
     c->taken = 0;
@@ -686,6 +687,11 @@ int cpu_step(cpu_t *c)
         if (c->taken) s->taken++;
     }
     timing_exec(c, d, pc);
+    if (c->prof) {
+        uint32_t *e = &c->prof[(pc >> 1) * 2];
+        e[0]++;
+        e[1] += (uint32_t)(c->st.cycles - cyc0);
+    }
     c->pc = c->npc;
     return !c->halted;
 }

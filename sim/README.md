@@ -23,6 +23,7 @@ The Makefile creates `.venv/` (PyYAML) on first use. The GUI needs SDL2
 | `tools/measure.py` | Runs every benchmark × variant × timing configuration and checks each output |
 | `tools/bench_ref.py` | Python reference results for the benchmarks (`--update` rewrites the `; expect:` lines) |
 | `tools/devtest.py` | Device test: runs `demo/devtest.s` headless and checks the keyboard queue, file service and board I/O |
+| `tools/profile.py` | Flat profile by function from `fsim --profile` output and a symbol file |
 | `tools/mkfont.py` | Builds the 8×14 character ROM (`assets/font8x14.mem` for the FPGA, `src/font8x14.c` for the simulator) from the Terminus BDF |
 | `src/cpu.c` | CPU core: decode, memory map, timing model, `cpu_step`/`cpu_run` |
 | `src/dev.c` | I/O devices from [docs/io.md](../docs/io.md): console, frame timing, keyboard, video registers, sound, file service, board I/O |
@@ -54,6 +55,7 @@ front ends take the same options (`fsim -h`):
 | `--true-color` | show hi-color palette colors instead of the 3-bit dither |
 | `--trace`, `--json FILE`, `-q` | headless only: instruction trace, statistics, no summary |
 | `--dump A:N:FILE` | headless only: write N bytes of memory from A at exit |
+| `--profile FILE` | headless only: instructions and cycles per address; `tools/profile.py prog.sym FILE` totals them by function |
 
 The I/O registers and the memory layout are in [docs/io.md](../docs/io.md).
 Headless, `CON_OUT` goes to stdout and `CON_IN` reads stdin.

@@ -85,6 +85,7 @@ typedef struct cpu {
     uint32_t ram_size;     /* SRAM plus expansion RAM, contiguous from 0 */
     iodev_t dev;
     int trace;
+    uint32_t *prof;        /* --profile: [pc/2] -> {instructions, cycles}, or NULL */
     /* per-instruction scratch */
     int dwords, io_acc, pair_split;
     uint32_t ea;

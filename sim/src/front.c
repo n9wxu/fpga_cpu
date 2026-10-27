@@ -40,6 +40,7 @@ void opts_usage(int gui)
                 "  --json FILE       write statistics as JSON\n"
                 "  --dump A:N:FILE   write N bytes of memory from address A to FILE at exit\n"
                 "  --trace           trace every instruction to stderr\n"
+                "  --profile FILE    write instructions and cycles per address (sim/tools/profile.py)\n"
                 "  -q                no summary on stderr\n");
     exit(2);
 }
@@ -106,6 +107,7 @@ int opts_parse(opts_t *o, int argc, char **argv, int gui)
         else if (!gui && !strcmp(a, "--json") && more) o->json = argv[++i];
         else if (!gui && !strcmp(a, "--trace")) o->trace = 1;
         else if (!gui && !strcmp(a, "--dump") && more) o->dump = argv[++i];
+        else if (!gui && !strcmp(a, "--profile") && more) o->profile = argv[++i];
         else if (!gui && !strcmp(a, "-q")) o->quiet = 1;
         else if (gui && !strcmp(a, "--paused")) o->paused = 1;
         else if (gui && !strcmp(a, "--max-speed")) o->max_speed = 1;

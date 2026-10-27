@@ -99,6 +99,10 @@ int main(int argc, char **argv)
     static cpu_t c;
     if (setup_cpu(&c, &o))
         return 2;
+    if (o.profile && !(c.prof = calloc((size_t)1 << 24, sizeof *c.prof))) {
+        fprintf(stderr, "--profile: out of memory\n");
+        return 2;
+    }
     fflush(stdout);
     cpu_run(&c, o.max_cycles);
     fflush(stdout);
@@ -122,6 +126,19 @@ int main(int argc, char **argv)
             fwrite(c.sram + a, 1, a + n > c.ram_size ? c.ram_size - a : n, f);
             fclose(f);
         }
+    }
+    if (o.profile) {
+        FILE *f = fopen(o.profile, "w");
+        if (!f) {
+            perror(o.profile);
+        } else {
+            fprintf(f, "# address instructions cycles\n");
+            for (uint32_t i = 0; i < (1u << 23); i++)
+                if (c.prof[i * 2])
+                    fprintf(f, "%06x %u %u\n", i * 2, c.prof[i * 2], c.prof[i * 2 + 1]);
+            fclose(f);
+        }
+        free(c.prof);
     }
     int rc = c.exit_code;
     cpu_free(&c);
