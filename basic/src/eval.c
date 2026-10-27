@@ -681,6 +681,9 @@ static void e_primary(void)
         push_int(con_col());
         return;
     case KW_TIME: push_num((float)hal_frame()); return;
+    case KW_FRAMES:
+        push_int(sheet_frames(to_i16(paren_num())));
+        return;
     case KW_POINT: {
         int16_t x, y;
         need('(');

@@ -35,10 +35,11 @@
 #define VC_SPR    0x08
 #define VC_SPRBUF 0x10
 #define VC_CURSOR 0x20
+#define VC_SPR8   0x40
 
-#define SPR_ADDR  0x080000UL
-#define SPR_SIZE  115200UL
-#define BMP_ADDR  0x0C0000UL
+#define SPR_ADDR  0x053400UL /* two 8 bpp buffers */
+#define SPR_SIZE  230400UL
+#define BMP_ADDR  0x0C3C00UL
 #define TEXT_ADDR 0x0FC000UL
 
 #define SCR_W 640
@@ -94,15 +95,16 @@ typedef union {
     K(LOCATE, "LOCATE") K(COLOR, "COLOR") K(TEXT, "TEXT") K(BACKDROP, "BACKDROP") K(GR, "GR")      \
     K(HGR, "HGR") K(GCLS, "GCLS") K(PEN, "PEN") K(PLOT, "PLOT") K(LINE, "LINE") K(BOX, "BOX")      \
     K(CIRCLE, "CIRCLE") K(PALETTE, "PALETTE") K(SPRITE, "SPRITE") K(VSYNC, "VSYNC")                \
+    K(PICTURE, "PICTURE") K(SHEET, "SHEET")                                                        \
     K(SOUND, "SOUND") K(WAVE, "WAVE") K(BEEP, "BEEP") K(PAUSE, "PAUSE") K(SCROLL, "SCROLL")        \
     K(ELSE, "ELSE") K(THEN, "THEN") K(TO, "TO") K(STEP, "STEP") K(AND, "AND") K(OR, "OR")          \
-    K(NOT, "NOT") K(MOD, "MOD") K(AT, "AT") K(OFF, "OFF") K(DEFINE, "DEFINE")                      \
+    K(NOT, "NOT") K(MOD, "MOD") K(AT, "AT") K(OFF, "OFF") K(DEFINE, "DEFINE") K(FRAME, "FRAME")    \
     K(ABS, "ABS") K(INT, "INT") K(SGN, "SGN") K(SQR, "SQR") K(SIN, "SIN") K(COS, "COS")            \
     K(TAN, "TAN") K(ATN, "ATN") K(EXP, "EXP") K(LOG, "LOG") K(RND, "RND") K(LEN, "LEN")            \
     K(LEFTS, "LEFT$") K(RIGHTS, "RIGHT$") K(MIDS, "MID$") K(CHRS, "CHR$") K(ASC, "ASC")            \
     K(STRS, "STR$") K(VAL, "VAL") K(HEXS, "HEX$") K(INSTR, "INSTR") K(FRE, "FRE")                  \
     K(PEEK, "PEEK") K(DEEK, "DEEK") K(POS, "POS") K(TIME, "TIME") K(INKEYS, "INKEY$")              \
-    K(POINT, "POINT") K(TAB, "TAB") K(SPC, "SPC") K(FN, "FN")
+    K(POINT, "POINT") K(FRAMES, "FRAMES") K(TAB, "TAB") K(SPC, "SPC") K(FN, "FN")
 
 enum {
     KW_FIRST_ = 0x7F,
@@ -119,7 +121,7 @@ enum {
 /* ---- errors ---- */
 enum {
     E_SN, E_RG, E_OD, E_FC, E_OV, E_OM, E_UL, E_BS, E_DD, E_DZ, E_ID, E_TM, E_LS, E_ST,
-    E_CN, E_UF, E_NF, E_FNF, E_FIO, E_RD, E_LL
+    E_CN, E_UF, E_NF, E_FNF, E_FIO, E_RD, E_LL, E_IF, E_TC
 };
 void error(int e) __attribute__((noreturn));
 void brk(void) __attribute__((noreturn));
@@ -219,8 +221,31 @@ void spr_at(int n, int16_t x, int16_t y);
 void spr_off(int n);
 void spr_flush(void);
 void vsync(void);
+void spr_frame(int s, int sheet, int f, int flip);
+void gfx_picture(const char *name, int16_t x, int16_t y, int palbase); /* palbase < 0: default palette */
+void sheet_load(int n, const char *name, int fw, int fh, int palbase);
+int sheet_frames(int n);
+void sheets_reset(void); /* sheets live in the array area: CLEAR, RUN and edits drop them */
 void snd_set(int v, uint16_t freq, int vol, int16_t frames);
 void snd_wave(int v, int w);
 void snd_poll(void);
+
+/* ---- images (image.c) ----
+ * img_load() decodes a JPEG or PNG file and hands each row to the sink as
+ * RGBA, top to bottom. start() comes first, with the size; photo is set
+ * for JPEG. The sink may keep memory with img_alloc() (it lives in the
+ * array area) and borrow scratch with img_scratch() (gone afterwards).
+ * row() returns nonzero when it wants no more rows. Inside a sink, report
+ * errors with img_fail(), not error(), so the file gets closed.
+ */
+typedef struct img_sink img_sink_t;
+struct img_sink {
+    void (*start)(img_sink_t *s, uint16_t w, uint16_t h, int photo);
+    int (*row)(img_sink_t *s, uint16_t y, const uint8_t *rgba);
+};
+void img_load(const char *name, img_sink_t *s);
+uint8_t *img_alloc(uint32_t n);
+void *img_scratch(uint32_t n);
+void img_fail(int e) __attribute__((noreturn));
 
 #endif

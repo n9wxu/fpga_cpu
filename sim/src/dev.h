@@ -31,6 +31,7 @@ enum { V_CTRL, V_BACKDROP, V_TEXT_LO, V_TEXT_HI, V_BMP_LO, V_BMP_HI, V_SPR_LO, V
 #define VC_SPR    0x08
 #define VC_SPRBUF 0x10
 #define VC_CURSOR 0x20
+#define VC_SPR8   0x40 /* sprite buffer is 8 bpp through the palette */
 
 /* frame timing: 50 MHz, 750 lines of which 720 are visible, 60 frames/s */
 #define CPU_HZ        50000000u

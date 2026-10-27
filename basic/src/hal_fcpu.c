@@ -24,7 +24,7 @@
 #define FS_LEN        0xF00510UL
 #define FS_RESULT     0xF00512UL
 #define FS_SIZE       0xF00514UL
-#define STACK_TOP     0x080000UL
+#define STACK_TOP     0x053400UL /* crt0: below the sprite buffers */
 #define STACK_RESERVE 0x4000UL
 
 extern char _end[];

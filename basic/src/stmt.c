@@ -36,6 +36,7 @@ static const char *const errmsg[] = {
     "OUT OF MEMORY", "UNDEF'D STATEMENT", "BAD SUBSCRIPT", "REDIM'D ARRAY", "DIVISION BY ZERO",
     "ILLEGAL DIRECT", "TYPE MISMATCH", "STRING TOO LONG", "FORMULA TOO COMPLEX", "CAN'T CONTINUE",
     "UNDEF'D FUNCTION", "NEXT WITHOUT FOR", "FILE NOT FOUND", "FILE", "REDO FROM START", "LINE TOO LONG",
+    "IMAGE FORMAT", "TOO MANY COLORS",
 };
 
 static void print_u16(uint16_t n)
@@ -737,7 +738,9 @@ static void do_def(void)
 
 static char fname[16];
 
-static void get_fname(void)
+/* File name from a string expression into fname, upper case. Program
+ * commands add .BAS when there is no extension; images need their own. */
+static void get_fname_ext(int add_bas)
 {
     str_t s;
     uint16_t i, n;
@@ -759,8 +762,50 @@ static void get_fname(void)
         fname[i] = c;
     }
     fname[n] = 0;
-    if (!dot && n <= 8)
+    if (add_bas && !dot && n <= 8)
         memcpy(fname + n, ".BAS", 5);
+}
+
+static void get_fname(void) { get_fname_ext(1); }
+
+/* optional "PALETTE base" after an image file's arguments */
+static int opt_palbase(void)
+{
+    int16_t b;
+    if (*ip != KW_PALETTE)
+        return -1;
+    ip++;
+    b = arg_i16();
+    if (b < 1 || b > 255)
+        error(E_FC);
+    return b;
+}
+
+/* PICTURE "file" [, x, y] [PALETTE base] */
+static void do_picture(void)
+{
+    int16_t x = 0, y = 0;
+    get_fname_ext(0);
+    if (*ip == ',') {
+        ip++;
+        x = arg_i16();
+        comma();
+        y = arg_i16();
+    }
+    gfx_picture(fname, x, y, opt_palbase());
+}
+
+/* SHEET n, "file", frame width, frame height [PALETTE base] */
+static void do_sheet(void)
+{
+    int16_t n = arg_i16(), fw, fh;
+    comma();
+    get_fname_ext(0);
+    comma();
+    fw = arg_i16();
+    comma();
+    fh = arg_i16();
+    sheet_load(n, fname, fw, fh, opt_palbase());
 }
 
 static void do_save(void)
@@ -969,6 +1014,14 @@ static void do_sprite(void)
         spr_at(n, x, y);
     } else if (t == KW_OFF) {
         spr_off(n);
+    } else if (t == KW_FRAME) { /* SPRITE n FRAME sheet, frame [, flip] */
+        int16_t sh, f, flip = 0;
+        two(&sh, &f);
+        if (*ip == ',') {
+            ip++;
+            flip = arg_i16();
+        }
+        spr_frame(n, sh, f, flip);
     } else
         error(E_SN);
 }
@@ -1187,6 +1240,8 @@ static void exec_stmt(uint8_t t)
         return;
     }
     case KW_SPRITE: do_sprite(); return;
+    case KW_PICTURE: do_picture(); return;
+    case KW_SHEET: do_sheet(); return;
     case KW_VSYNC: vsync(); return;
     case KW_SOUND: {
         int16_t v, vol, d = 0;

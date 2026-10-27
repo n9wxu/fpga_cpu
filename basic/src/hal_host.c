@@ -54,6 +54,14 @@ void hal_init(void)
     setvbuf(stdout, NULL, _IOFBF, 1 << 16);
 }
 
+static void pal_rgb(uint8_t i, uint8_t *px)
+{
+    uint16_t c = palette[i];
+    px[0] = (uint8_t)((c >> 11) << 3);
+    px[1] = (uint8_t)(((c >> 5) & 63) << 2);
+    px[2] = (uint8_t)((c & 31) << 3);
+}
+
 static void write_ppm(const char *path);
 
 void hal_exit(int code)
@@ -311,7 +319,7 @@ static void write_ppm(const char *path)
     if (!f)
         return;
     if (ctrl & VC_SPRBUF)
-        spra += SPR_SIZE;
+        spra += (uint32_t)((ctrl & VC_SPR8) ? SPR_SIZE : SPR_SIZE / 2u);
     fprintf(f, "P6\n%d %d\n255\n", SCR_W, SCR_H);
     for (y = 0; y < SCR_H; y++)
         for (x = 0; x < SCR_W; x++) {
@@ -320,12 +328,8 @@ static void write_ppm(const char *path)
             if (ctrl & VC_BMP) {
                 if (ctrl & VC_HICOL) {
                     uint8_t i = sram[(bmpa + (uint32_t)y * SCR_W + (uint32_t)x) & (SRAM - 1)];
-                    if (i) {
-                        uint16_t c = palette[i];
-                        px[0] = (uint8_t)((c >> 11) << 3);
-                        px[1] = (uint8_t)(((c >> 5) & 63) << 2);
-                        px[2] = (uint8_t)((c & 31) << 3);
-                    }
+                    if (i)
+                        pal_rgb(i, px);
                 } else {
                     uint8_t b = sram[(bmpa + (uint32_t)y * 320u + (uint32_t)(x >> 1)) & (SRAM - 1)];
                     int n = (x & 1) ? (b & 15) : (b >> 4);
@@ -333,7 +337,11 @@ static void write_ppm(const char *path)
                         rgb8(n, px);
                 }
             }
-            if (ctrl & VC_SPR) {
+            if ((ctrl & VC_SPR) && (ctrl & VC_SPR8)) {
+                uint8_t i = sram[(spra + (uint32_t)y * SCR_W + (uint32_t)x) & (SRAM - 1)];
+                if (i)
+                    pal_rgb(i, px);
+            } else if (ctrl & VC_SPR) {
                 uint8_t b = sram[(spra + (uint32_t)y * 320u + (uint32_t)(x >> 1)) & (SRAM - 1)];
                 int n = (x & 1) ? (b & 15) : (b >> 4);
                 if (!(n & 8))

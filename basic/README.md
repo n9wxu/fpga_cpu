@@ -38,13 +38,16 @@ The host build reads its environment:
 | `src/stmt.c` | Statements, run loop, prompt, files |
 | `src/num.c` | Number formatting and parsing (float only, no libc) |
 | `src/con.c` | 80×25 text console and screen editor |
-| `src/gfx.c` | Bitmap drawing, software sprites, sound registers |
+| `src/gfx.c` | Bitmap drawing, pictures, sprite sheets, software sprites, sound registers |
+| `src/image.c` | JPEG and PNG decoders, streaming rows from the file service |
+| `tools/` | `imgdump.c` + `imgcheck.py`: the decoders against reference results (`make imgcheck`); `mkassets.py` draws the test and example images |
 
 **Target build.** The target build compiles the shared files plus
 `hal_fcpu.c`. It needs only `memcpy memmove memset memcmp strlen`,
 `setjmp`/`longjmp`, and `sinf cosf tanf atanf expf logf sqrtf powf floorf
 fabsf fmodf`. It uses no stdio, malloc or ctype. The arena runs from `_end`
-to 16 KB below the stack top at `0x080000`.
+to 16 KB below the stack top at `0x053400`, under the two 8 bpp sprite
+buffers.
 
 ## Using it
 
@@ -162,19 +165,61 @@ Colors 0–7 are black, blue, green, cyan, red, magenta, yellow, white.
 | `CIRCLE x,y,r[,fill]` | circle, filled if fill is nonzero |
 | `PALETTE i, r, g, b` | set a hi-color palette entry, components 0–255 |
 | `SCROLL x, y` | hardware scroll of the bitmap |
+| `PICTURE "file" [, x, y] [PALETTE base]` | draw a JPEG or PNG into the bitmap with its top-left corner at x, y (default 0, 0), clipped to the screen. It turns on `HGR` if no bitmap is on. Transparent PNG pixels leave the bitmap as it was. |
+
+**Pictures and colors.** The file's type comes from its contents, not
+its name, but the name must include the extension.
+
+- In `HGR`, JPEG pictures are dithered (Floyd–Steinberg) to the 6×6×6
+  color cube, entries 16–231. PNG pixels take the nearest color in the
+  cube or the gray ramp, without dithering, so pixel art stays crisp.
+- In `GR`, pictures are reduced to the 8 colors: JPEG with an ordered
+  dither, PNG by rounding each channel.
+- `PALETTE base` (`HGR` only) gives each distinct color in the file its
+  own palette entry, from `base` up, in the order the colors first
+  appear, so the picture keeps its exact colors. It fails with `?TOO MANY
+  COLORS` if they don't fit below 256.
+- The palette is shared by the bitmap and the sprites, and changing an
+  entry changes everything drawn with it. JPEG pictures never use the
+  gray ramp, so `PALETTE 232` gives up to 24 exact colors without
+  disturbing them. Entries 1–8 are the colors of `SPRITE ... DEFINE`.
+- `HGR` reloads the default palette, so load pictures and sheets after it.
+
+Supported: baseline JPEG (gray or color, any common chroma subsampling,
+restart markers) and every kind of PNG except interlaced. Progressive
+JPEG, CMYK JPEG and interlaced PNG fail with `?IMAGE FORMAT ERROR`.
+Pictures are not scaled, so make photos 640×360 or smaller on the host.
 
 ### Sprites
 
-There are 16 sprites, numbered 0–15, each up to 32×32 pixels. Sprites
-are drawn in software into the hidden sprite buffer, and changes appear on
-the next `VSYNC`.
+There are 16 sprites, numbered 0–15. Sprites are drawn in software into
+the hidden 8 bpp sprite buffer, through the same 256-color palette as
+`HGR`, in every graphics mode. Changes appear on the next `VSYNC`. Sprite
+0 is drawn first, so higher numbers are in front.
+
+A sprite shows either its own pixels, given with `DEFINE` (up to 32×32),
+or a frame of a sprite sheet (up to 255×255).
 
 | Statement | Effect |
 |---|---|
 | `SPRITE n DEFINE w, h, s$[, s$...]` | define a sprite. Each character is one pixel: `0`–`7` a color, anything else transparent. Rows run left to right, top to bottom. |
 | `SPRITE n DEFINE w, h READ` | read h rows from `DATA` |
+| `SHEET s, "file", w, h [PALETTE base]` | load sheet s (0–7) from a PNG (or JPEG) and cut it into w×h frames, numbered left to right, then top to bottom. Leftover pixels at the right and bottom edges are ignored. Transparent PNG pixels are transparent in the sprites. Colors map as for `PICTURE`, without dithering. |
+| `SPRITE n FRAME s, f [, flip]` | show frame f of sheet s. flip: 1 mirrors left to right, 2 top to bottom, 3 both. |
 | `SPRITE n AT x, y` / `SPRITE n OFF` | show a sprite at a position, or hide it |
 | `VSYNC` | draw the sprites into the hidden buffer, wait for vertical blank, and swap. Without sprite changes it just waits one frame. |
+
+Sheets are kept with the arrays: `RUN`, `CLEAR` and editing the program
+drop them, and the sprites that showed them are hidden. A typical
+animation loop:
+
+```basic
+10 PICTURE "VALLEY.JPG"
+20 SHEET 0, "WALKER.PNG", 24, 32 PALETTE 232
+30 FOR F = 0 TO 999
+40   SPRITE 0 FRAME 0, F MOD FRAMES(0): SPRITE 0 AT F MOD 616, 296: VSYNC
+50 NEXT
+```
 
 ### Sound
 
@@ -222,13 +267,14 @@ IF PEEK(&HF00604) AND 1 THEN PRINT "BTN0"
 | `RND(x)` | x > 0: the next random number in [0, 1). x = 0: the last one again. x < 0: reseed from x. |
 | Strings | `LEN ASC VAL STR$ CHR$ HEX$ LEFT$(s,n) RIGHT$(s,n) MID$(s,start[,n]) INSTR(s,t[,start])` |
 | Input | `INKEY$` is the next key, or `""` if none. It doesn't wait. |
-| Screen | `POS(0)` is the cursor column. `POINT(x,y)` is a pixel's color, or −1 off-screen. |
+| Screen | `POS(0)` is the cursor column. `POINT(x,y)` is a pixel's color, or −1 off-screen. `FRAMES(s)` is the number of frames in sheet s, 0 if none is loaded. |
 | System | `TIME` is frames since power-on (60 per second). `FRE(0)` is free bytes, after a collection. `PEEK(a)` reads a byte, `DEEK(a)` a word. |
 
 ## Errors
 
 Errors print classic messages such as `?SYNTAX ERROR IN 30`, `?TYPE
-MISMATCH ERROR` and `?OUT OF DATA ERROR`. A program can't trap errors.
+MISMATCH ERROR` and `?OUT OF DATA ERROR`. Images add `?IMAGE FORMAT
+ERROR` and `?TOO MANY COLORS ERROR`. A program can't trap errors.
 
 ## Examples
 
@@ -241,6 +287,7 @@ All in `examples/`. Run them with `RUN "SPIRO"`.
 | `MUSIC.BAS` | a three-voice tune from `DATA` |
 | `HICOLOR.BAS` | hi-color palette bars and a palette-cycled disc |
 | `PRIMES.BAS` | the sieve benchmark, timed with `TIME` |
+| `WALKER.BAS` | an animated sprite sheet (`WALKER.PNG`) walking over a JPEG backdrop (`VALLEY.JPG`); arrow keys turn |
 
 ## Internals
 
@@ -257,3 +304,10 @@ All in `examples/`. Run them with `RUN "SPIRO"`.
   pass.
 - **Expressions** evaluate on an explicit value stack, so the collector can
   find every temporary.
+- **Images** decode straight from the file, one row at a time, so a
+  picture never needs a copy of the whole image. Decoder scratch (the
+  32 KB PNG window, the JPEG MCU row) is borrowed from the top of the
+  free gap and given back afterwards; a sheet's pixels are allocated like
+  an array. The JPEG IDCT, color conversion and chroma upsampling follow
+  libjpeg's defaults: `make imgcheck` finds every channel within 2 levels
+  of libjpeg, and PNG output identical, over a few hundred files.

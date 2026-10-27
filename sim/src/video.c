@@ -12,7 +12,7 @@
 #define TEXT_ROWS 25
 #define TEXT_COLS 80
 #define CELL_H 14
-#define SPR_BUF_BYTES 115200u
+#define SPR_BUF_BYTES 115200u  /* 4 bpp; 8 bpp buffers are twice this */
 
 extern const uint8_t font8x14[256][14];
 
@@ -54,8 +54,9 @@ void video_render(const cpu_t *c, uint32_t *px, int true_color, int cursor_on)
     const iodev_t *d = &c->dev;
     uint16_t ctrl = d->vid[V_CTRL];
     uint32_t text = reg32(d, V_TEXT_LO), bmp = reg32(d, V_BMP_LO), spr = reg32(d, V_SPR_LO);
+    int spr8 = (ctrl & VC_SPR8) != 0;
     if (ctrl & VC_SPRBUF)
-        spr += SPR_BUF_BYTES;
+        spr += spr8 ? 2 * SPR_BUF_BYTES : SPR_BUF_BYTES;
     uint32_t backdrop = rgb8[d->vid[V_BACKDROP] & 7];
     int sx = d->vid[V_SCROLLX] % LW, sy = d->vid[V_SCROLLY] % LH;
     for (int y = 0; y < LH; y++) {
@@ -75,9 +76,15 @@ void video_render(const cpu_t *c, uint32_t *px, int true_color, int cursor_on)
                 }
             }
             if (ctrl & VC_SPR) {
-                int p = nib(c, spr, x, y);
-                if (p >= 0)
-                    col = rgb8[p];
+                if (spr8) {
+                    uint8_t i = rd8(c, spr + (uint32_t)y * LW + (uint32_t)x);
+                    if (i)
+                        col = hicolor(d->pal[i], x, y, true_color);
+                } else {
+                    int p = nib(c, spr, x, y);
+                    if (p >= 0)
+                        col = rgb8[p];
+                }
             }
             if ((ctrl & VC_TEXT) && y < TEXT_ROWS * CELL_H) {
                 int cell = (y / CELL_H) * TEXT_COLS + x / 8, row = y % CELL_H;

@@ -80,6 +80,11 @@ storage and game-controller input.
 BASIC loads from SD into SRAM at boot. Pointers can read tables stored in
 code. `SYNC` invalidates the I-cache after code has been written.
 
+The C runtime places the video buffers at the top of SRAM (details in
+[io.md](io.md)): the sprite buffers at 053400, the bitmap at 0C3C00 and
+the text at 0FC000. That leaves 000000–0533FF (333 KB) for code, data,
+heap and stack. Video takes the other 691 KB.
+
 ## Video
 
 - Output: 1280×720 @ 60 Hz on the VGA connector, with a 75 MHz pixel
@@ -92,9 +97,12 @@ code. `SYNC` invalidates the I-cache after code has been written.
      - Hi-color: 8-bit indices into a 256 × 18-bit palette.
      - On the base hardware, hi-color is shown on the 3-bit VGA through
        a 2×2 ordered dither, giving about 125 apparent colors.
-  3. Sprite layer: 4 bpp, double-buffered, transparent wherever the T bit
-     is set. Sprites are drawn by the blitter, not by hardware sprite
-     logic.
+  3. Sprite layer: double-buffered, drawn by the blitter (by software
+     for now), not by hardware sprite logic. It has two modes:
+     - 4 bpp, transparent wherever the T bit is set (8 colors).
+     - 8 bpp, through the same palette as the hi-color bitmap, with index
+       0 transparent. This is what BASIC uses, so sprite sheets keep
+       their colors. Two buffers take 460,800 bytes of SRAM.
   4. Text: 80×25 with an 8×14 font. Each cell has a foreground color, a
      background color or transparency, and a stipple bit.
 - Colors 0–7 are the same 8 primaries in every mode and on future
@@ -103,6 +111,18 @@ code. `SYNC` invalidates the I-cache after code has been written.
   (viewports), 8×8 fill patterns and transparent copy (sprites).
 - Text windows need no extra hardware: they are regions of cells with an
   opaque background.
+- **Scan-out cost of the 8 bpp sprite layer.** It doubles the sprite
+  layer's SRAM reads to 160 words per logical line (44.4 µs, 2,222 CPU
+  cycles). With a hi-color bitmap, sprites and text, scan-out takes 360
+  words per line, 16.2% of the port, up from 280 (12.6%). On the
+  benchmarks that costs 0.5% more CPU cycles if scan-out reads are
+  spread through the line (`--video 25:4` against `32:4`), or 4% if
+  each line is read in one burst (`2222:360` against `2222:280`).
+- **Palette.** Bitmap and sprites both look up the one 256-entry palette.
+  Each logical pixel lasts two pixel clocks, so one block-RAM port can
+  serve both lookups by alternating, with the other port left for CPU
+  writes. No extra block RAM is needed, but this is unverified until the
+  RTL exists.
 
 ## Budget (estimates)
 

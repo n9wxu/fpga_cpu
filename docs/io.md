@@ -52,11 +52,11 @@ shown doubled in both directions. The layers, from back to front, are:
 
 | Address | R/W | Name | Function |
 |---|---|---|---|
-| F00200 | RW | `VID_CTRL` | Bit 0: text on. Bit 1: bitmap on. Bit 2: bitmap hi-color (0 = 8-color). Bit 3: sprite layer on. Bit 4: shown sprite buffer (0/1). Bit 5: text cursor on. |
+| F00200 | RW | `VID_CTRL` | Bit 0: text on. Bit 1: bitmap on. Bit 2: bitmap hi-color (0 = 8-color). Bit 3: sprite layer on. Bit 4: shown sprite buffer (0/1). Bit 5: text cursor on. Bit 6: sprite buffer is 8 bpp (0 = 4 bpp). |
 | F00202 | RW | `VID_BACKDROP` | backdrop color 0–7 |
 | F00204 / F00206 | RW | `VID_TEXT` | text buffer address |
 | F00208 / F0020A | RW | `VID_BMP` | bitmap address |
-| F0020C / F0020E | RW | `VID_SPR` | sprite buffer 0 address; buffer 1 is at +115200 |
+| F0020C / F0020E | RW | `VID_SPR` | sprite buffer 0 address; buffer 1 follows it (+115,200 at 4 bpp, +230,400 at 8 bpp) |
 | F00210 | W | `PAL_INDEX` | palette index for the next `PAL_DATA` write |
 | F00212 | W | `PAL_DATA` | palette color, RGB565 (see below); the write auto-increments `PAL_INDEX` |
 | F00214 | RW | `VID_SCROLLX` | bitmap horizontal scroll, pixels (wraps at 640) |
@@ -104,9 +104,18 @@ palette. A row is 640 bytes and the buffer is 230,400 bytes.
   `--true-color` option shows the real palette.
 - Palette index 0 is transparent.
 
-**Sprite buffer.** It has the same format as the 8-color bitmap, and T = 1
-is transparent. The CPU (later the blitter) draws sprites into the hidden
-buffer, then flips bit 4 of `VID_CTRL` during vertical blank.
+**Sprite buffer.** There are two formats, chosen by bit 6 of `VID_CTRL`:
+
+- 4 bpp (bit 6 = 0): the same format as the 8-color bitmap, and T = 1 is
+  transparent. Each buffer is 115,200 bytes.
+- 8 bpp (bit 6 = 1): the same format as the hi-color bitmap, through the
+  same 256-entry palette, and index 0 is transparent. Each buffer is
+  230,400 bytes. This mode works whatever the bitmap's mode, so sprites
+  can use the full palette over an 8-color bitmap too.
+
+Buffer 1 starts right after buffer 0. The CPU (later the blitter) draws
+sprites into the hidden buffer, then flips bit 4 of `VID_CTRL` during
+vertical blank.
 
 ## Sound (F00400)
 
@@ -181,8 +190,8 @@ GPIO, I2C and SPI on the expansion connectors come later, at F00700.
 |---|---|
 | 000000–000FFF | reserved, kept unused so null pointers stand out |
 | 001000– | program: code, then read-only data, data, and BSS |
-| … up to 07FFFF | heap upward from the end of BSS, stack downward from 080000 |
-| 080000–0B83FF | sprite buffers 0 and 1 (2 × 115,200) |
-| 0C0000–0F83FF | bitmap (230,400 bytes; 8-color mode uses the first 115,200) |
+| … up to 0533FF | heap upward from the end of BSS, stack downward from 053400 |
+| 053400–0C3BFF | sprite buffers 0 and 1 (2 × 230,400, room for 8 bpp) |
+| 0C3C00–0FBFFF | bitmap (230,400 bytes; 8-color mode uses the first 115,200) |
 | 0FC000–0FCF9F | text buffer (4,000 bytes) |
 | 0FD000–0FFFFF | free |

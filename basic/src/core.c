@@ -377,6 +377,7 @@ void clear_vars(void)
     memset(fndef, 0, sizeof fndef);
     arr_start = arr_end = align8(prog_end + 2);
     str_bot = arena_top;
+    sheets_reset();
     vsp = 0;
 }
 
