@@ -43,11 +43,16 @@ CFLAGS = ["-funsigned-char", "-ffreestanding", "-nostdlibinc",
           "-fno-unwind-tables", "-fomit-frame-pointer"]
 
 # compiler-rt builtins: single-precision soft-float and 64-bit integer helpers
-CRT_FILES = ["addsf3", "subsf3", "mulsf3", "divsf3", "comparesf2", "negsf2",
+# compiler-rt builtins compiled from C. 64-bit multiply and divide are
+# hand-written in runtime/asm (muldi3.s, divdi3.s) instead, and so are the
+# fast paths of float add, subtract and multiply (addsf3.s, mulsf3.s); the
+# C versions stay, renamed, for the cases those hand off (CRT_RENAME).
+CRT_FILES = ["addsf3", "mulsf3", "divsf3", "comparesf2", "negsf2",
              "fixsfsi", "fixunssfsi", "floatsisf", "floatunsisf", "fixsfdi", "fixunssfdi",
-             "floatdisf", "floatundisf", "muldi3", "divdi3", "moddi3", "udivdi3", "umoddi3",
-             "udivmoddi4", "ashldi3", "lshrdi3", "ashrdi3", "cmpdi2", "ucmpdi2", "negdi2",
+             "floatdisf", "floatundisf", "udivmoddi4", "ashldi3", "lshrdi3", "ashrdi3", "cmpdi2", "ucmpdi2", "negdi2",
              "popcountsi2", "clzsi2", "ctzsi2", "fp_mode"]
+
+CRT_RENAME = {"addsf3": ["-D__addsf3=__fcpu_addsf3_c"], "mulsf3": ["-D__mulsf3=__fcpu_mulsf3_c"]}
 
 
 def run(cmd):
@@ -95,8 +100,8 @@ def runtime():
         if not os.path.exists(src):
             continue
         out = os.path.join(rt_build, f"crt_{name}.s")
-        if stale(out, src, *stamp):
-            compile_c(src, out, "-O2", ["-I", CRT_SRC, "-w"])
+        if stale(out, src, __file__, *stamp):
+            compile_c(src, out, "-O2", ["-I", CRT_SRC, "-w", *CRT_RENAME.get(name, [])])
         libs.append(out)
     return os.path.join(asm_dir, "crt0.s"), libs
 
