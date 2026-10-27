@@ -1,6 +1,7 @@
 # fpga_cpu BASIC in the browser: the simulator core compiled to WebAssembly
 #   make         build build/{index.html,fsim.js,fsim.wasm,fsim.data}
 #   make serve   build, then serve on http://localhost:8000
+#   make deploy  build, then copy to $(DEPLOY) (https://retro.julicher.net/basic/)
 # Needs emcc (Emscripten) and the BASIC images (make -C ../basic target).
 
 ROOT   := ..
@@ -8,6 +9,8 @@ SIM    := $(ROOT)/sim
 BASIC  := $(ROOT)/basic
 BUILD  := build
 EMCC   ?= emcc
+# by IP: retro.julicher.net resolves to the HTTPS proxy (LXC 115), not to retro
+DEPLOY ?= root@192.168.10.204:/srv/www/basic/
 
 CORE   := $(SIM)/src/cpu.c $(SIM)/src/dev.c $(SIM)/src/video.c $(SIM)/src/front.c $(SIM)/src/font8x14.c \
           $(SIM)/src/gen/isa_gen.c $(SIM)/src/gen/exec_gen.c
@@ -40,7 +43,10 @@ $(BUILD)/index.html: index.html
 serve: all
 	cd $(BUILD) && python3 -m http.server 8000
 
+deploy: all
+	rsync -rlt --delete --chmod=D755,F644 $(BUILD)/ $(DEPLOY)
+
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all serve clean
+.PHONY: all serve deploy clean

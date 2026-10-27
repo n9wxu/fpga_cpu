@@ -43,6 +43,7 @@
     <button id="reset">Reset</button>
     <label>Encoding <select id="variant"><option>A</option><option>B</option></select></label>
     <label>Speed <select id="speed"><option value="1">50 MHz (real)</option><option value="0">Maximum</option></select></label>
+    <label>Colors <select id="color"><option value="0">3-bit (board)</option><option value="1">Full palette</option></select></label>
     <button id="sound">Sound off</button>
     <label>Disk <select id="files"></select></label>
     <button id="download">Download</button>
@@ -110,7 +111,7 @@ function listFiles() {
   return changed;
 }
 
-let cyclesPerMs = 50e3, running = false, lastT = 0, lastCycles = 0, lastInsts = 0, rateT = 0;
+let cpuMs = 0, drawMs = 0, cyclesPerMs = 50e3, running = false, lastT = 0, lastCycles = 0, lastInsts = 0, rateT = 0;
 function boot(v) {
   if (Module.ccall('web_boot', 'number', ['string'], [v]) !== 0) { hint.textContent = 'Boot failed'; return; }
   hint.style.display = 'none';
@@ -126,13 +127,19 @@ function frame(t) {
   if (!running) return;
   const dt = Math.min(lastT ? (t - lastT) / 1000 : 1 / 60, 0.1);
   lastT = t;
-  let budget = CPU_HZ * dt;
-  if ($('speed').value === '0') budget = cyclesPerMs * 12;   // fill about 12 ms of each frame
+  // real time, but never more than about 10 ms of CPU work per frame, so a
+  // slow browser slows the machine down instead of freezing the page
+  const cap = cyclesPerMs * 10;
+  const budget = $('speed').value === '0' ? cap : Math.min(CPU_HZ * dt, cap);
   const t0 = performance.now(), c0 = Module._web_cycles();
-  const p = Module._web_frame(budget);
-  const ms = performance.now() - t0;
-  if (ms > 1) cyclesPerMs = 0.8 * cyclesPerMs + 0.2 * (Module._web_cycles() - c0) / ms;
+  Module._web_run(budget);
+  const t1 = performance.now();
+  if (t1 - t0 > 1) cyclesPerMs = 0.8 * cyclesPerMs + 0.2 * (Module._web_cycles() - c0) / (t1 - t0);
+  const p = Module._web_render(+$('color').value);
   if (p) ctx.putImageData(new ImageData(new Uint8ClampedArray(HEAPU8.buffer, p, 1280 * 720 * 4), 1280, 720), 0, 0);
+  const ms = performance.now() - t0;
+  cpuMs = 0.9 * cpuMs + 0.1 * (t1 - t0);
+  drawMs = 0.9 * drawMs + 0.1 * (ms - (t1 - t0));
   const leds = Module._web_leds();
   [...$('leds').children].forEach((e, i) => e.classList.toggle('on', !!(leds >> (7 - i) & 1)));
   if (Module._web_halted()) {
@@ -142,9 +149,11 @@ function frame(t) {
   }
   if (t - rateT > 1000) {
     const c = Module._web_cycles(), n = Module._web_insts(), s = (t - rateT) / 1000;
-    if (rateT) $('status').textContent =
+    const slow = $('speed').value === '1' && (c - lastCycles) / s < 0.9 * CPU_HZ;
+    if (rateT) $('status').textContent = (slow ? 'browser too slow for real time  ·  ' : '') +
       `${((c - lastCycles) / s / 1e6).toFixed(1)} MHz  ·  ${((n - lastInsts) / s / 1e6).toFixed(1)} MIPS  ·  ` +
-      `${ms.toFixed(1)} ms/frame`;
+      `frame: cpu ${cpuMs.toFixed(1)} ms + draw ${drawMs.toFixed(1)} ms  ·  ` +
+      (navigator.userAgent.match(/(Edg|Firefox|Chrome|Version)\/[\d.]+/) || [''])[0].replace('Version', 'Safari');
     lastCycles = c; lastInsts = n; rateT = t;
     if (listFiles()) saveDisk();
   }
@@ -198,6 +207,10 @@ $('sound').onclick = () => {
 $('reset').onclick = () => boot($('variant').value);
 $('variant').onchange = () => boot($('variant').value);
 $('speed').onchange = () => canvas.focus();
+// hi-color display: ?color=full, else the last choice
+try { $('color').value = new URLSearchParams(location.search).get('color') === 'full' ? '1'
+                         : localStorage.getItem('fcpu-color') || '0'; } catch (e) {}
+$('color').onchange = () => { try { localStorage.setItem('fcpu-color', $('color').value); } catch (e) {} canvas.focus(); };
 $('download').onclick = () => {
   const n = $('files').value;
   if (!n) return;

@@ -276,6 +276,10 @@ static void win_controls()
     if (ImGui::Combo("##speed", &sp, "50 MHz\0Max\0"))
         max_speed = sp == 1;
     ImGui::SameLine();
+    // hi-color bitmap: the board's 3-bit VGA (2x2 dither) or the full 8-bit indexed palette
+    ImGui::SetNextItemWidth(140);
+    ImGui::Combo("##color", &opt.true_color, "3-bit (board)\0Full palette\0");
+    ImGui::SameLine();
     if (cpu.halted)
         ImGui::TextColored(ImVec4(1, 0.5f, 0.3f, 1), "halted: %s", cpu.halt_reason);
     else if (mode == STOPPED)

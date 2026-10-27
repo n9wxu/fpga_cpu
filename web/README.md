@@ -8,7 +8,12 @@ fast as the browser allows.
 ```sh
 make -C web          # needs emcc; builds BASIC first if needed
 make -C web serve    # http://localhost:8000
+make -C web deploy   # copy to the retro container (DEPLOY=user@host:dir to change)
 ```
+
+The deployed copy is at https://retro.julicher.net/basic/. Serve it over
+HTTPS (or from localhost): Safari runs WebAssembly from plain `http://`
+sites about 16 times slower, without compiling it.
 
 The output is `web/build/`: `index.html`, `fsim.js`, `fsim.wasm`, and
 `fsim.data` (both BASIC images and the examples), about 280 KB in all.
@@ -24,6 +29,9 @@ Any static web server can host it. Browsers will not load it from a
 - **Encoding:** A or B; changing it reboots with that image.
 - **Speed:** 50 MHz real time or maximum. The status line shows the
   simulated MHz, MIPS, and the milliseconds each frame takes.
+- **Colors:** how the hi-color (8-bit indexed) bitmap is shown: as the
+  board's 3-bit VGA shows it, through a 2×2 dither, or with the full
+  256-entry palette. `?color=full` selects the full palette.
 - **Sound:** off until you press the button, as browsers require.
 - **Disk:** the file-service folder `/disk`, stored in the browser's
   IndexedDB. It starts with `basic/examples`. Programs you `SAVE` stay
