@@ -73,3 +73,41 @@ itself compiled for the CPU, so they measure the interpreter's code on
 the ISA. They read the cycle counter with `DEEK(&HF00004)` and
 `DEEK(&HF00006)`. `DHRY.BAS` checks its own results the way the C
 Dhrystone does, and prints DMIPS.
+
+## Arithmetic without an FPU
+
+Doom uses no floating point (it's 16.16 fixed point), and the float
+benchmarks use soft float, so both depend on the runtime's 32/64-bit
+multiply, divide and soft-float routines. Profiling with `fsim --profile`
+showed most of the cost was in compiler-rt's generic C helpers, so these
+are now hand-written in `llvm/runtime/asm/` (see `llvm/README.md`).
+Variant A, base timing:
+
+| benchmark | original | hand-written runtime | + extension X |
+|---|---|---|---|
+| Doom timedemo | 4.77 fps | 6.25 fps | 7.01 fps |
+| Whetstone, int16 | 18.75 M cycles | 5.95 M (3.15×) | 5.20 M (3.61×) |
+| Stanford FloatMM, int16 | 98.9 M | 32.2 M (3.07×) | 30.0 M (3.30×) |
+| Stanford Oscar, int32 | 78.7 M | 23.9 M (3.29×) | 22.3 M (3.52×) |
+| BASIC benchmark 8 | 25.6 M | 15.6 M (1.64×) | 14.9 M (1.72×) |
+
+Per operation: float add 280 → 107 cycles, multiply 271 → 82, divide
+1,335 → 394; Doom's `FixedMul` about 250 → 80 and `FixedDiv` about
+4,900 → 550.
+
+Extension X ([cpu/isa.md](../cpu/isa.md)) adds four candidate
+instructions. Measured one at a time (configurations `x-*`, geomean over
+all benchmarks, variant A):
+
+| instruction | geomean speedup | Doom | est. extra LUTs |
+|---|---|---|---|
+| `DSTEP` | 1.022× | 1.107× | 70–120 |
+| `MULPU` | 1.004× | 1.012× | 15–30 |
+| `FSHR`/`FSHL` | 1.003× | 1.004× | 40–90 |
+| `CLZ` | 1.000× | 1.000× | 25–40 |
+
+Only `DSTEP` pays for itself, at about 2–3% per 100 LUTs. That is close
+to dual issue and far below a 1-cycle taken branch (`bp1`, ~25% per 100
+LUTs; docs/measurements.md). What remains in Doom is mostly compiler
+code: 32-bit multiplies are calls to `__mulsi3`, and the column and span
+loops reload globals on every pixel.
