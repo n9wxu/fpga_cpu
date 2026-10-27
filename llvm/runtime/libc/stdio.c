@@ -274,3 +274,5 @@ int sprintf(char *buf, const char *fmt, ...)
     va_end(ap);
     return r;
 }
+
+int vsprintf(char *buf, const char *fmt, va_list ap) { return vsnprintf(buf, 0x7FFF, fmt, ap); }

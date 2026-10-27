@@ -123,7 +123,7 @@ static void io_write(cpu_t *c, uint32_t a, uint32_t v)
     dev_write(c, a, v);
 }
 
-#define IN_SRAM(a) ((a) < SRAM_SIZE)
+#define IN_SRAM(a) ((a) < c->ram_size) /* SRAM or expansion RAM */
 #define IN_ROM(a)  ((a) >= ROM_BASE)
 #define IN_IO(a)   ((a) >= IO_BASE && (a) < IO_BASE + IO_SIZE)
 
@@ -610,7 +610,8 @@ void cpu_init(cpu_t *c, const variant_t *v, const tcfg_t *cfg)
     memset(c, 0, sizeof *c);
     c->var = v;
     c->cfg = *cfg;
-    c->sram = calloc(SRAM_SIZE + 4, 1);
+    c->ram_size = SRAM_SIZE + (cfg->xram_mb > XRAM_MAX ? XRAM_MAX : cfg->xram_mb) * 0x100000u;
+    c->sram = calloc(c->ram_size + 4, 1);
     c->rom = calloc(ROM_SIZE + 4, 1);
     c->st.form = calloc((size_t)v->nforms, sizeof(uint64_t));
     dev_init(&c->dev);

@@ -116,10 +116,10 @@ int main(int argc, char **argv)
         char *e;
         uint32_t a = (uint32_t)strtoul(o.dump, &e, 0), n = *e == ':' ? (uint32_t)strtoul(e + 1, &e, 0) : 0;
         FILE *f = *e == ':' ? fopen(e + 1, "wb") : NULL;
-        if (!f || a >= SRAM_SIZE) {
-            fprintf(stderr, "--dump: need ADDR:LEN:FILE within SRAM\n");
+        if (!f || a >= c.ram_size) {
+            fprintf(stderr, "--dump: need ADDR:LEN:FILE within RAM\n");
         } else {
-            fwrite(c.sram + a, 1, a + n > SRAM_SIZE ? SRAM_SIZE - a : n, f);
+            fwrite(c.sram + a, 1, a + n > c.ram_size ? c.ram_size - a : n, f);
             fclose(f);
         }
     }

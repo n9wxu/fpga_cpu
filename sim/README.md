@@ -103,6 +103,10 @@ checks breakpoints, Step Over/Out and key translation on `demo/video.s`.
 
 CPU and SRAM share one 50 MHz clock and one 32-bit memory port.
 
+`--xram MB` adds simulator-only expansion RAM at `100000` (up to 14 MB,
+to `EFFFFF`), with the same timing as the SRAM, for programs larger than
+the base board (benchmarks/doom). Without it, that range is unmapped.
+
 - **Every instruction takes 1 cycle**, plus:
   - I-cache misses: 1 cycle to start, then 1 cycle per word, word by word.
   - The stream buffer prefetches the next line during idle port cycles.

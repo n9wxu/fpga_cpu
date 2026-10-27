@@ -59,7 +59,7 @@ static void serial_hook(void *, int ch)
 
 static void reset_machine()
 {
-    memset(cpu.sram, 0, SRAM_SIZE);
+    memset(cpu.sram, 0, cpu.ram_size);
     cpu_reset(&cpu);
     load_image(&cpu, opt.image, opt.load);
     cpu.pc = opt.entry == 0xFFFFFFFF ? opt.load : opt.entry;
@@ -321,7 +321,7 @@ static void win_registers()
         uint32_t v = cpu.r[2 * p] | (uint32_t)cpu.r[2 * p + 1] << 16;
         const char *sname = nullptr;
         uint32_t off = 0;
-        if (nsyms && (v & 0xFFFFFF) < SRAM_SIZE)
+        if (nsyms && (v & 0xFFFFFF) < cpu.ram_size)
             sname = sym_near(v & 0xFFFFFF, &off);
         if (sname && off < 0x10000)
             ImGui::Text("%-2s %08X  %s+%u", pname[p], v, sname, off);
@@ -496,7 +496,7 @@ static void win_memory()
             uint32_t a = (uint32_t)row * 16;
             char line[100];
             int n = snprintf(line, sizeof line, "%06X ", a);
-            bool mapped = a < SRAM_SIZE || a >= ROM_BASE;
+            bool mapped = a < cpu.ram_size || a >= ROM_BASE;
             char asc[17];
             for (int i = 0; i < 16; i++) {
                 uint32_t x = a + (uint32_t)i;
@@ -505,7 +505,7 @@ static void win_memory()
                     asc[i] = ' ';
                     continue;
                 }
-                uint8_t b = x < SRAM_SIZE ? cpu.sram[x] : cpu.rom[x - ROM_BASE];
+                uint8_t b = x < cpu.ram_size ? cpu.sram[x] : cpu.rom[x - ROM_BASE];
                 n += snprintf(line + n, sizeof line - (size_t)n, i == 8 ? "  %02X" : " %02X", b);
                 asc[i] = b >= 32 && b < 127 ? (char)b : '.';
             }

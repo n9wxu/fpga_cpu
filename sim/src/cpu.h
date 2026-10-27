@@ -10,6 +10,7 @@
 
 /* ---- memory map (24-bit) ---- */
 #define SRAM_SIZE 0x100000u /* 000000-0FFFFF  1 MB, 32-bit wide */
+#define XRAM_MAX  14u       /* simulator-only expansion RAM from 100000, in MB */
 #define IO_BASE   0xF00000u /* F00000-F0FFFF  I/O */
 #define IO_SIZE   0x10000u
 #define ROM_BASE  0xFF0000u /* FF0000-FFFFFF  boot ROM (block RAM) */
@@ -34,6 +35,7 @@ typedef struct {
     int io_pen;            /* extra cycles per I/O access */
     uint32_t vperiod, vburst; /* video steals vburst port cycles every vperiod */
     int dual;              /* in-order dual issue: DUAL_OFF, DUAL_BANKED or DUAL_PORTS */
+    uint32_t xram_mb;      /* simulator-only RAM after the SRAM (100000-), same timing; 0 = none */
 } tcfg_t;
 
 /* Macro-op fusion kinds.  ALUBR is a flag-setting ALU op (not CMP) followed
@@ -80,6 +82,7 @@ typedef struct cpu {
     tcfg_t cfg;
     stats_t st;
     uint8_t *sram, *rom;
+    uint32_t ram_size;     /* SRAM plus expansion RAM, contiguous from 0 */
     iodev_t dev;
     int trace;
     /* per-instruction scratch */

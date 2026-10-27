@@ -2,7 +2,7 @@
         .text
         .globl  _start
 _start:
-        LA      sp, 0x053400            ; stack grows down from the sprite buffers
+        LA      sp, __stack_top         ; fcc's layout: 053400 below the sprite buffers by default
         LA      p1, __bss_start
         LA      p2, __bss_end
         MOVI    r6, 0

@@ -1,12 +1,14 @@
 /* fpga_cpu C runtime: a first-fit allocator between the end of BSS and
- * 16 KB below the stack top (docs/io.md memory layout). */
+ * 16 KB below the stack top. The stack top comes from fcc's layout
+ * (__stack_top: 053400 by default, docs/io.md memory layout). */
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
 
 extern char _end[];
-#define HEAP_TOP ((char *)0x07C000)
+extern char __stack_top[];
+#define HEAP_TOP (__stack_top - 0x4000)
 
 typedef struct blk {
     size_t size; /* bytes including this header; low bit = in use */

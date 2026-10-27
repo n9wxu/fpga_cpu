@@ -46,7 +46,7 @@ void dev_reset(iodev_t *d)
     dir_free(d);
     d->fs_handle = d->fs_mode = d->fs_len = 0;
     d->fs_result = 0;
-    d->fs_name = d->fs_buf = d->fs_size = 0;
+    d->fs_name = d->fs_buf = d->fs_size = d->fs_pos = 0;
     d->leds = d->seg7 = d->seg7_ctrl = 0;
     d->kbd_head = d->kbd_tail = 0;
 }
@@ -103,7 +103,7 @@ static int fs_getname(cpu_t *c, char *out, size_t n)
     size_t i = 0;
     uint32_t a = c->dev.fs_name & 0xFFFFFF;
     for (; i < n - 1; i++, a++) {
-        if (a >= SRAM_SIZE)
+        if (a >= c->ram_size)
             return -5;
         if (!(out[i] = (char)c->sram[a]))
             break;
@@ -171,7 +171,7 @@ static int16_t fs_command(cpu_t *c, int cmd)
         if (h >= FS_HANDLES || !d->fh[h])
             return -2;
         uint32_t a = d->fs_buf & 0xFFFFFF, n = d->fs_len;
-        if (a >= SRAM_SIZE || a + n > SRAM_SIZE)
+        if (a >= c->ram_size || a + n > c->ram_size)
             return -4;
         size_t got;
         if (cmd == 3) {
@@ -214,7 +214,7 @@ static int16_t fs_command(cpu_t *c, int cmd)
         const char *nm = d->dir_list[d->dir_pos++];
         uint32_t a = d->fs_buf & 0xFFFFFF;
         size_t len = strlen(nm);
-        if (a + len + 1 > SRAM_SIZE)
+        if (a + len + 1 > c->ram_size)
             return -4;
         for (size_t i = 0; i <= len; i++)
             c->sram[a + i] = (uint8_t)toupper((unsigned char)nm[i]);
@@ -223,6 +223,20 @@ static int16_t fs_command(cpu_t *c, int cmd)
         snprintf(path, sizeof path, "%s/%s", d->disk, nm);
         d->fs_size = stat(path, &sb) ? 0 : (uint32_t)sb.st_size;
         return 1;
+    }
+    case 8: /* SEEK: to FS_POS from the start */
+        if (h >= FS_HANDLES || !d->fh[h])
+            return -2;
+        return fseek(d->fh[h], (long)d->fs_pos, SEEK_SET) ? -4 : 0;
+    case 9: { /* SIZE: of an open file, into FS_SIZE */
+        if (h >= FS_HANDLES || !d->fh[h])
+            return -2;
+        struct stat sb;
+        fflush(d->fh[h]);
+        if (fstat(fileno(d->fh[h]), &sb))
+            return -4;
+        d->fs_size = (uint32_t)sb.st_size;
+        return 0;
     }
     }
     return -4;
@@ -293,6 +307,8 @@ uint16_t dev_read(cpu_t *c, uint32_t a)
     case IO_FS + 0x12: return (uint16_t)d->fs_result;
     case IO_FS + 0x14: return (uint16_t)d->fs_size;
     case IO_FS + 0x16: return (uint16_t)(d->fs_size >> 16);
+    case IO_FS + 0x18: return (uint16_t)d->fs_pos;
+    case IO_FS + 0x1A: return (uint16_t)(d->fs_pos >> 16);
     case IO_BOARD + 0x0: return d->leds;
     case IO_BOARD + 0x2: return d->switches;
     case IO_BOARD + 0x4: return d->buttons;
@@ -347,6 +363,8 @@ void dev_write(cpu_t *c, uint32_t a, uint32_t v)
     case IO_FS + 0x0C: set_lo(&d->fs_buf, v); return;
     case IO_FS + 0x0E: set_hi(&d->fs_buf, v); return;
     case IO_FS + 0x10: d->fs_len = (uint16_t)v; return;
+    case IO_FS + 0x18: set_lo(&d->fs_pos, v); return;
+    case IO_FS + 0x1A: set_hi(&d->fs_pos, v); return;
     case IO_BOARD + 0x0: d->leds = (uint16_t)(v & 0xFF); return;
     case IO_BOARD + 0x6: d->seg7 = (uint16_t)v; return;
     case IO_BOARD + 0x8: d->seg7_ctrl = (uint16_t)(v & 0xFF); return;

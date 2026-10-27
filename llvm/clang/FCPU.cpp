@@ -20,4 +20,6 @@ void FCPUTargetInfo::getTargetDefines(const LangOptions &Opts,
   Builder.defineMacro("__fcpu__");
   Builder.defineMacro("__FCPU__");
   Builder.defineMacro("__ELF__");
+  if (getIntWidth() == 32)
+    Builder.defineMacro("__FCPU_INT32__");
 }

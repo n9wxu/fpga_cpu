@@ -2,7 +2,16 @@
 """fcc: C compiler driver for fpga_cpu.
 
 usage: fcc [-v A|B] [-O<n>] [-S] [-I dir] [-D name[=val]] [-o out.bin]
+           [--int32] [--base ADDR] [--stack ADDR] [--cflag FLAG ...]
            [--lst] [--stats] [--keep] [--] files.c|files.s ...
+
+--int32 compiles with a 32-bit int (the clang target fcpu-unknown-unknown-
+int32) against a runtime built the same way, for C written for 32-bit
+machines. --cflag passes a flag to clang for your files (for example
+-std=gnu89 for K&R C). --base sets the load address (default 0x1000) and --stack the
+initial stack pointer (default 0x053400); the heap runs from the end of
+BSS to 16 KB below the stack. Programs placed in expansion RAM (base
+0x100000 and up) need fsim --xram.
 
 Compiles C with clang --target=fcpu to assembly, then links with
 sim/tools/asm.py: crt0, your files, and only the runtime library files
@@ -23,11 +32,13 @@ ROOT = os.path.dirname(HERE)
 CLANG = os.path.join(HERE, "build", "bin", "clang")
 RT = os.path.join(HERE, "runtime")
 RT_BUILD = os.path.join(RT, "build")
+TRIPLE16 = "--target=fcpu"
+TRIPLE32 = "--target=fcpu-unknown-unknown-int32"
 CRT_SRC = os.path.join(HERE, "llvm-project", "compiler-rt", "lib", "builtins")
 ASM = os.path.join(ROOT, "sim", "tools", "asm.py")
 PY = os.path.join(ROOT, ".venv", "bin", "python")
 
-CFLAGS = ["--target=fcpu", "-funsigned-char", "-ffreestanding", "-nostdlibinc",
+CFLAGS = ["-funsigned-char", "-ffreestanding", "-nostdlibinc",
           "-isystem", os.path.join(RT, "include"), "-fno-asynchronous-unwind-tables",
           "-fno-unwind-tables", "-fomit-frame-pointer"]
 
@@ -52,13 +63,18 @@ def stale(out, *srcs):
     return any(os.path.getmtime(s) > t for s in srcs)
 
 
+INT32 = False
+
+
 def compile_c(src, out, opt, extra):
-    run([CLANG, *CFLAGS, opt, *extra, "-S", src, "-o", out])
+    run([CLANG, TRIPLE32 if INT32 else TRIPLE16, *CFLAGS, opt, *extra, "-S", src, "-o", out])
 
 
 def runtime():
-    """Build the runtime library on demand; returns (crt0, [library files])."""
-    os.makedirs(RT_BUILD, exist_ok=True)
+    """Build the runtime library on demand; returns (crt0, [library files]).
+    The int32 runtime is kept apart from the 16-bit one."""
+    rt_build = RT_BUILD + ("-int32" if INT32 else "")
+    os.makedirs(rt_build, exist_ok=True)
     libs = []
     asm_dir = os.path.join(RT, "asm")
     for f in sorted(os.listdir(asm_dir)):
@@ -70,7 +86,7 @@ def runtime():
         for f in sorted(os.listdir(d)):
             if f.endswith(".c"):
                 src = os.path.join(d, f)
-                out = os.path.join(RT_BUILD, f"{sub}_{f[:-2]}.s")
+                out = os.path.join(rt_build, f"{sub}_{f[:-2]}.s")
                 if stale(out, src, *stamp):
                     compile_c(src, out, "-O2", [])
                 libs.append(out)
@@ -78,7 +94,7 @@ def runtime():
         src = os.path.join(CRT_SRC, name + ".c")
         if not os.path.exists(src):
             continue
-        out = os.path.join(RT_BUILD, f"crt_{name}.s")
+        out = os.path.join(rt_build, f"crt_{name}.s")
         if stale(out, src, *stamp):
             compile_c(src, out, "-O2", ["-I", CRT_SRC, "-w"])
         libs.append(out)
@@ -98,13 +114,19 @@ def main(argv):
     ap.add_argument("--stats", action="store_true")
     ap.add_argument("--keep", action="store_true", help="keep the generated .s files next to the output")
     ap.add_argument("-q", "--quiet", action="store_true")
+    ap.add_argument("--int32", action="store_true", help="32-bit int")
+    ap.add_argument("--cflag", action="append", default=[], help="extra clang flag for your files")
+    ap.add_argument("--base", default="0x1000", help="load address")
+    ap.add_argument("--stack", default="0x053400", help="initial stack pointer")
     args = ap.parse_args(argv)
+    global INT32
+    INT32 = args.int32
 
     out = args.out or os.path.splitext(args.files[0])[0] + ".bin"
     stem = os.path.splitext(out)[0]
     work = stem + ".fcc" if args.keep else os.path.join(RT_BUILD, "tmp", os.path.basename(stem))
     os.makedirs(work, exist_ok=True)
-    extra = [f"-I{i}" for i in args.incs] + [f"-D{d}" for d in args.defs]
+    extra = [f"-I{i}" for i in args.incs] + [f"-D{d}" for d in args.defs] + args.cflag
     opt = f"-O{args.opt}"
 
     objs = []
@@ -123,8 +145,11 @@ def main(argv):
         return
 
     crt0, libs = runtime()
-    cmd = [PY if os.path.exists(PY) else sys.executable, ASM, "-v", args.variant, crt0, *objs,
-           "--lib", *libs, "-o", out, "--sym", stem + ".sym"]
+    layout = os.path.join(work, "layout.s")
+    with open(layout, "w") as fh:
+        fh.write(f"        .globl  __stack_top\n__stack_top = {int(args.stack, 0):#08x}\n")
+    cmd = [PY if os.path.exists(PY) else sys.executable, ASM, "-v", args.variant, crt0, layout, *objs,
+           "--lib", *libs, "-o", out, "--sym", stem + ".sym", "--base", args.base]
     if args.lst:
         cmd += ["--lst", stem + ".lst"]
     if args.stats:

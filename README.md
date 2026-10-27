@@ -65,6 +65,14 @@ llvm/fcc hello.c -o hello.bin    # compile and link a C program
 sim/build/fsim hello.bin         # run it
 ```
 
+Benchmarks for ISA work (Dhrystone, Whetstone, Stanford, CoreMark, BASIC,
+Doom), compiled, run in the simulator, checked and timed:
+
+```sh
+benchmarks/run.py --quick        # every benchmark, base timing model
+benchmarks/doom/get_wad.sh && benchmarks/run.py doom
+```
+
 BASIC on the simulated machine:
 
 ```sh
@@ -87,6 +95,7 @@ make -C web serve                # http://localhost:8000
 | `sim/`     | Simulator, GUI, assembler/linker, benchmarks and measurement tools |
 | `llvm/`    | LLVM backend, clang target, `fcc` driver, C runtime and tests |
 | `basic/`   | BASIC interpreter in C, tests and example programs |
+| `benchmarks/` | Classic benchmarks (Dhrystone, Whetstone, Stanford, CoreMark, ...), BASIC benchmarks and Doom, for ISA work |
 | `web/`     | The simulator compiled to WebAssembly |
 | `docs/`    | Architecture, I/O map, measurements |
 | `verilog/` | RTL and testbenches (to come) |

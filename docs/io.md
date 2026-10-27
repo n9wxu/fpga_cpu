@@ -155,7 +155,8 @@ To issue a command:
 | F0050C / F0050E | RW | `FS_BUF` | buffer address |
 | F00510 | RW | `FS_LEN` | byte count |
 | F00512 | R | `FS_RESULT` | signed: a value of 0 or more is the result; a negative value is an error |
-| F00514 / F00516 | R | `FS_SIZE` | file size from `DIR_NEXT` |
+| F00514 / F00516 | R | `FS_SIZE` | file size from `DIR_NEXT` or `SIZE` |
+| F00518 / F0051A | RW | `FS_POS` | byte position for `SEEK` |
 
 | Cmd | Name | Uses | Result |
 |---|---|---|---|
@@ -166,6 +167,12 @@ To issue a command:
 | 5 | `DELETE` | name | 0 |
 | 6 | `DIR_OPEN` | — | 0 |
 | 7 | `DIR_NEXT` | buf (at least 13 bytes) | 1 = name written to buf (NUL-terminated) and size in `FS_SIZE`; 0 = no more entries |
+| 8 | `SEEK` | handle, pos | 0; the next `READ` or `WRITE` starts at byte pos |
+| 9 | `SIZE` | handle | 0, with the open file's size in `FS_SIZE` |
+
+`FS_LEN` is 16 bits and `FS_RESULT` is signed, so one `READ` or `WRITE`
+moves at most 32,767 bytes. On the RP2350, `SEEK` and `SIZE` map onto
+FatFs's `f_lseek` and `f_size`.
 
 Errors: −1 not found, −2 bad handle, −3 no free handle, −4 I/O error, −5 bad
 name.

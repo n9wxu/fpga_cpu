@@ -19,7 +19,7 @@ struct cpu;
 #define IO_KBD_MOD   0xF00102u
 #define IO_VID       0xF00200u /* video registers F00200-F0021F */
 #define IO_SND       0xF00400u /* 3 voices x 8 bytes */
-#define IO_FS        0xF00500u /* file service F00500-F00517 */
+#define IO_FS        0xF00500u /* file service F00500-F0051B */
 #define IO_BOARD     0xF00600u /* board I/O F00600-F00609 */
 
 /* video register indices (word offset from IO_VID) */
@@ -68,7 +68,7 @@ typedef struct iodev {
     FILE *fh[FS_HANDLES];
     uint16_t fs_handle, fs_mode, fs_len;
     int16_t fs_result;
-    uint32_t fs_name, fs_buf, fs_size;
+    uint32_t fs_name, fs_buf, fs_size, fs_pos;
     char **dir_list;
     int dir_n, dir_pos;
     /* board */

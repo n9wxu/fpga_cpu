@@ -21,6 +21,7 @@ void opts_usage(int gui)
             "                    ports = a full second register write port\n"
             "  --branch-pen N    taken-branch penalty (default 2)\n"
             "  --video P:B       video steals B of every P port cycles (default 56:4 = 7%%, 0:0 = off)\n"
+            "  --xram MB         simulator-only expansion RAM at 0x100000, up to 14 MB (default none)\n"
             "  --max-cycles N    stop after N cycles (default %s)\n"
             "  --disk DIR        host directory served by the file service (default ./disk)\n"
             "  --sym FILE        symbol file (lines of \"%%06x name\")\n"
@@ -84,6 +85,7 @@ int opts_parse(opts_t *o, int argc, char **argv, int gui)
         else if (!strcmp(a, "--icache") && more) o->cfg.icache_bytes = num(argv[++i]);
         else if (!strcmp(a, "--line") && more) o->cfg.line_bytes = num(argv[++i]);
         else if (!strcmp(a, "--no-prefetch")) o->cfg.prefetch = 0;
+        else if (!strcmp(a, "--xram") && more) o->cfg.xram_mb = num(argv[++i]);
         else if (!strcmp(a, "--fuse")) o->cfg.fuse = FU_ALL;
         else if (!strncmp(a, "--fuse=", 7)) {
             if (parse_fuse(a + 7, &o->cfg.fuse))
@@ -138,8 +140,12 @@ int load_image(cpu_t *c, const char *path, uint32_t load)
         perror(path);
         return 0;
     }
+    if (load < ROM_BASE && load >= c->ram_size) {
+        fprintf(stderr, "%s: load address %06x is not RAM (expansion RAM needs --xram)\n", path, load);
+        return 0;
+    }
     uint8_t *dst = load >= ROM_BASE ? c->rom + (load - ROM_BASE) : c->sram + load;
-    size_t room = load >= ROM_BASE ? ROM_SIZE - (load - ROM_BASE) : SRAM_SIZE - load;
+    size_t room = load >= ROM_BASE ? ROM_SIZE - (load - ROM_BASE) : c->ram_size - load;
     size_t n = fread(dst, 1, room, f);
     fclose(f);
     if (!n)

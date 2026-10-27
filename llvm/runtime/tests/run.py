@@ -59,20 +59,22 @@ def main(argv):
             fails += 1
             continue
         want = sh([host]).stdout
-        for v in ("A", "B"):
-            binp = os.path.join(BUILD, f"{name}.{v}.bin")
-            r = sh([FCC, "-q", "-v", v, t, "-o", binp, "--stats"])
+        # both encodings, and the 32-bit int build (variant A) with its own runtime
+        for v, int32 in (("A", False), ("B", False), ("A", True)):
+            tag = v + ("/int32" if int32 else "")
+            binp = os.path.join(BUILD, f"{name}.{v}{'.int32' if int32 else ''}.bin")
+            r = sh([FCC, "-q", "-v", v, t, "-o", binp, "--stats"] + (["--int32"] if int32 else []))
             if r.returncode:
-                print(f"{name:10} {v} compile failed\n{r.stdout}{r.stderr}")
+                print(f"{name:10} {tag} compile failed\n{r.stdout}{r.stderr}")
                 fails += 1
                 continue
-            r = sh([FSIM, "-q", "-v", v, "--max-cycles", "200000000", binp])
+            r = sh([FSIM, "-q", "-v", v, "--max-cycles", "200000000", "--disk", os.path.join(BUILD, "disk"), binp])
             bad = compare(want, r.stdout)
             if r.returncode:
                 bad.insert(0, f"exit {r.returncode} {r.stderr.strip()}")
             status = "ok" if not bad else "FAIL"
             fails += bool(bad)
-            print(f"{name:10} {v}  {status}")
+            print(f"{name:10} {tag:8} {status}")
             for b in bad[: (50 if verbose else 6)]:
                 print("    " + b)
     print("all tests passed" if not fails else f"{fails} failure(s)")

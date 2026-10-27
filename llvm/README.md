@@ -20,12 +20,34 @@ encoding stays measurable.
 | Path | Contents |
 |---|---|
 | `target/FCPU/` | The backend (symlinked into the checkout as `llvm/lib/Target/FCPU`) |
-| `clang/` | clang target info: `int` 16 bits; `long`, pointers and `size_t` 32 bits; `float` = `double` = IEEE single |
+| `clang/` | clang target info: `int` 16 bits (32 with the `int32` environment, `fcc --int32`); `long`, pointers and `size_t` 32 bits; `float` = `double` = IEEE single |
 | `patches/` | Edits to existing LLVM files: `Triple`, clang registration, and a libc++ fix needed on the macOS 27 SDK |
 | `runtime/asm/` | `crt0`, 32-bit multiply, 16/32-bit divide, variable 32-bit shifts, `setjmp`/`longjmp` |
 | `runtime/libc/`, `runtime/libm/`, `runtime/include/` | Freestanding libc subset (string, stdlib, malloc, console printf) and single-precision math |
 | `runtime/tests/` | Compiler tests, each run on the host and on both variants and compared |
 | `fcc` | Driver: clang → assembly → `asm.py` link with crt0 and only the runtime files needed. Soft-float and 64-bit helpers come from compiler-rt sources. |
+
+## fcc options
+
+| Option | Effect |
+|---|---|
+| `-v A\|B` | encoding variant |
+| `--int32` | 32-bit `int` (target `fcpu-unknown-unknown-int32`), linked against a runtime built the same way (`runtime/build-int32/`), for C written for 32-bit machines |
+| `--base ADDR` | load address (default `0x1000`) |
+| `--stack ADDR` | initial stack pointer (default `0x053400`, below the sprite buffers). The heap runs from the end of BSS to 16 KB below it. Programs above `0x0FFFFF` need `fsim --xram`. |
+| `--cflag FLAG` | pass a flag to clang for your files, e.g. `--cflag=-std=gnu89` |
+| `--stats`, `--lst`, `--keep` | encoding statistics, listing, keep the `.s` files |
+
+## Runtime library
+
+`runtime/` is a freestanding C library: `string.h` and `strings.h`,
+`stdlib.h` (malloc, qsort, strtol, strtod, ...), `ctype.h`, `math.h`
+(single precision), `setjmp.h`, `errno.h`, `assert.h`, `inttypes.h`,
+`time.h` (`clock()` counts CPU cycles / 16), and `stdio.h`: printf and
+scanf families, and `FILE` streams. stdout and stderr are the console;
+files go through the file service (docs/io.md), with flat 8.3 names (any
+directory in a path is dropped), `fseek` through its `SEEK` command, and
+no `rename`.
 
 ## Code generation notes
 

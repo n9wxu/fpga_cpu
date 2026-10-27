@@ -4,6 +4,10 @@
 // int = 16 bits; long, pointers and size_t = 32 bits; float and double are
 // both IEEE single (like AVR), so only single-precision soft-float is needed.
 //
+// The int32 environment (--target=fcpu-unknown-unknown-int32) makes int 32
+// bits, for C written for 32-bit machines (Doom, CoreMark). Code built that
+// way must be linked with a runtime built the same way (fcc --int32).
+//
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_CLANG_LIB_BASIC_TARGETS_FCPU_H
@@ -48,6 +52,10 @@ public:
     WIntType = SignedInt;
     Char32Type = UnsignedLong;
     SigAtomicType = SignedInt;
+    if (Triple.getEnvironmentName() == "int32") {
+      IntWidth = 32;
+      Char16Type = UnsignedShort;
+    }
     resetDataLayout("e-m:e-p:32:16-i32:16-i64:16-f32:16-f64:16-a:8-n16-S16");
   }
 
