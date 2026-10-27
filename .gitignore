@@ -13,6 +13,7 @@ cpu/gen/*.tmp
 
 # Simulator / C builds
 build/
+build-int32/
 *.o
 *.d
 *.a
