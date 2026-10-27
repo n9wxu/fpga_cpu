@@ -38,7 +38,8 @@ The host build reads its environment:
 | `src/stmt.c` | Statements, run loop, prompt, files |
 | `src/num.c` | Number formatting and parsing (float only, no libc) |
 | `src/con.c` | 80×25 text console and screen editor |
-| `src/gfx.c` | Bitmap drawing, pictures, sprite sheets, software sprites, sound registers |
+| `src/gfx.c` | Bitmap drawing, the palette and its copy in RAM, mapping image colors, `PICTURE`, `STAMP`, sound registers |
+| `src/sprite.c` | Sheets (the image cache), sprite attributes, motion, animation, rotation and scaling, collision, drawing |
 | `src/image.c` | JPEG and PNG decoders, streaming rows from the file service |
 | `tools/` | `imgdump.c` + `imgcheck.py`: the decoders against reference results (`make imgcheck`); `mkassets.py` draws the test and example images |
 
@@ -63,6 +64,8 @@ Keywords must be separated from names by a space or punctuation (`FOR I=1
 TO 10`), except that a keyword may run straight into digits (`GOTO100`).
 Lowercase is accepted and listed as uppercase; strings and `REM`/`DATA`
 text keep their case.
+Every keyword is reserved, so a variable can't be named `MOVE`, `SCALE`,
+`HIT`, `PAL`, `FRAME` or any other statement or function word.
 
 ## Values
 
@@ -155,7 +158,7 @@ Colors 0–7 are black, blue, green, cyan, red, magenta, yellow, white.
 |---|---|
 | `TEXT` | text only: bitmap and sprites off |
 | `GR` | 640×360 8-color bitmap on, cleared to transparent |
-| `HGR` | hi-color bitmap on, with a default palette, cleared to 0. The palette is: 0 transparent, 1–7 primaries, 8 black, 9–15 dim primaries, 16–231 a 6×6×6 cube, 232–255 grays. |
+| `HGR` | hi-color bitmap on, with the default palette (see below), cleared to 0 |
 | `GCLS [c]` | clear the bitmap (default transparent) |
 | `BACKDROP c` | backdrop color behind every layer (default blue) |
 | `PEN c` | drawing color: 0–15 in GR (8–15 are transparent), 0–255 in HGR |
@@ -163,62 +166,105 @@ Colors 0–7 are black, blue, green, cyan, red, magenta, yellow, white.
 | `LINE x1,y1 TO x2,y2 [TO x3,y3 ...]` / `LINE TO x,y` | lines; `LINE TO` starts from the last point |
 | `BOX x1,y1,x2,y2[,fill]` | rectangle, filled if fill is nonzero |
 | `CIRCLE x,y,r[,fill]` | circle, filled if fill is nonzero |
-| `PALETTE i, r, g, b` | set a hi-color palette entry, components 0–255 |
 | `SCROLL x, y` | hardware scroll of the bitmap |
 | `PICTURE "file" [, x, y] [PALETTE base]` | draw a JPEG or PNG into the bitmap with its top-left corner at x, y (default 0, 0), clipped to the screen. It turns on `HGR` if no bitmap is on. Transparent PNG pixels leave the bitmap as it was. |
+| `STAMP s, f, x, y [, flip]` | copy frame f of sheet s into the bitmap, its hot spot at x, y. Transparent pixels are skipped. |
 
-**Pictures and colors.** The file's type comes from its contents, not
-its name, but the name must include the extension.
+### Palette
 
-- In `HGR`, JPEG pictures are dithered (Floyd–Steinberg) to the 6×6×6
-  color cube, entries 16–231. PNG pixels take the nearest color in the
-  cube or the gray ramp, without dithering, so pixel art stays crisp.
+The palette belongs to the program. `HGR` loads a default one (0
+transparent, 1–7 primaries, 8 black, 9–15 dim primaries, 16–231 a 6×6×6
+cube, 232–255 grays), but a game is expected to design its own palette
+and draw its sheets with it. The bitmap and the sprites share the 256
+entries, and changing an entry changes everything drawn with it, which
+is also how palette animation works.
+
+| Statement / function | Effect |
+|---|---|
+| `PALETTE i, r, g, b` | set entry i, components 0–255 |
+| `PALETTE LOAD "file" [, base]` | load a palette into entries base (default 0) and up: a GIMP `.GPL` or JASC `.PAL` file (the formats Aseprite and Lospec use), the palette of an indexed PNG (as many entries as fit), or the distinct colors of any other image in reading order (a palette strip). |
+| `PALETTE ROTATE first, last [, n]` | rotate the colors of entries first..last by n places (default 1, negative the other way). Call it after `VSYNC` for color cycling. |
+| `PAL(i, c)` | component c (0 red, 1 green, 2 blue) of entry i |
+
+How images take their colors, for `PICTURE`, `SHEET` and `STAMP`:
+
+- **Indexed PNG** (what Aseprite saves for a sprite in indexed mode)
+  keeps its own index numbers: the program loads the matching palette.
+  With `PALETTE base`, the file's palette is loaded into entries base up
+  and its indices are shifted up by base, so a sheet can bring its colors
+  along to any free range.
+- **True-color pixels** take the nearest entry of the current palette.
+  JPEG pictures are dithered (Floyd–Steinberg) against it, so set the
+  palette up before drawing a photo. With `PALETTE base`, each distinct
+  color instead gets its own entry from base up, in order of appearance.
+- **Transparency** comes from the file's alpha (PNG `tRNS` or alpha
+  channel). Entry 0 is always transparent, so a pixel that maps to 0 is
+  never seen: design palettes with entry 0 as the transparent color.
 - In `GR`, pictures are reduced to the 8 colors: JPEG with an ordered
-  dither, PNG by rounding each channel.
-- `PALETTE base` (`HGR` only) gives each distinct color in the file its
-  own palette entry, from `base` up, in the order the colors first
-  appear, so the picture keeps its exact colors. It fails with `?TOO MANY
-  COLORS` if they don't fit below 256.
-- The palette is shared by the bitmap and the sprites, and changing an
-  entry changes everything drawn with it. JPEG pictures never use the
-  gray ramp, so `PALETTE 232` gives up to 24 exact colors without
-  disturbing them. Entries 1–8 are the colors of `SPRITE ... DEFINE`.
-- `HGR` reloads the default palette, so load pictures and sheets after it.
+  dither, the rest by rounding each channel. `PALETTE` can't be used
+  there.
+- `HGR` reloads the default palette, so set up palettes after it.
 
-Supported: baseline JPEG (gray or color, any common chroma subsampling,
-restart markers) and every kind of PNG except interlaced. Progressive
-JPEG, CMYK JPEG and interlaced PNG fail with `?IMAGE FORMAT ERROR`.
-Pictures are not scaled, so make photos 640×360 or smaller on the host.
+The file's type comes from its contents, but the name must include the
+extension. Supported: baseline JPEG (gray or color, any common chroma
+subsampling, restart markers) and every kind of PNG except interlaced.
+Progressive JPEG, CMYK JPEG and interlaced PNG fail with `?IMAGE FORMAT
+ERROR`. Pictures are not scaled, so make photos 640×360 or smaller.
 
-### Sprites
+### Sheets and sprites
 
-There are 16 sprites, numbered 0–15. Sprites are drawn in software into
-the hidden 8 bpp sprite buffer, through the same 256-color palette as
-`HGR`, in every graphics mode. Changes appear on the next `VSYNC`. Sprite
-0 is drawn first, so higher numbers are in front.
-
-A sprite shows either its own pixels, given with `DEFINE` (up to 32×32),
-or a frame of a sprite sheet (up to 255×255).
+Images are loaded once and cached as **sheets** (0–15), stored like
+arrays: `RUN`, `CLEAR` and editing the program drop them. A sheet is cut
+into frames, numbered left to right, then top to bottom. Its **hot
+spot** is the point of every frame that positions refer to, and that
+sprites turn and scale about.
 
 | Statement | Effect |
 |---|---|
-| `SPRITE n DEFINE w, h, s$[, s$...]` | define a sprite. Each character is one pixel: `0`–`7` a color, anything else transparent. Rows run left to right, top to bottom. |
-| `SPRITE n DEFINE w, h READ` | read h rows from `DATA` |
-| `SHEET s, "file", w, h [PALETTE base]` | load sheet s (0–7) from a PNG (or JPEG) and cut it into w×h frames, numbered left to right, then top to bottom. Leftover pixels at the right and bottom edges are ignored. Transparent PNG pixels are transparent in the sprites. Colors map as for `PICTURE`, without dithering. |
-| `SPRITE n FRAME s, f [, flip]` | show frame f of sheet s. flip: 1 mirrors left to right, 2 top to bottom, 3 both. |
-| `SPRITE n AT x, y` / `SPRITE n OFF` | show a sprite at a position, or hide it |
-| `VSYNC` | draw the sprites into the hidden buffer, wait for vertical blank, and swap. Without sprite changes it just waits one frame. |
+| `SHEET s, "file" [, w, h] [PALETTE base]` | load sheet s and cut it into w×h frames; without w, h the whole image is one frame. Leftover pixels at the right and bottom are ignored. |
+| `SHEET s HOTSPOT x, y` | set the hot spot (default 0, 0, the top-left corner) |
 
-Sheets are kept with the arrays: `RUN`, `CLEAR` and editing the program
-drop them, and the sprites that showed them are hidden. A typical
-animation loop:
+There are 16 **sprites**, 0–15. Each is a set of attributes, like a
+hardware sprite table: its frame, position, velocity, rotation, spin,
+scale, flip and animation. `VSYNC` moves and animates every sprite by
+one frame, draws them into the hidden 8 bpp sprite buffer (sprite 0
+first, so higher numbers are in front), waits for vertical blank and
+shows it. Sprites look the same over either bitmap mode.
+
+| Statement / function | Effect |
+|---|---|
+| `SPRITE n FRAME s, f [, flip]` | show frame f of sheet s (stops any animation) |
+| `SPRITE n DEFINE w, h, s$[, s$...]` / `... READ` | give the sprite its own pixels instead, up to 32×32, one character each: `0`–`7` the 8 colors (palette entries 8 and 1–7), anything else transparent. Rows run left to right, top to bottom; `READ` takes h rows from `DATA`. |
+| `SPRITE n AT x, y` / `SPRITE n OFF` | put its hot spot at x, y and show it, or hide it |
+| `SPRITE n MOVE dx, dy` | velocity in pixels per frame, fractions allowed; `MOVE 0, 0` stops |
+| `SPRITE n ROTATE deg [, spin]` | turn it clockwise by deg degrees about the hot spot, and keep turning by spin degrees per frame |
+| `SPRITE n SCALE s [, sy]` | scale it about the hot spot, 0.125 to 8; sy for a different vertical scale |
+| `SPRITE n FLIP f` | 0 none, 1 left–right, 2 top–bottom, 3 both |
+| `SPRITE n ANIMATE first, last, rate` | step through frames first..last of its sheet (backwards if last < first), one step every rate frames, looping; rate 0 stops |
+| `VSYNC` | one frame, as above. Without changes it just waits one frame. |
+| `SPRX(n)`, `SPRY(n)` | where the sprite's hot spot is now |
+| `HIT(a, b)` | −1 if sprites a and b touch, 0 if not: pixel-exact, after rotation, scaling and flips. Hidden sprites never touch. |
+| `HIT(a)` | the lowest-numbered sprite touching a, or −1 |
+| `FRAMES(s)` | the number of frames in sheet s, 0 if none is loaded |
+
+Rotated and scaled sprites are drawn by mapping every screen pixel they
+cover back into the frame, so they cost time in proportion to the screen
+area they cover; plain sprites are a straight copy. Motion and animation
+step once per `VSYNC`, so a program that misses frames slows down
+instead of skipping ahead.
+
+A short example, `examples/WALKER.BAS` in full:
 
 ```basic
-10 PICTURE "VALLEY.JPG"
-20 SHEET 0, "WALKER.PNG", 24, 32 PALETTE 232
-30 FOR F = 0 TO 999
-40   SPRITE 0 FRAME 0, F MOD FRAMES(0): SPRITE 0 AT F MOD 616, 296: VSYNC
-50 NEXT
+40 HGR
+50 SHEET 0, "WALKER.PNG", 24, 32 PALETTE 232: SHEET 0 HOTSPOT 12, 31
+60 SHEET 1, "STAR.PNG" PALETTE 240: SHEET 1 HOTSPOT 16, 16
+70 PICTURE "VALLEY.JPG"
+80 SPRITE 0 FRAME 0, 0: SPRITE 0 AT 300, 326: SPRITE 0 ANIMATE 0, 7, 4
+...
+110 SPRITE I ROTATE 0, I * 2: SPRITE I SCALE 0.5 + I * 0.25: NEXT
+...
+160 IF D <> OD THEN SPRITE 0 MOVE D * 1.5, 0: SPRITE 0 FLIP -(D < 0): OD = D
 ```
 
 ### Sound
@@ -267,7 +313,7 @@ IF PEEK(&HF00604) AND 1 THEN PRINT "BTN0"
 | `RND(x)` | x > 0: the next random number in [0, 1). x = 0: the last one again. x < 0: reseed from x. |
 | Strings | `LEN ASC VAL STR$ CHR$ HEX$ LEFT$(s,n) RIGHT$(s,n) MID$(s,start[,n]) INSTR(s,t[,start])` |
 | Input | `INKEY$` is the next key, or `""` if none. It doesn't wait. |
-| Screen | `POS(0)` is the cursor column. `POINT(x,y)` is a pixel's color, or −1 off-screen. `FRAMES(s)` is the number of frames in sheet s, 0 if none is loaded. |
+| Screen | `POS(0)` is the cursor column. `POINT(x,y)` is a pixel's color, or −1 off-screen. `PAL`, `FRAMES`, `SPRX`, `SPRY` and `HIT` are described with the palette and sprites. |
 | System | `TIME` is frames since power-on (60 per second). `FRE(0)` is free bytes, after a collection. `PEEK(a)` reads a byte, `DEEK(a)` a word. |
 
 ## Errors
@@ -287,7 +333,7 @@ All in `examples/`. Run them with `RUN "SPIRO"`.
 | `MUSIC.BAS` | a three-voice tune from `DATA` |
 | `HICOLOR.BAS` | hi-color palette bars and a palette-cycled disc |
 | `PRIMES.BAS` | the sieve benchmark, timed with `TIME` |
-| `WALKER.BAS` | an animated sprite sheet (`WALKER.PNG`) walking over a JPEG backdrop (`VALLEY.JPG`); arrow keys turn |
+| `WALKER.BAS` | an animated, moving sprite from an indexed sheet (`WALKER.PNG`) and spinning, scaled stars (`STAR.PNG`) over a JPEG backdrop (`VALLEY.JPG`); arrow keys turn |
 
 ## Internals
 

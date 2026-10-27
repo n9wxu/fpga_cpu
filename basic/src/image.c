@@ -97,19 +97,29 @@ uint8_t *img_alloc(uint32_t n)
 }
 
 static img_sink_t *sink;
-static uint8_t *rgba; /* one output row */
+static uint8_t *rgba;  /* one output row */
+static uint16_t rgba_w;
+static uint8_t *irow;  /* its palette indices (indexed PNG) */
 
-static void start(uint16_t w, uint16_t h, int photo)
+static void start(uint16_t w, uint16_t h, int photo, uint16_t npal, const uint8_t *pal)
 {
+    img_info_t in;
     if (!w || !h)
         img_fail(E_IF);
-    sink->start(sink, w, h, photo);
+    in.w = w;
+    in.h = h;
+    in.photo = (uint8_t)photo;
+    in.npal = npal;
+    in.pal = pal;
+    sink->start(sink, &in);
     rgba = (uint8_t *)salloc((uint32_t)w * 4u);
+    rgba_w = w;
+    irow = npal ? (uint8_t *)salloc(w) : NULL;
 }
 
 static void emit(uint16_t y)
 {
-    if (sink->row(sink, y, rgba))
+    if (sink->row(sink, y, rgba, irow))
         img_fail(IMG_STOP);
 }
 
@@ -658,7 +668,7 @@ static void jpeg_load(void)
                     img_fail(E_IF);
             }
             skip((uint32_t)len - 8u - 3u * ncomp);
-            start(jw, jh, 1);
+            start(jw, jh, 1, 0, NULL);
             break;
         }
         case 0xC4: read_dht(len); break;
@@ -854,6 +864,7 @@ static void png_row(void)
             if (v0 >= npal)
                 img_fail(E_IF);
             memcpy(o, pal + 4u * v0, 4);
+            irow[j] = (uint8_t)v0;
             break;
         case 4:
             o[0] = o[1] = o[2] = to8(v0);
@@ -1045,7 +1056,7 @@ static void png_load(void)
                 img_fail(E_OM);
             rowlen = (uint16_t)((bits + 7u) / 8u);
             pbpp = (uint8_t)(pch * pdepth >= 8 ? pch * pdepth / 8u : 1u);
-            start(pw, ph, 0);
+            start(pw, ph, 0, ptype == 3 ? npal : 0, pal);
             cur = (uint8_t *)salloc(rowlen + 1u);
             prv = (uint8_t *)salloc(rowlen + 1u);
             rpos = 0;
@@ -1062,30 +1073,164 @@ static void png_load(void)
     }
 }
 
+/* ---- palettes ----
+ * PALETTE LOAD reads an indexed PNG's own palette (every entry, in order),
+ * the distinct colors of any other image in the order they appear (a
+ * palette strip), or a GIMP (.GPL) or JASC (.PAL) palette text file.
+ */
+
+static uint8_t (*pal_out)[3];
+static int pal_n, pal_max;
+
+static void pal_add(uint8_t r, uint8_t g, uint8_t b, int dedup)
+{
+    int i;
+    if (dedup)
+        for (i = 0; i < pal_n; i++)
+            if (pal_out[i][0] == r && pal_out[i][1] == g && pal_out[i][2] == b)
+                return;
+    if (pal_n >= pal_max)
+        img_fail(E_TC);
+    pal_out[pal_n][0] = r;
+    pal_out[pal_n][1] = g;
+    pal_out[pal_n][2] = b;
+    pal_n++;
+}
+
+static uint8_t pal_indexed;
+
+static void pal_start(img_sink_t *s, const img_info_t *in)
+{
+    uint16_t i;
+    (void)s;
+    pal_indexed = in->npal != 0;
+    /* indexed files are often padded to 256 entries: take what fits */
+    for (i = 0; i < in->npal && pal_n < pal_max; i++)
+        pal_add(in->pal[4 * i], in->pal[4 * i + 1], in->pal[4 * i + 2], 0);
+}
+
+static int pal_row(img_sink_t *s, uint16_t y, const uint8_t *px, const uint8_t *idx)
+{
+    uint16_t x;
+    (void)s;
+    (void)y;
+    (void)idx;
+    if (pal_indexed)
+        return 1;
+    for (x = 0; x < rgba_w; x++, px += 4)
+        if (px[3] >= 128)
+            pal_add(px[0], px[1], px[2], 1);
+    return 0;
+}
+
+/* One text line into buf; returns 0 at the end of the file. */
+static int rdline(char *buf, int max)
+{
+    int n = 0, c;
+    while ((c = rdb()) >= 0 && c != '\n')
+        if (c != '\r' && n < max - 1)
+            buf[n++] = (char)c;
+    buf[n] = 0;
+    return c >= 0 || n > 0;
+}
+
+static void pal_text(void)
+{
+    char line[96];
+    while (rdline(line, (int)sizeof line)) {
+        int v[3], k = 0;
+        const char *q = line;
+        while (*q == ' ' || *q == '\t')
+            q++;
+        if (*q < '0' || *q > '9')
+            continue; /* names, comments, Columns: ... */
+        while (k < 3 && *q >= '0' && *q <= '9') {
+            int x = 0;
+            while (*q >= '0' && *q <= '9')
+                x = x * 10 + (*q++ - '0');
+            if (x > 255)
+                img_fail(E_IF);
+            v[k++] = x;
+            while (*q == ' ' || *q == '\t')
+                q++;
+        }
+        if (k == 3)
+            pal_add((uint8_t)v[0], (uint8_t)v[1], (uint8_t)v[2], 0);
+        /* JASC's version and count lines have one number each: skipped */
+    }
+}
+
 /* ---- entry ---- */
 
-void img_load(const char *name, img_sink_t *s)
+static void (*job)(void);
+
+static void run(const char *name)
 {
     int e;
     img_fh = hal_fopen(name, 0);
     if (img_fh < 0)
         error(E_FNF);
-    sink = s;
     fpos = flen = 0;
     str_gc();
     scr_lo = str_bot;
     e = setjmp(img_jb);
     if (!e) {
-        uint8_t b = rd8();
-        if (b == 0xFF)
-            jpeg_load();
-        else if (b == 0x89)
-            png_load();
-        else
-            img_fail(E_IF);
+        job();
         e = IMG_STOP + 1;
     }
     hal_fclose(img_fh);
     if (e != IMG_STOP + 1)
         error(e - 1);
+}
+
+static void image_job(void)
+{
+    uint8_t b = rd8();
+    if (b == 0xFF)
+        jpeg_load();
+    else if (b == 0x89)
+        png_load();
+    else
+        img_fail(E_IF);
+}
+
+void img_load(const char *name, img_sink_t *s)
+{
+    sink = s;
+    job = image_job;
+    run(name);
+}
+
+static void palette_job(void)
+{
+    static img_sink_t ps = { pal_start, pal_row };
+    char head[12];
+    int i, b = rd8();
+    if (b == 0xFF || b == 0x89) {
+        sink = &ps;
+        if (b == 0xFF)
+            jpeg_load();
+        else
+            png_load();
+        return;
+    }
+    head[0] = (char)b;
+    for (i = 1; i < 8; i++)
+        head[i] = (char)rd8();
+    head[8] = 0;
+    if (memcmp(head, "GIMP Pal", 8) && memcmp(head, "JASC-PAL", 8))
+        img_fail(E_IF);
+    while (rdb() >= 0 && fbuf[fpos - 1] != '\n')
+        ; /* rest of the header line */
+    pal_text();
+}
+
+int img_palette(const char *name, uint8_t (*out)[3], int max)
+{
+    pal_out = out;
+    pal_n = 0;
+    pal_max = max;
+    job = palette_job;
+    run(name);
+    return pal_n;
 }

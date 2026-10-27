@@ -10,7 +10,7 @@
 CC      ?= cc
 CFLAGS  ?= -O2 -g -std=c99 -Wall -Wextra -fno-strict-aliasing
 BUILD   := build
-COMMON  := src/core.c src/eval.c src/stmt.c src/num.c src/con.c src/gfx.c src/image.c
+COMMON  := src/core.c src/eval.c src/stmt.c src/num.c src/con.c src/gfx.c src/sprite.c src/image.c
 HDRS    := src/basic.h src/hal.h
 TESTS   := $(sort $(wildcard tests/*.bas))
 SRCS    := $(COMMON) src/hal_fcpu.c

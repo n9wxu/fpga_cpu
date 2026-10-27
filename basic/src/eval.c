@@ -684,6 +684,38 @@ static void e_primary(void)
     case KW_FRAMES:
         push_int(sheet_frames(to_i16(paren_num())));
         return;
+    case KW_SPRX:
+    case KW_SPRY:
+        push_int(spr_pos(to_i16(paren_num()), t == KW_SPRY));
+        return;
+    case KW_HIT: { /* HIT(a, b): -1 if they touch; HIT(a): the lowest sprite touching a, or -1 */
+        int16_t a, b = -1;
+        need('(');
+        expr();
+        a = pop_i16();
+        if (*ip == ',') {
+            ip++;
+            expr();
+            b = pop_i16();
+            if (b < 0)
+                error(E_FC);
+        }
+        need(')');
+        push_int(spr_hit(a, b));
+        return;
+    }
+    case KW_PAL: { /* PAL(i, c): component c (0 red, 1 green, 2 blue) of palette entry i */
+        int16_t i, c;
+        need('(');
+        expr();
+        need(',');
+        expr();
+        need(')');
+        c = pop_i16();
+        i = pop_i16();
+        push_int(gfx_pal_get(i, c));
+        return;
+    }
     case KW_POINT: {
         int16_t x, y;
         need('(');

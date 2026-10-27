@@ -9,6 +9,7 @@
  */
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "../src/basic.h"
 
@@ -43,18 +44,28 @@ int hal_fclose(int h)
 static FILE *out;
 static uint16_t ow;
 
-static void start(img_sink_t *s, uint16_t w, uint16_t h, int photo)
+static const uint8_t *pal;
+static uint16_t npal;
+
+static void start(img_sink_t *s, const img_info_t *in)
 {
     (void)s;
-    (void)photo;
-    ow = w;
-    fprintf(out, "P7\nWIDTH %u\nHEIGHT %u\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n", w, h);
+    ow = in->w;
+    pal = in->pal;
+    npal = in->npal;
+    fprintf(out, "P7\nWIDTH %u\nHEIGHT %u\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n", in->w, in->h);
 }
 
-static int row(img_sink_t *s, uint16_t y, const uint8_t *rgba)
+/* For indexed files, the index row must agree with the RGBA row. */
+static int row(img_sink_t *s, uint16_t y, const uint8_t *rgba, const uint8_t *idx)
 {
+    uint16_t x;
     (void)s;
-    (void)y;
+    for (x = 0; idx && x < ow; x++)
+        if (idx[x] >= npal || memcmp(pal + 4 * idx[x], rgba + 4 * x, 4)) {
+            printf("?INDEX MISMATCH at %u,%u\n", x, y);
+            exit(3);
+        }
     fwrite(rgba, 4, ow, out);
     return 0;
 }

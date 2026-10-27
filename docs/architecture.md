@@ -27,7 +27,8 @@ RP2350 expansion board, on headers A2/B1:
 - Link to the FPGA: 2–3 Mbaud UART plus an IRQ line
 
 Future expansion, **not designed yet**: better video (VRAM, HDMI), sound,
-storage and game-controller input.
+storage and game-controller input, and a sprite engine with its own
+sprite RAM (see Video).
 
 ## CPU
 
@@ -118,6 +119,31 @@ heap and stack. Video takes the other 691 KB.
   benchmarks that costs 0.5% more CPU cycles if scan-out reads are
   spread through the line (`--video 25:4` against `32:4`), or 4% if
   each line is read in one burst (`2222:360` against `2222:280`).
+- **Sprites today, and a sprite engine later.** BASIC already splits
+  sprites the way a hardware engine would:
+  - *Sheets* are images decoded once into memory as palette indices: the
+    contents a sprite RAM would hold. Once loaded they are rarely
+    rewritten.
+  - *Sprite attributes* are a table of 16 entries: sheet and frame, hot
+    spot, position, velocity, rotation, spin, scale, flip and animation.
+    `VSYNC` steps velocity, spin and animation once per frame.
+  - *Drawing* walks each sprite's screen box and maps every pixel back
+    into its frame through a 2×2 inverse transform (16.16 fixed point,
+    two adds per pixel along a row). This is the loop an affine sprite
+    engine would run in hardware, line by line, from a banked sprite RAM,
+    with no frame buffer for sprites at all.
+  - *Collision* (`HIT`) samples both sprites through the same mapping,
+    so it stays pixel-exact under rotation and scaling. Hardware could
+    flag overlaps of non-transparent pixels as it composites.
+
+  In software, a rotated or scaled sprite costs time in proportion to
+  the screen area it covers, roughly a dozen instructions per pixel by
+  inspection (not yet measured on the target). A 64×64 sprite turned 45°
+  covers about 8,000 pixels, a few milliseconds of a 16.7 ms frame, so
+  only a handful of large rotated sprites fit in one frame. That is the
+  case for the hardware engine. A banked sprite RAM (external, since 12
+  block RAMs hold only 24 KB) would also give the 460 KB of sprite
+  buffers back to programs.
 - **Palette.** Bitmap and sprites both look up the one 256-entry palette.
   Each logical pixel lasts two pixel clocks, so one block-RAM port can
   serve both lookups by alternating, with the other port left for CPU

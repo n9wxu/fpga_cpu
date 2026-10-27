@@ -1,0 +1,8 @@
+GIMP Palette
+Name: Game
+Columns: 4
+#
+ 10  20  30	color
+200 100  50	color
+255 255 255	color
+  0 128 255	color

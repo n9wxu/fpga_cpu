@@ -95,16 +95,19 @@ typedef union {
     K(LOCATE, "LOCATE") K(COLOR, "COLOR") K(TEXT, "TEXT") K(BACKDROP, "BACKDROP") K(GR, "GR")      \
     K(HGR, "HGR") K(GCLS, "GCLS") K(PEN, "PEN") K(PLOT, "PLOT") K(LINE, "LINE") K(BOX, "BOX")      \
     K(CIRCLE, "CIRCLE") K(PALETTE, "PALETTE") K(SPRITE, "SPRITE") K(VSYNC, "VSYNC")                \
-    K(PICTURE, "PICTURE") K(SHEET, "SHEET")                                                        \
+    K(PICTURE, "PICTURE") K(SHEET, "SHEET") K(STAMP, "STAMP")                                      \
     K(SOUND, "SOUND") K(WAVE, "WAVE") K(BEEP, "BEEP") K(PAUSE, "PAUSE") K(SCROLL, "SCROLL")        \
     K(ELSE, "ELSE") K(THEN, "THEN") K(TO, "TO") K(STEP, "STEP") K(AND, "AND") K(OR, "OR")          \
     K(NOT, "NOT") K(MOD, "MOD") K(AT, "AT") K(OFF, "OFF") K(DEFINE, "DEFINE") K(FRAME, "FRAME")    \
+    K(HOTSPOT, "HOTSPOT") K(MOVE, "MOVE") K(ROTATE, "ROTATE") K(SCALE, "SCALE")                   \
+    K(ANIMATE, "ANIMATE") K(FLIP, "FLIP")                                                          \
     K(ABS, "ABS") K(INT, "INT") K(SGN, "SGN") K(SQR, "SQR") K(SIN, "SIN") K(COS, "COS")            \
     K(TAN, "TAN") K(ATN, "ATN") K(EXP, "EXP") K(LOG, "LOG") K(RND, "RND") K(LEN, "LEN")            \
     K(LEFTS, "LEFT$") K(RIGHTS, "RIGHT$") K(MIDS, "MID$") K(CHRS, "CHR$") K(ASC, "ASC")            \
     K(STRS, "STR$") K(VAL, "VAL") K(HEXS, "HEX$") K(INSTR, "INSTR") K(FRE, "FRE")                  \
     K(PEEK, "PEEK") K(DEEK, "DEEK") K(POS, "POS") K(TIME, "TIME") K(INKEYS, "INKEY$")              \
-    K(POINT, "POINT") K(FRAMES, "FRAMES") K(TAB, "TAB") K(SPC, "SPC") K(FN, "FN")
+    K(POINT, "POINT") K(FRAMES, "FRAMES") K(HIT, "HIT") K(SPRX, "SPRX") K(SPRY, "SPRY") K(PAL, "PAL") \
+    K(TAB, "TAB") K(SPC, "SPC") K(FN, "FN")
 
 enum {
     KW_FIRST_ = 0x7F,
@@ -221,29 +224,61 @@ void spr_at(int n, int16_t x, int16_t y);
 void spr_off(int n);
 void spr_flush(void);
 void vsync(void);
-void spr_frame(int s, int sheet, int f, int flip);
-void gfx_picture(const char *name, int16_t x, int16_t y, int palbase); /* palbase < 0: default palette */
-void sheet_load(int n, const char *name, int fw, int fh, int palbase);
+int gfx_pal_get(int i, int c);
+void gfx_pal_rotate(int first, int last, int n);
+void gfx_pal_load(const char *name, int base);
+void gfx_picture(const char *name, int16_t x, int16_t y, int palbase); /* palbase < 0: current palette */
+void gfx_stamp(int s, int f, int16_t x, int16_t y, int flip);
+
+/* ---- sheets and sprites (sprite.c) ---- */
+typedef struct {
+    const uint8_t *pix; /* palette indices, 0 transparent */
+    uint16_t w, h, stride;
+    int16_t hx, hy;     /* hot spot */
+} frame_t;
+void sheet_load(int n, const char *name, int fw, int fh, int palbase); /* fw = 0: one frame */
+void sheet_hotspot(int n, int16_t x, int16_t y);
 int sheet_frames(int n);
+void sheet_frame(int n, int f, frame_t *fr);
 void sheets_reset(void); /* sheets live in the array area: CLEAR, RUN and edits drop them */
+void spr_frame(int s, int sheet, int f, int flip);
+void spr_move(int n, float dx, float dy);              /* velocity, pixels per frame */
+void spr_turn(int n, float deg, float spin);             /* rotation and its rate, degrees */
+void spr_scale(int n, float sx, float sy);
+void spr_flip(int n, int flip);
+void spr_animate(int n, int first, int last, int rate);
+int spr_pos(int n, int y); /* SPRX / SPRY */
+int spr_hit(int a, int b); /* b < 0: the lowest sprite touching a, or -1 */
 void snd_set(int v, uint16_t freq, int vol, int16_t frames);
 void snd_wave(int v, int w);
 void snd_poll(void);
 
 /* ---- images (image.c) ----
  * img_load() decodes a JPEG or PNG file and hands each row to the sink as
- * RGBA, top to bottom. start() comes first, with the size; photo is set
- * for JPEG. The sink may keep memory with img_alloc() (it lives in the
- * array area) and borrow scratch with img_scratch() (gone afterwards).
- * row() returns nonzero when it wants no more rows. Inside a sink, report
- * errors with img_fail(), not error(), so the file gets closed.
+ * RGBA, top to bottom, plus the raw palette indices for an indexed PNG.
+ * start() comes first, with the size and the file's own palette. The sink
+ * may keep memory with img_alloc() (it lives in the array area) and borrow
+ * scratch with img_scratch() (gone afterwards). row() returns nonzero when
+ * it wants no more rows. Inside a sink, report errors with img_fail(),
+ * not error(), so the file gets closed.
  */
+typedef struct {
+    uint16_t w, h;
+    uint8_t photo;      /* JPEG: worth dithering */
+    uint16_t npal;      /* indexed PNG: palette entries (0 otherwise) */
+    const uint8_t *pal; /* npal x RGBA (alpha from tRNS) */
+} img_info_t;
+
 typedef struct img_sink img_sink_t;
 struct img_sink {
-    void (*start)(img_sink_t *s, uint16_t w, uint16_t h, int photo);
-    int (*row)(img_sink_t *s, uint16_t y, const uint8_t *rgba);
+    void (*start)(img_sink_t *s, const img_info_t *in);
+    int (*row)(img_sink_t *s, uint16_t y, const uint8_t *rgba, const uint8_t *idx); /* idx: indexed PNG only */
 };
 void img_load(const char *name, img_sink_t *s);
+int img_palette(const char *name, uint8_t (*out)[3], int max); /* PNG, JPEG, GIMP .GPL or JASC .PAL */
+void *cmap_new(const img_info_t *in, int palbase);              /* gfx.c: image colors to entries */
+uint8_t cmap_px(void *cm, const uint8_t *rgba, const uint8_t *idx, uint16_t x);
+uint8_t *arena_alloc(uint32_t n);                               /* core.c: array-area memory */
 uint8_t *img_alloc(uint32_t n);
 void *img_scratch(uint32_t n);
 void img_fail(int e) __attribute__((noreturn));

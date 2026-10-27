@@ -795,17 +795,86 @@ static void do_picture(void)
     gfx_picture(fname, x, y, opt_palbase());
 }
 
-/* SHEET n, "file", frame width, frame height [PALETTE base] */
+/* SHEET n, "file" [, frame width, frame height] [PALETTE base]
+ * SHEET n HOTSPOT x, y */
 static void do_sheet(void)
 {
-    int16_t n = arg_i16(), fw, fh;
+    int16_t n = arg_i16(), fw = 0, fh = 0;
+    if (*ip == KW_HOTSPOT) {
+        int16_t x, y;
+        ip++;
+        x = arg_i16();
+        comma();
+        y = arg_i16();
+        sheet_hotspot(n, x, y);
+        return;
+    }
     comma();
     get_fname_ext(0);
-    comma();
-    fw = arg_i16();
-    comma();
-    fh = arg_i16();
+    if (*ip == ',') {
+        ip++;
+        fw = arg_i16();
+        comma();
+        fh = arg_i16();
+        if (fw < 1 || fh < 1)
+            error(E_FC);
+    }
     sheet_load(n, fname, fw, fh, opt_palbase());
+}
+
+/* STAMP sheet, frame, x, y [, flip] */
+static void do_stamp(void)
+{
+    int16_t s = arg_i16(), f, x, y, flip = 0;
+    comma();
+    f = arg_i16();
+    comma();
+    x = arg_i16();
+    comma();
+    y = arg_i16();
+    if (*ip == ',') {
+        ip++;
+        flip = arg_i16();
+    }
+    gfx_stamp(s, f, x, y, flip);
+}
+
+/* PALETTE i, r, g, b / PALETTE LOAD "file" [, base] / PALETTE ROTATE first, last [, n] */
+static void do_palette(void)
+{
+    int16_t i, r, g, b;
+    if (*ip == KW_LOAD) {
+        ip++;
+        get_fname_ext(0);
+        i = 0;
+        if (*ip == ',') {
+            ip++;
+            i = arg_i16();
+        }
+        gfx_pal_load(fname, i);
+        return;
+    }
+    if (*ip == KW_ROTATE) {
+        ip++;
+        i = arg_i16();
+        comma();
+        r = arg_i16();
+        g = 1;
+        if (*ip == ',') {
+            ip++;
+            g = arg_i16();
+        }
+        gfx_pal_rotate(i, r, g);
+        return;
+    }
+    i = arg_i16();
+    comma();
+    r = arg_i16();
+    comma();
+    g = arg_i16();
+    comma();
+    b = arg_i16();
+    gfx_palette(i, r, g, b);
 }
 
 static void do_save(void)
@@ -1014,6 +1083,34 @@ static void do_sprite(void)
         spr_at(n, x, y);
     } else if (t == KW_OFF) {
         spr_off(n);
+    } else if (t == KW_FLIP) { /* SPRITE n FLIP f: 1 left-right, 2 top-bottom, 3 both */
+        spr_flip(n, arg_i16());
+    } else if (t == KW_MOVE) { /* SPRITE n MOVE dx, dy: pixels per frame */
+        float dx = arg_num(), dy;
+        comma();
+        dy = arg_num();
+        spr_move(n, dx, dy);
+    } else if (t == KW_ROTATE) { /* SPRITE n ROTATE degrees [, degrees per frame] */
+        float a = arg_num(), spin = 0;
+        if (*ip == ',') {
+            ip++;
+            spin = arg_num();
+        }
+        spr_turn(n, a, spin);
+    } else if (t == KW_SCALE) { /* SPRITE n SCALE s [, sy] */
+        float sx = arg_num(), sy;
+        sy = sx;
+        if (*ip == ',') {
+            ip++;
+            sy = arg_num();
+        }
+        spr_scale(n, sx, sy);
+    } else if (t == KW_ANIMATE) { /* SPRITE n ANIMATE first, last, rate */
+        int16_t a, b, r;
+        two(&a, &b);
+        comma();
+        r = arg_i16();
+        spr_animate(n, a, b, r);
     } else if (t == KW_FRAME) { /* SPRITE n FRAME sheet, frame [, flip] */
         int16_t sh, f, flip = 0;
         two(&sh, &f);
@@ -1225,14 +1322,7 @@ static void exec_stmt(uint8_t t)
         gfx_circle(x, y, r, f);
         return;
     }
-    case KW_PALETTE: {
-        int16_t i, r, g, b;
-        two(&i, &r);
-        comma();
-        two(&g, &b);
-        gfx_palette(i, r, g, b);
-        return;
-    }
+    case KW_PALETTE: do_palette(); return;
     case KW_SCROLL: {
         int16_t x, y;
         two(&x, &y);
@@ -1242,6 +1332,7 @@ static void exec_stmt(uint8_t t)
     case KW_SPRITE: do_sprite(); return;
     case KW_PICTURE: do_picture(); return;
     case KW_SHEET: do_sheet(); return;
+    case KW_STAMP: do_stamp(); return;
     case KW_VSYNC: vsync(); return;
     case KW_SOUND: {
         int16_t v, vol, d = 0;
