@@ -73,3 +73,6 @@ __pycache__/
 
 # Editor/clangd caches
 .cache/
+
+# Local settings
+web/local.mk

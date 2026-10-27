@@ -14,11 +14,15 @@ fi
 ln -sfn ../../../../target/FCPU llvm-project/llvm/lib/Target/FCPU
 ln -sfn ../../../../../clang/FCPU.h llvm-project/clang/lib/Basic/Targets/FCPU.h
 ln -sfn ../../../../../clang/FCPU.cpp llvm-project/clang/lib/Basic/Targets/FCPU.cpp
-cmake -G Ninja -S llvm-project/llvm -B build -DCMAKE_BUILD_TYPE=Release \
+# ccache, when installed, makes rebuilds after a backend change quick (used by CI)
+CCACHE=""
+command -v ccache >/dev/null && CCACHE="-DLLVM_CCACHE_BUILD=ON"
+cmake -G Ninja -S llvm-project/llvm -B build -DCMAKE_BUILD_TYPE=Release $CCACHE \
   -DLLVM_ENABLE_ASSERTIONS=ON -DLLVM_ENABLE_PROJECTS=clang \
   -DLLVM_TARGETS_TO_BUILD="" -DLLVM_EXPERIMENTAL_TARGETS_TO_BUILD=FCPU \
   -DBUILD_SHARED_LIBS=ON -DLLVM_OPTIMIZED_TABLEGEN=ON -DLLVM_INCLUDE_TESTS=OFF \
   -DLLVM_INCLUDE_BENCHMARKS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF \
   -DCLANG_ENABLE_STATIC_ANALYZER=OFF -DCLANG_ENABLE_ARCMT=OFF \
   -DLLVM_ENABLE_ZSTD=OFF -DLLVM_ENABLE_LIBXML2=OFF -DLLVM_ENABLE_ZLIB=OFF
-ninja -C build clang llc
+# NINJA_JOBS limits parallel jobs; some clang files need 2-3 GB each to compile
+ninja -C build ${NINJA_JOBS:+-j $NINJA_JOBS} clang llc

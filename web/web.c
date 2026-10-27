@@ -1,7 +1,7 @@
 /* fpga_cpu simulator: WebAssembly front end.
  *
  * Runs the BASIC image in the browser.  The page (index.html) calls the
- * web_* functions below: one web_frame per animation frame, web_key for
+ * web_* functions below: web_run and web_render once per animation frame, web_key for
  * keyboard input, web_sound from the audio callback.  The file service's
  * disk directory is /disk, an IndexedDB-backed folder the page mounts and
  * fills with the example programs on first use. */
@@ -37,16 +37,24 @@ EMSCRIPTEN_KEEPALIVE int web_boot(const char *vname)
     return 0;
 }
 
-/* Run up to `cycles` CPU cycles, then render.  Returns the RGBA frame
- * (1280x720), or 0 once the program has stopped. */
-EMSCRIPTEN_KEEPALIVE uint32_t *web_frame(double cycles)
+/* Run up to `cycles` CPU cycles (fewer if the program stops). */
+EMSCRIPTEN_KEEPALIVE void web_run(double cycles)
 {
     if (!ready)
-        return 0;
+        return;
     uint64_t end = cpu.st.cycles + (uint64_t)cycles;
     while (!cpu.halted && cpu.st.cycles < end)
         cpu_step(&cpu);
-    video_render(&cpu, px, 0, (dev_frame(cpu.st.cycles) / 16) % 2 == 0);
+}
+
+/* Render the display and return it as RGBA (1280x720), or 0 before boot.
+ * true_color 0 shows the hi-color bitmap as the board's 3-bit VGA does
+ * (2x2 dither), 1 shows the full 8-bit indexed palette. */
+EMSCRIPTEN_KEEPALIVE uint32_t *web_render(int true_color)
+{
+    if (!ready)
+        return 0;
+    video_render(&cpu, px, true_color, (dev_frame(cpu.st.cycles) / 16) % 2 == 0);
     /* 0x00RRGGBB -> canvas byte order R,G,B,A */
     for (int i = 0; i < SCREEN_W * SCREEN_H; i++) {
         uint32_t p = px[i];
