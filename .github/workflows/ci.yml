@@ -55,9 +55,11 @@ jobs:
       - name: Install build tools
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build ccache
 
+      # Restore and save are separate so a finished LLVM build is kept even
+      # when a later step fails.
       - name: Restore the LLVM build
         id: llvm
-        uses: actions/cache@v6
+        uses: actions/cache/restore@v6
         with:
           path: llvm/build
           key: llvm-${{ runner.os }}-${{ hashFiles('llvm/setup.sh', 'llvm/patches/**', 'llvm/target/**', 'llvm/clang/**') }}
@@ -74,6 +76,13 @@ jobs:
         env:
           NINJA_JOBS: 4   # the 16 GB runner runs out of memory with more
         run: llvm/setup.sh
+
+      - name: Save the LLVM build
+        if: steps.llvm.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: llvm/build
+          key: ${{ steps.llvm.outputs.cache-primary-key }}
 
       # With a cached build, only compiler-rt's builtins are needed from the
       # LLVM sources (llvm/fcc compiles them into the runtime library).

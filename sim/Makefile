@@ -23,7 +23,7 @@ all: $(BUILD)/fsim $(if $(HAVE_SDL),$(BUILD)/fsim-gui)
 $(PY): $(ROOT)/requirements.txt
 	python3 -m venv $(VENV)
 	$(VENV)/bin/pip -q install -r $(ROOT)/requirements.txt
-	touch $@
+	touch -h $@
 
 $(BUILD)/gen.stamp: $(ISA) $(TOOLS) $(PY)
 	@mkdir -p $(BUILD)
