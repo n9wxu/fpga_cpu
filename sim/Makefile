@@ -14,7 +14,7 @@ BUILD   := build
 
 ISA     := $(ROOT)/cpu/isa.yaml
 TOOLS   := tools/isa.py tools/gen.py
-CORE    := src/cpu.c src/dev.c src/video.c src/front.c src/font8x14.c src/gen/isa_gen.c src/gen/exec_gen.c
+CORE    := src/cpu.c src/dev.c src/video.c src/front.c src/dbg.c src/font8x14.c src/gen/isa_gen.c src/gen/exec_gen.c
 SRCS    := src/main.c $(CORE)
 
 HAVE_SDL := $(shell command -v sdl2-config 2>/dev/null)
@@ -32,7 +32,7 @@ $(BUILD)/gen.stamp: $(ISA) $(TOOLS) $(PY)
 
 src/gen/isa_gen.c src/gen/exec_gen.c src/gen/isa_gen.h: $(BUILD)/gen.stamp
 
-$(BUILD)/fsim: $(BUILD)/gen.stamp $(SRCS) src/cpu.h src/dev.h src/front.h
+$(BUILD)/fsim: $(BUILD)/gen.stamp $(SRCS) src/cpu.h src/dev.h src/front.h src/dbg.h
 	$(CC) $(CFLAGS) -o $@ $(SRCS)
 
 # ---- GUI: the C core compiled as objects, Dear ImGui and gui.cpp as C++ ----
@@ -52,11 +52,11 @@ $(BUILD)/imgui/%.o: $(IMGUI)/%.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -w $(SDL_CFLAGS) -I$(IMGUI) -c $< -o $@
 
-$(BUILD)/obj/%.o: src/%.c $(BUILD)/gen.stamp src/cpu.h src/dev.h src/front.h
+$(BUILD)/obj/%.o: src/%.c $(BUILD)/gen.stamp src/cpu.h src/dev.h src/front.h src/dbg.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/fsim-gui: src/gui.cpp $(CORE_OBJ) $(IMGUI_OBJ) src/cpu.h src/dev.h src/front.h
+$(BUILD)/fsim-gui: src/gui.cpp $(CORE_OBJ) $(IMGUI_OBJ) src/cpu.h src/dev.h src/front.h src/dbg.h
 	$(CXX) $(CXXFLAGS) $(SDL_CFLAGS) -I$(IMGUI) -I$(IMGUI)/backends -Isrc -o $@ src/gui.cpp $(CORE_OBJ) $(IMGUI_OBJ) $(SDL_LIBS)
 
 test: $(BUILD)/fsim

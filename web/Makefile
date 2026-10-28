@@ -12,16 +12,17 @@ BUILD  := build
 EMCC   ?= emcc
 -include local.mk
 
-CORE   := $(SIM)/src/cpu.c $(SIM)/src/dev.c $(SIM)/src/video.c $(SIM)/src/front.c $(SIM)/src/font8x14.c \
+CORE   := $(SIM)/src/cpu.c $(SIM)/src/dev.c $(SIM)/src/video.c $(SIM)/src/front.c $(SIM)/src/dbg.c $(SIM)/src/font8x14.c \
           $(SIM)/src/gen/isa_gen.c $(SIM)/src/gen/exec_gen.c
 ROMS   := $(BASIC)/build/basic.A.bin $(BASIC)/build/basic.B.bin
+SYMS   := $(ROMS:.bin=.sym)
 EXAMPLES := $(wildcard $(BASIC)/examples/*.BAS)
 
 EMFLAGS := -O3 -std=gnu11 -Wall -Wno-unused-parameter -I$(SIM)/src \
            -sALLOW_MEMORY_GROWTH -sINITIAL_MEMORY=64MB -sENVIRONMENT=web -lidbfs.js \
            -sEXPORTED_FUNCTIONS=_main,_malloc \
            -sEXPORTED_RUNTIME_METHODS=FS,IDBFS,ccall,UTF8ToString,HEAPU8,HEAPF32 \
-           $(foreach r,$(ROMS),--preload-file $(r)@/rom/$(notdir $(r))) \
+           $(foreach r,$(ROMS) $(SYMS),--preload-file $(r)@/rom/$(notdir $(r))) \
            --preload-file $(BASIC)/examples@/examples
 
 all: $(BUILD)/fsim.js $(BUILD)/index.html
@@ -29,10 +30,10 @@ all: $(BUILD)/fsim.js $(BUILD)/index.html
 $(SIM)/build/gen.stamp: $(ROOT)/cpu/isa.yaml
 	$(MAKE) -C $(SIM) build/gen.stamp
 
-$(ROMS) &:
+$(ROMS) $(SYMS) &:
 	$(MAKE) -C $(BASIC) target
 
-$(BUILD)/fsim.js: web.c $(CORE) $(SIM)/build/gen.stamp $(SIM)/src/cpu.h $(SIM)/src/dev.h $(SIM)/src/front.h $(ROMS) $(EXAMPLES)
+$(BUILD)/fsim.js: web.c $(CORE) $(SIM)/build/gen.stamp $(SIM)/src/cpu.h $(SIM)/src/dev.h $(SIM)/src/front.h $(SIM)/src/dbg.h $(ROMS) $(SYMS) $(EXAMPLES)
 	@mkdir -p $(BUILD)
 	$(EMCC) $(EMFLAGS) -o $@ web.c $(CORE)
 

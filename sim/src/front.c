@@ -180,6 +180,15 @@ int sym_load(const char *path)
     return nsyms;
 }
 
+void sym_free(void)
+{
+    for (int i = 0; i < nsyms; i++)
+        free(syms[i].name);
+    free(syms);
+    syms = NULL;
+    nsyms = 0;
+}
+
 /* index of the last symbol at or below addr, -1 if none */
 static int sym_floor(uint32_t addr)
 {

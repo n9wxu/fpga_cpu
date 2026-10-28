@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>fpga_cpu BASIC</title>
 <style>
-  :root { --bg: #15171a; --panel: #202328; --fg: #d8dadd; --dim: #8a9099; --accent: #6cc070; --led-off: #1d3a1f; }
+  :root { --mono: ui-monospace, Menlo, Consolas, monospace; --bg: #15171a; --panel: #202328; --fg: #d8dadd; --dim: #8a9099; --accent: #6cc070; --led-off: #1d3a1f; }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; }
   main { max-width: 1312px; margin: 0 auto; padding: 16px; }
@@ -28,6 +28,44 @@
   #hint { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
           background: rgba(0,0,0,.55); color: #fff; font-size: 20px; pointer-events: none; }
   .wrap { position: relative; }
+  /* debugger */
+  #debug { display: none; margin-top: 12px; }
+  body.debug #debug { display: block; }
+  button.on { border-color: var(--accent); color: var(--accent); }
+  button:disabled { opacity: .45; cursor: default; border-color: #3a3f46; }
+  .dbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+  #dstate { color: var(--dim); font-family: var(--mono); }
+  #dstate.halt { color: #ff9a5a; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 10px; }
+  @media (min-width: 960px) { .wide { grid-column: span 2; } }
+  .panel { background: var(--panel); border: 1px solid #2d3137; border-radius: 6px; padding: 8px 10px; min-width: 0; }
+  .panel h2 { font-size: 13px; font-weight: 600; margin: 0 0 6px; color: var(--dim); display: flex; gap: 8px; align-items: center; }
+  .panel h2 input[type=text] { margin-left: auto; }
+  .mono, .panel pre, .panel input[type=text] { font: 12px/1.45 var(--mono); }
+  .panel pre { margin: 0; overflow-x: auto; white-space: pre; }
+  .panel input[type=text] { background: var(--bg); color: var(--fg); border: 1px solid #3a3f46; border-radius: 3px; padding: 1px 4px; }
+  .panel input[type=text]:disabled { border-color: transparent; background: transparent; color: var(--fg); }
+  .regs { display: grid; grid-template-columns: repeat(2, 3ch 7ch); justify-content: start; gap: 2px 8px; align-items: center; }
+  .regs input { width: 6ch; }
+  .pairs { margin: 6px 0; color: var(--fg); }
+  .flags label { margin-right: 8px; }
+  #dis { cursor: pointer; user-select: none; min-height: 24em; }
+  #dis div { white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+  #dis div:hover { background: #2a2f36; }
+  #dis .lab { color: #8cc4ff; cursor: default; }
+  #dis .lab:hover { background: none; }
+  #dis .pc { color: #ffff5a; background: #3a3a1a; }
+  #dis .bp { color: #ff6b6b; }
+  #mem { min-height: 16em; }
+  #fuse { white-space: pre-wrap; }
+  .bars div { display: flex; gap: 8px; align-items: center; margin: 2px 0; white-space: pre; }
+  .bars span.b { width: 110px; height: 12px; background: var(--bg); border-radius: 2px; overflow: hidden; flex: none; }
+  .bars span.b i { display: block; height: 100%; background: var(--accent); }
+  .board > div { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0; }
+  .board .leds i { width: 12px; height: 12px; }
+  .board button { padding: 2px 10px; }
+  #serial { height: 14em; overflow-y: auto; white-space: pre-wrap; background: var(--bg); padding: 4px; border-radius: 3px; }
+  #con { width: 100%; margin-top: 6px; }
 </style>
 </head>
 <body>
@@ -49,9 +87,59 @@
     <button id="download">Download</button>
     <button id="upload">Upload…</button>
     <input type="file" id="picker" multiple hidden>
+    <button id="dbgbtn">Debug</button>
     <span class="leds" id="leds"></span>
     <span id="status"></span>
   </div>
+  <section id="debug">
+    <div class="dbar">
+      <button id="drun">Run (F5)</button>
+      <button id="dstop">Stop</button>
+      <button id="dstep">Step (F11)</button>
+      <button id="dover">Over (F10)</button>
+      <button id="dout">Out (Shift+F11)</button>
+      <span id="dstate"></span>
+    </div>
+    <div class="grid">
+      <div class="panel">
+        <h2>Registers</h2>
+        <div class="regs mono" id="regs"></div>
+        <pre class="pairs" id="pairs"></pre>
+        <div class="mono flags">PC <input type="text" id="pcin" size="7">
+          <span id="flags"></span></div>
+        <pre id="counts"></pre>
+      </div>
+      <div class="panel wide">
+        <h2>Disassembly <label><input type="checkbox" id="follow" checked> follow PC</label>
+          <input type="text" id="disgo" placeholder="address or symbol" size="18"></h2>
+        <div class="mono" id="dis" title="click a line to toggle a breakpoint"></div>
+      </div>
+      <div class="panel board">
+        <h2>Board</h2>
+        <canvas id="seg7" width="132" height="40"></canvas>
+        <div class="mono">LD <span class="leds" id="bleds"></span></div>
+        <div class="mono">SW <span id="sw"></span></div>
+        <div class="mono">BTN <span id="btn"></span></div>
+        <div class="mono" id="snd"></div>
+      </div>
+      <div class="panel wide">
+        <h2>Memory <span class="mono">SRAM 000000-0FFFFF, ROM FF0000-FFFFFF</span>
+          <input type="text" id="memgo" placeholder="address or symbol" size="18"></h2>
+        <pre id="mem"></pre>
+      </div>
+      <div class="panel">
+        <h2>Statistics</h2>
+        <pre id="stats"></pre>
+        <div class="bars mono" id="bars"></div>
+        <pre id="fuse"></pre>
+      </div>
+      <div class="panel">
+        <h2>Serial console <button id="conclr">Clear</button></h2>
+        <pre id="serial"></pre>
+        <input type="text" id="con" placeholder="type a line, Enter sends it to CON_IN">
+      </div>
+    </div>
+  </section>
   <details>
     <summary>Try</summary>
     <p><code>DIR</code>, <code>RUN "SPIRO.BAS"</code>, <code>RUN "SPRITES.BAS"</code>, <code>RUN "MUSIC.BAS"</code>
@@ -112,10 +200,13 @@ function listFiles() {
 }
 
 let cpuMs = 0, drawMs = 0, cyclesPerMs = 50e3, running = false, lastT = 0, lastCycles = 0, lastInsts = 0, rateT = 0;
+let dirty = true;   // the machine changed while stopped: redraw the screen and the debugger
 function boot(v) {
   if (Module.ccall('web_boot', 'number', ['string'], [v]) !== 0) { hint.textContent = 'Boot failed'; return; }
   hint.style.display = 'none';
   running = true;
+  dirty = true;
+  serialText = '';
   canvas.focus();
   // ?keys=TEXT types TEXT after boot (\n = Enter), like fsim-gui --keys
   for (const ch of (new URLSearchParams(location.search).get('keys') || '').replace(/\\n/g, '\n'))
@@ -124,15 +215,17 @@ function boot(v) {
 
 function frame(t) {
   requestAnimationFrame(frame);
-  if (!running) return;
+  if (!running) { if (dirty) updateDebug(); return; }
   const dt = Math.min(lastT ? (t - lastT) / 1000 : 1 / 60, 0.1);
   lastT = t;
+  const active = Module._web_mode() !== 0;
+  if (!active && !dirty) { updateDebug(t); return; }
   // real time, but never more than about 10 ms of CPU work per frame, so a
   // slow browser slows the machine down instead of freezing the page
   const cap = cyclesPerMs * 10;
   const budget = $('speed').value === '0' ? cap : Math.min(CPU_HZ * dt, cap);
   const t0 = performance.now(), c0 = Module._web_cycles();
-  Module._web_run(budget);
+  if (active) Module._web_run(budget);
   const t1 = performance.now();
   if (t1 - t0 > 1) cyclesPerMs = 0.8 * cyclesPerMs + 0.2 * (Module._web_cycles() - c0) / (t1 - t0);
   const p = Module._web_render(+$('color').value);
@@ -142,15 +235,21 @@ function frame(t) {
   drawMs = 0.9 * drawMs + 0.1 * (ms - (t1 - t0));
   const leds = Module._web_leds();
   [...$('leds').children].forEach((e, i) => e.classList.toggle('on', !!(leds >> (7 - i) & 1)));
+  if (active && Module._web_mode() === 0) dirty = true;   // a breakpoint or step target was reached
+  updateDebug(t);
+  dirty = false;
   if (Module._web_halted()) {
     running = false;
+    dirty = true;
+    updateDebug();
     hint.textContent = 'Stopped: ' + UTF8ToString(Module._web_halt_reason()) + ' (Reset to restart)';
     hint.style.display = '';
   }
   if (t - rateT > 1000) {
     const c = Module._web_cycles(), n = Module._web_insts(), s = (t - rateT) / 1000;
     const slow = $('speed').value === '1' && (c - lastCycles) / s < 0.9 * CPU_HZ;
-    if (rateT) $('status').textContent = (slow ? 'browser too slow for real time  ·  ' : '') +
+    if (rateT && !active) $('status').textContent = 'stopped by the debugger';
+    else if (rateT) $('status').textContent = (slow ? 'browser too slow for real time  ·  ' : '') +
       `${((c - lastCycles) / s / 1e6).toFixed(1)} MHz  ·  ${((n - lastInsts) / s / 1e6).toFixed(1)} MIPS  ·  ` +
       `frame: cpu ${cpuMs.toFixed(1)} ms + draw ${drawMs.toFixed(1)} ms  ·  ` +
       (navigator.userAgent.match(/(Edg|Firefox|Chrome|Version)\/[\d.]+/) || [''])[0].replace('Version', 'Safari');
@@ -233,6 +332,208 @@ $('picker').onchange = async () => {
   canvas.focus();
 };
 window.addEventListener('pagehide', saveDisk);
+
+// ---- debugger: the panels of fsim-gui, over the same run control (sim/src/dbg.c) ----
+const hex = (v, n) => v.toString(16).toUpperCase().padStart(n, '0');
+const call = (f, ...a) => Module.ccall(f, 'string', a.map(x => typeof x === 'string' ? 'string' : 'number'), a);
+let debugOn = false, dbgT = 0, disTop = 0x1000, memAddr = 0, serialText = '', disLast = '';
+const DIS_ROWS = 24, MEM_ROWS = 16;
+
+function setDebug(on) {
+  debugOn = on;
+  document.body.classList.toggle('debug', on);
+  $('dbgbtn').classList.toggle('on', on);
+  try { localStorage.setItem('fcpu-debug', on ? '1' : '0'); } catch (e) {}
+  dirty = true;
+}
+$('dbgbtn').onclick = () => setDebug(!debugOn);
+try { setDebug(new URLSearchParams(location.search).get('debug') === '1' || localStorage.getItem('fcpu-debug') === '1'); }
+catch (e) {}
+
+// actions; each one redraws the screen and the panels
+function act(f) {
+  return () => { if (running || f === '_web_stop') { Module[f](); dirty = true; } };
+}
+$('drun').onclick = act('_web_resume');
+$('dstop').onclick = act('_web_stop');
+$('dstep').onclick = act('_web_step');
+$('dover').onclick = act('_web_step_over');
+$('dout').onclick = act('_web_step_out');
+document.addEventListener('keydown', e => {
+  if (!debugOn || e.target === canvas || e.target.tagName === 'INPUT') return;
+  const k = e.key === 'F11' && e.shiftKey ? 'out' : { F5: 'run', F10: 'over', F11: 'step' }[e.key];
+  if (!k) return;
+  e.preventDefault();
+  $('d' + k).click();
+});
+
+// registers: two per row (r0 r1 = p0, ...), editable while stopped
+const PNAME = ['p0', 'p1', 'p2', 'p3', 'p4', 'p5', 'lr', 'sp'];
+const regIn = [];
+for (let r = 0; r < 16; r++) {
+  const l = document.createElement('span'), i = document.createElement('input');
+  l.textContent = 'r' + r;
+  i.type = 'text'; i.size = 4;
+  i.onchange = () => { Module._web_set_reg(r, parseInt(i.value, 16) & 0xFFFF); dirty = true; };
+  regIn.push(i);
+  $('regs').append(l, i);
+}
+$('pcin').onchange = () => { Module._web_set_reg(16, parseInt($('pcin').value, 16) & 0xFFFFFF); dirty = true; };
+const flagIn = 'NZCV'.split('').map((f, i) => {
+  const l = document.createElement('label'), c = document.createElement('input');
+  c.type = 'checkbox';
+  c.onchange = () => { Module._web_set_reg(17, flagIn.reduce((v, x, j) => v | (x.checked ? 8 >> j : 0), 0)); dirty = true; };
+  l.append(c, ' ' + f);
+  $('flags').append(l);
+  return c;
+});
+function setField(el, v) { if (document.activeElement !== el) el.value = v; }
+
+// disassembly: click toggles a breakpoint, the wheel scrolls
+$('dis').onclick = e => {
+  const a = e.target.dataset.a;
+  if (a === undefined) return;
+  Module._web_toggle_bp(+a);
+  dirty = true;
+};
+$('dis').addEventListener('wheel', e => {
+  e.preventDefault();
+  $('follow').checked = false;
+  disTop = (disTop + Math.sign(e.deltaY) * 6) & 0xFFFFFE;
+  dirty = true;
+}, { passive: false });
+$('follow').onchange = () => { dirty = true; };
+function goto(input, set) {
+  input.onkeydown = e => {
+    if (e.key !== 'Enter') return;
+    const a = Module.ccall('web_find', 'number', ['string'], [input.value]);
+    input.style.borderColor = a < 0 ? '#ff6b6b' : '';
+    if (a >= 0) { set(a); dirty = true; }
+  };
+}
+goto($('disgo'), a => { disTop = a & 0xFFFFFE; $('follow').checked = false; });
+goto($('memgo'), a => { memAddr = a & 0xFFFFF0; });
+$('mem').addEventListener('wheel', e => {
+  e.preventDefault();
+  memAddr = (memAddr + Math.sign(e.deltaY) * 64) & 0xFFFFF0;
+  dirty = true;
+}, { passive: false });
+
+// board: 7-segment display, LEDs, switches and push buttons
+const SEG_HEX = [0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F, 0x77, 0x7C, 0x39, 0x5E, 0x79, 0x71];
+for (let i = 0; i < 8; i++) $('bleds').appendChild(document.createElement('i'));
+let switches = 0, buttons = 0;
+for (let i = 7; i >= 0; i--) {
+  const c = document.createElement('input');
+  c.type = 'checkbox'; c.title = 'SW' + i;
+  c.onchange = () => { switches = c.checked ? switches | 1 << i : switches & ~(1 << i); Module._web_set_board(switches, buttons); };
+  $('sw').appendChild(c);
+}
+for (let i = 3; i >= 0; i--) {
+  const b = document.createElement('button');
+  b.textContent = i;
+  const set = on => { buttons = on ? buttons | 1 << i : buttons & ~(1 << i); Module._web_set_board(switches, buttons); };
+  b.onpointerdown = () => set(true);
+  b.onpointerup = b.onpointerleave = () => set(false);
+  $('btn').appendChild(b);
+}
+function drawSeg7(seg7, ctrl) {
+  const g = $('seg7').getContext('2d'), w = 18, h = 32, t = 3;
+  g.fillStyle = '#111'; g.fillRect(0, 0, 132, 40);
+  const S = [[t, 0, w - t, t], [w - t, t, w, h / 2 - t / 2], [w - t, h / 2 + t / 2, w, h - t], [t, h - t, w - t, h],
+             [0, h / 2 + t / 2, t, h - t], [0, t, t, h / 2 - t / 2], [t, h / 2 - t / 2, w - t, h / 2 + t / 2]];
+  for (let i = 0; i < 4; i++) {
+    const dig = 3 - i, segs = ctrl >> (4 + dig) & 1 ? 0 : SEG_HEX[seg7 >> 4 * dig & 15], x = 6 + i * 31, y = 4;
+    S.forEach((s, j) => { g.fillStyle = segs >> j & 1 ? '#ff2a1e' : '#3c1414'; g.fillRect(x + s[0], y + s[1], s[2] - s[0], s[3] - s[1]); });
+    g.fillStyle = ctrl >> dig & 1 ? '#ff2a1e' : '#3c1414';
+    g.beginPath(); g.arc(x + w + 4, y + h - 2, 2, 0, 7); g.fill();
+  }
+}
+
+// serial console
+$('con').onkeydown = e => {
+  if (e.key !== 'Enter') return;
+  for (const ch of $('con').value) Module._web_con_in(ch.charCodeAt(0));
+  Module._web_con_in(10);
+  $('con').value = '';
+};
+$('conclr').onclick = () => { serialText = ''; $('serial').textContent = ''; };
+
+function updateDis(d, pc) {
+  disTop = d.top;
+  const rows = [];
+  for (const [a, lab, hx, text, bp] of d.lines) {
+    if (lab) { const l = document.createElement('div'); l.className = 'lab'; l.textContent = lab + ':'; rows.push(l); }
+    const e = document.createElement('div');
+    e.dataset.a = a;
+    e.className = a === pc ? 'pc' : bp ? 'bp' : '';
+    e.textContent = (bp ? '* ' : '  ') + hex(a, 6) + '  ' + hx.padEnd(9) + '  ' + text;
+    rows.push(e);
+  }
+  $('dis').replaceChildren(...rows);
+}
+
+const pct = (a, b) => b ? 100 * a / b : 0;
+// Refresh the panels: at once after an action or a stop, else ten times a second.
+function updateDebug(t) {
+  if (!debugOn || !Module._web_mode) return;
+  if (t !== undefined && !dirty && t - dbgT < 100) return;
+  dbgT = t || performance.now();
+  dirty = false;
+  const s = JSON.parse(call('web_state')), stopped = s.mode === 0, live = running && !s.halted;
+  $('drun').disabled = !stopped || !live;
+  $('dstop').disabled = stopped;
+  for (const b of ['dstep', 'dover', 'dout']) $(b).disabled = !stopped || !live;
+  $('dstate').className = s.halted ? 'halt' : '';
+  $('dstate').textContent = s.halted ? 'halted: ' + s.reason : stopped ? 'stopped at ' + hex(s.pc, 6)
+    : ['', 'running', 'stepping over', 'stepping out'][s.mode];
+
+  s.r.forEach((v, i) => { regIn[i].disabled = !stopped; setField(regIn[i], hex(v, 4)); });
+  $('pcin').disabled = !stopped;
+  setField($('pcin'), hex(s.pc, 6));
+  flagIn.forEach((c, j) => { c.disabled = !stopped; c.checked = !!(s.flags & 8 >> j); });
+  $('pairs').textContent = PNAME.map((n, p) => {
+    const v = s.r[2 * p] + s.r[2 * p + 1] * 65536, y = s.psym[p];
+    return n.padEnd(3) + hex(v, 8) + (y ? '  ' + y[0] + '+' + y[1] : '');
+  }).join('\n');
+  const st = s.st;
+  $('counts').textContent = `cycles ${st.cycles}\ninsts  ${st.insts}\nframe  ${s.frame}  line ${s.line}`;
+
+  // rebuild the lines only when they change, so a click is not lost to a rebuild
+  const dj = call('web_disasm', disTop, DIS_ROWS, $('follow').checked ? 1 : 0) + s.pc;
+  if (dj !== disLast) updateDis(JSON.parse(dj.slice(0, dj.lastIndexOf('}') + 1)), s.pc);
+  disLast = dj;
+  $('mem').textContent = call('web_mem', memAddr, MEM_ROWS);
+
+
+  $('stats').textContent =
+    `IPC ${(st.cycles ? st.insts / st.cycles : 0).toFixed(3)}  (CPI ${(st.insts ? st.cycles / st.insts : 0).toFixed(3)})` +
+    `   16-bit ${pct(st.len16, st.insts).toFixed(1)}%\n` +
+    `I-cache hit ${pct(st.ic_hit, st.ic_access).toFixed(2)}%  misses ${st.ic_miss}\n` +
+    `stream buffer hits ${st.sb_hit} (+${st.sb_partial} partial)\n` +
+    `branches ${st.branches}, ${pct(st.taken, st.branches).toFixed(1)}% taken\nstall cycles (% of all cycles):`;
+  $('bars').replaceChildren(...[['ifetch', st.st_ifetch], ['taken branch', st.st_branch], ['load-use', st.st_loaduse],
+    ['video', st.st_video], ['I/O', st.st_io], ['pair split', st.st_pair]].map(([n, v]) => {
+    const row = document.createElement('div'), bar = document.createElement('span'), fill = document.createElement('i');
+    const p = pct(v, st.cycles);
+    bar.className = 'b'; fill.style.width = p + '%'; bar.append(fill);
+    row.append(bar, `${p.toFixed(1).padStart(5)}%  ${n}`);
+    return row;
+  }));
+  $('fuse').textContent = 'fusion candidates: ' + Object.entries(st.fuse).map(([n, v]) => `${n} ${v}`).join('  ');
+
+  const b = s.board;
+  drawSeg7(b.seg7, b.seg7_ctrl);
+  [...$('bleds').children].forEach((e, i) => e.classList.toggle('on', !!(b.leds >> (7 - i) & 1)));
+  $('snd').textContent = `sound: ${b.snd.join('/')} Hz`;
+
+  if (s.serial) {
+    const el = $('serial'), atEnd = el.scrollTop >= el.scrollHeight - el.clientHeight - 40;
+    serialText = (serialText + s.serial).slice(-100000);
+    el.textContent = serialText;
+    if (atEnd) el.scrollTop = el.scrollHeight;
+  }
+}
 </script>
 <script src="fsim.js"></script>
 </body>
