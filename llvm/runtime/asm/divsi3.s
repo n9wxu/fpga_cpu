@@ -1,5 +1,5 @@
 ; 32-bit division. a = p1 (r3:r2), b = p2 (r5:r4); result p1.
-; p0 (r1:r0) is scratch: the compiler never keeps values in it.
+; p0 (r1:r0) is scratch: caller-saved, like p1-p3.
         .text
 
 ; __fcpu_udiv32: shift-and-subtract division, shared with divdi3.s.

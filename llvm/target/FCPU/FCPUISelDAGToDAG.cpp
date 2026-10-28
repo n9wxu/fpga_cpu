@@ -191,6 +191,28 @@ void FCPUDAGToDAGISel::Select(SDNode *N) {
       Off = C;
     }
   }
+  // Post-increment loads: value, new pointer, chain.
+  if (auto *LD = dyn_cast<LoadSDNode>(N)) {
+    if (LD->getAddressingMode() == ISD::POST_INC) {
+      EVT MemVT = LD->getMemoryVT();
+      unsigned Opc = 0;
+      if (MemVT == MVT::i8)
+        Opc = LD->getExtensionType() == ISD::SEXTLOAD ? FCPU::LDBSpi : FCPU::LDBUpi;
+      else if (MemVT == MVT::i16)
+        Opc = FCPU::LDWpi;
+      else if (MemVT == MVT::i32)
+        Opc = FCPU::LDPpi;
+      if (Opc) {
+        MachineSDNode *M = CurDAG->getMachineNode(
+            Opc, DL, N->getValueType(0), MVT::i32, MVT::Other, LD->getBasePtr(),
+            LD->getChain());
+        CurDAG->setNodeMemRefs(M, {LD->getMemOperand()});
+        ReplaceNode(N, M);
+        return;
+      }
+    }
+  }
+
   if (FIN) {
     int FI = cast<FrameIndexSDNode>(FIN)->getIndex();
     SDValue TFI = CurDAG->getTargetFrameIndex(FI, MVT::i32);

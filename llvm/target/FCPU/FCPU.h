@@ -13,6 +13,9 @@ class PassRegistry;
 
 FunctionPass *createFCPUISelDag(FCPUTargetMachine &TM, CodeGenOptLevel OL);
 void initializeFCPUDAGToDAGISelLegacyPass(PassRegistry &);
+FunctionPass *createFCPUHoistGlobalLoadsPass();
+void initializeFCPUHoistGlobalLoadsPass(PassRegistry &);
+FunctionPass *createFCPURenameDeadDefsPass();
 } // namespace llvm
 
 #endif

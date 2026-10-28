@@ -42,6 +42,18 @@ public:
   const SelectionDAGTargetInfo *getSelectionDAGInfo() const override {
     return &TSInfo;
   }
+  // Track the two halves of a pair separately, so a value read from one
+  // half does not tie up (or force a copy of) the whole pair.
+  bool enableSubRegLiveness() const override { return true; }
+  // Schedule with FCPUModel before and after register allocation, mainly
+  // to keep an instruction from using a load result the next cycle.
+  bool enableMachineScheduler() const override { return true; }
+  // After register allocation, the post-RA list scheduler with
+  // anti-dependence breaking: a temporary reused for every step of a loop
+  // body (r0 below) is renamed so independent work can fill load delays.
+  bool enablePostRAScheduler() const override { return true; }
+  bool enablePostRAMachineScheduler() const override { return false; }
+  AntiDepBreakMode getAntiDepBreakMode() const override { return ANTIDEP_NONE; }
 };
 
 } // namespace llvm

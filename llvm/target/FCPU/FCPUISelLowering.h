@@ -30,6 +30,10 @@ public:
 
   const char *getTargetNodeName(unsigned Opcode) const override;
   SDValue LowerOperation(SDValue Op, SelectionDAG &DAG) const override;
+  SDValue PerformDAGCombine(SDNode *N, DAGCombinerInfo &DCI) const override;
+  bool getPostIndexedAddressParts(SDNode *N, SDNode *Op, SDValue &Base,
+                                  SDValue &Offset, ISD::MemIndexedMode &AM,
+                                  SelectionDAG &DAG) const override;
 
   MVT getScalarShiftAmountTy(const DataLayout &, EVT) const override {
     return MVT::i16;
@@ -81,6 +85,12 @@ private:
   SDValue lowerBR_CC(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerSELECT_CC(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerShift32(SDValue Op, SelectionDAG &DAG) const;
+  SDValue lowerLogic32(SDValue Op, SelectionDAG &DAG) const;
+  SDValue lowerMul32(SDValue Op, SelectionDAG &DAG) const;
+  SDValue half(SelectionDAG &DAG, const SDLoc &DL, SDValue V,
+               unsigned Idx) const;
+  SDValue emitCmp(SDValue LHS, SDValue RHS, ISD::CondCode CC,
+                  SDValue &TargetCC, const SDLoc &DL, SelectionDAG &DAG) const;
   SDValue lowerVASTART(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerFRAMEADDR(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerRETURNADDR(SDValue Op, SelectionDAG &DAG) const;

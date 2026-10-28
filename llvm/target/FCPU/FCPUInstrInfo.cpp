@@ -47,9 +47,9 @@ void FCPUInstrInfo::storeRegToStackSlot(
     const TargetRegisterInfo *TRI, Register VReg) const {
   DebugLoc DL = MI != MBB.end() ? MI->getDebugLoc() : DebugLoc();
   unsigned Opc;
-  if (RC == &FCPU::GPRRegClass)
+  if (FCPU::GPRRegClass.hasSubClassEq(RC))
     Opc = FCPU::STWd;
-  else if (RC == &FCPU::PRRegClass)
+  else if (FCPU::PRRegClass.hasSubClassEq(RC))
     Opc = FCPU::STPd;
   else
     llvm_unreachable("FCPU: cannot spill this register class");
@@ -66,9 +66,9 @@ void FCPUInstrInfo::loadRegFromStackSlot(
     Register VReg) const {
   DebugLoc DL = MI != MBB.end() ? MI->getDebugLoc() : DebugLoc();
   unsigned Opc;
-  if (RC == &FCPU::GPRRegClass)
+  if (FCPU::GPRRegClass.hasSubClassEq(RC))
     Opc = FCPU::LDWd;
-  else if (RC == &FCPU::PRRegClass)
+  else if (FCPU::PRRegClass.hasSubClassEq(RC))
     Opc = FCPU::LDPd;
   else
     llvm_unreachable("FCPU: cannot reload this register class");
@@ -98,6 +98,91 @@ Register FCPUInstrInfo::isStoreToStackSlot(const MachineInstr &MI,
     return MI.getOperand(0).getReg();
   }
   return Register();
+}
+
+// CMPI r, 0 after the instruction that computed r: that instruction set
+// the flags already. Logic ops set N and Z from the result and clear V,
+// exactly as CMPI r, 0 does (only C differs), so every condition except
+// the unsigned ones (C) reads the same. Arithmetic and shifts set Z and N
+// from the result too, but V and C differently: EQ, NE, MI, PL only.
+bool FCPUInstrInfo::analyzeCompare(const MachineInstr &MI, Register &SrcReg,
+                                   Register &SrcReg2, int64_t &CmpMask,
+                                   int64_t &CmpValue) const {
+  if (MI.getOpcode() != FCPU::CMPI || !MI.getOperand(1).isImm())
+    return false;
+  SrcReg = MI.getOperand(0).getReg();
+  SrcReg2 = Register();
+  CmpMask = ~0;
+  CmpValue = MI.getOperand(1).getImm();
+  return true;
+}
+
+static int flagKind(unsigned Opc) {
+  switch (Opc) {
+  case FCPU::ANDrr: case FCPU::ORrr: case FCPU::XORrr:
+  case FCPU::ANDIri: case FCPU::ORIri: case FCPU::XORIri: case FCPU::NOT:
+    return 2; // logic: N, Z as CMPI 0, V = 0
+  case FCPU::ADDrr: case FCPU::SUBrr: case FCPU::ADDIri: case FCPU::NEG:
+  case FCPU::SHLrr: case FCPU::SHRrr: case FCPU::SARrr:
+  case FCPU::SHLIri: case FCPU::SHRIri: case FCPU::SARIri:
+    return 1; // N, Z only
+  }
+  return 0;
+}
+
+static bool ccOK(int64_t CC, int Kind) {
+  switch (CC) {
+  case FCPUCC::EQ: case FCPUCC::NE: case FCPUCC::MI: case FCPUCC::PL:
+    return true;
+  case FCPUCC::GE: case FCPUCC::LT: case FCPUCC::GT: case FCPUCC::LE:
+    return Kind == 2;
+  }
+  return false;
+}
+
+bool FCPUInstrInfo::optimizeCompareInstr(MachineInstr &CmpInstr,
+                                         Register SrcReg, Register SrcReg2,
+                                         int64_t CmpMask, int64_t CmpValue,
+                                         const MachineRegisterInfo *MRI) const {
+  if (CmpValue != 0 || !SrcReg.isVirtual())
+    return false;
+  MachineInstr *Def = MRI->getUniqueVRegDef(SrcReg);
+  if (!Def || Def->getParent() != CmpInstr.getParent())
+    return false;
+  int Kind = flagKind(Def->getOpcode());
+  if (!Kind || Def->getOperand(0).getReg() != SrcReg)
+    return false;
+  MachineBasicBlock *MBB = CmpInstr.getParent();
+  // nothing between the two may touch the flags
+  for (MachineBasicBlock::iterator I = std::next(Def->getIterator());
+       &*I != &CmpInstr; ++I)
+    if (I->readsRegister(FCPU::SR, nullptr) ||
+        I->modifiesRegister(FCPU::SR, nullptr))
+      return false;
+  // every reader of these flags must test a condition that comes out the same
+  for (MachineBasicBlock::iterator I = std::next(CmpInstr.getIterator()),
+                                   E = MBB->end();
+       I != E; ++I) {
+    if (I->readsRegister(FCPU::SR, nullptr)) {
+      unsigned Opc = I->getOpcode();
+      int64_t CC;
+      if (Opc == FCPU::Bcc)
+        CC = I->getOperand(1).getImm();
+      else if (Opc == FCPU::SELECT16 || Opc == FCPU::SELECT32)
+        CC = I->getOperand(3).getImm();
+      else
+        return false;
+      if (!ccOK(CC, Kind))
+        return false;
+    }
+    if (I->modifiesRegister(FCPU::SR, nullptr))
+      break;
+  }
+  for (MachineOperand &MO : Def->operands())
+    if (MO.isReg() && MO.isDef() && MO.getReg() == FCPU::SR)
+      MO.setIsDead(false);
+  CmpInstr.eraseFromParent();
+  return true;
 }
 
 bool FCPUInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {

@@ -28,6 +28,7 @@ that itself).
 | `c/stanford` | Stanford integer and float suite: Bubblesort, IntMM, Perm, Puzzle, Queens, Quicksort, Towers, Treesort, FloatMM, RealMM, Oscar | John Hennessy, early 1980s; LLVM test-suite copies |
 | `c/sieve` | BYTE Sieve of Eratosthenes | J. & G. Gilbreath, BYTE, 1981 |
 | `c/coremark` | CoreMark 1.0 | EEMBC, 2009, with an fpga_cpu port in `fcpu/` |
+| `c/doomdraw` | Doom's `R_DrawColumn` and `R_DrawSpan` alone, in C and by hand (`doom/port/r_draw_fcpu.s`) | doomgeneric, GPL v2 |
 | `basic/DHRY.BAS` | Dhrystone 2.1 in BASIC | translated here from the C version |
 | `basic/BM1.BAS`–`BM8.BAS` | Rugg/Feldman BASIC benchmarks | Kilobaud, June 1977 |
 | `doom` | Doom via doomgeneric | id Software 1993, GPL v2; see `doom/README.md` |
@@ -111,3 +112,47 @@ to dual issue and far below a 1-cycle taken branch (`bp1`, ~25% per 100
 LUTs; docs/measurements.md). What remains in Doom is mostly compiler
 code: 32-bit multiplies are calls to `__mulsi3`, and the column and span
 loops reload globals on every pixel.
+
+## Doom's pixel loops
+
+`c/doomdraw` runs Doom's two inner loops, `R_DrawColumn` (walls,
+sprites) and `R_DrawSpan` (floors, ceilings), on a frame-like mix of
+columns and spans, and times only the draw calls. It checks a checksum of
+the screen against the host build and prints cycles per pixel.
+`doomdraw` is the C, as the compiler builds it; `doomdraw-asm` uses
+hand-written versions (`doom/port/r_draw_fcpu.s`), which Doom uses too
+(`doom-asm`, and the web simulator's build).
+
+| | column cycles/pixel | span cycles/pixel | Doom fps |
+|---|---|---|---|
+| C, original compiler | 30.0 | 38.0 | 6.25 |
+| C, current compiler | 15.4 | 18.6 | 7.46 |
+| hand-written | 11.8 | 14.1 | 8.37 |
+
+The compiler changes that closed most of the gap (llvm/README.md, "Code
+generation notes"):
+
+- 32-bit logic, constant shifts and multiply split into 16-bit halves
+  that fold: `(frac >> 16) & 127` is one `ANDI`, and the index then fits
+  the `[pN + rX.z]` mode. Multiply is inline instead of a call.
+- 32-bit compares against 0 as `OR` of the halves, and the compare after
+  a flag-setting instruction removed.
+- A scheduling model, so independent work fills load-use stalls, and dead
+  flag-only results moved off the registers the loop uses.
+- `[pN]+` post-increment loads and stores.
+- p0 allocatable (it was reserved for the assembler).
+- Loop versioning that hoists `dc_source` / `dc_colormap`: C must reload
+  them after every pixel store, so a check before the loop proves the
+  stores can't reach them and picks a copy without the reloads.
+
+What the hand versions still do better: a 16-bit pixel count (the C's
+`int` count is 32 bits, so it costs an extra register and an `OR` per
+pixel), and software pipelining (the next texel index is computed while
+the current loads finish).
+
+Across all the benchmarks the compiler changes are 1.15× faster (geomean,
+variant A, base timing) and code is about 12% smaller. Two got slower:
+Stanford Puzzle with 16-bit `int` (0.95×: a global array address is
+recomputed in its inner loop instead of being hoisted), and Whetstone
+(0.96–0.99×: fewer instructions, but more instruction-cache misses and
+misaligned pair accesses from the new code layout).

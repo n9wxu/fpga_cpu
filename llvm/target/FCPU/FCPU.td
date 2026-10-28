@@ -16,7 +16,19 @@ include "llvm/Target/Target.td"
 def FeatureInt32 : SubtargetFeature<"int32", "HasInt32", "true",
                                     "32-bit int (front end only)">;
 
-def : ProcessorModel<"generic", NoSchedModel, []>;
+// The timing the scheduler plans for (sim/README.md "Timing model"): one
+// instruction a cycle, in order, and a load's result one cycle late (a
+// load-use stall), so the scheduler fills that cycle when it can. Taken
+// branches cost more, but that is the branch layout's business.
+def FCPUModel : SchedMachineModel {
+  let IssueWidth = 1;
+  let MicroOpBufferSize = 0;   // in order
+  let LoadLatency = 2;
+  let MispredictPenalty = 2;
+  let CompleteModel = 0;
+}
+
+def : ProcessorModel<"generic", FCPUModel, []>;
 
 include "FCPURegisterInfo.td"
 include "FCPUCallingConv.td"

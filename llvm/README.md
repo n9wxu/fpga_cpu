@@ -67,7 +67,7 @@ The arithmetic helpers are hand-written in `runtime/asm/`:
 
 ## Code generation notes
 
-- **Registers:** i16 values live in r2–r13, and i32 values (including pointers) in pairs p1–p6. p0 is reserved: it is the assembler's temporary for `[abs]` in variant A. p7 is sp.
+- **Registers:** i16 values live in r0–r13, and i32 values (including pointers) in pairs p0–p6; p7 is sp. p0 (r0, r1) is allocated last: the assembler uses it to expand `[abs]` loads and stores in variants without a direct form, so those instructions are marked as clobbering it, and an `[abs]` store's value never sits in it.
 - **Calls:**
   - Arguments go in r2–r7 or p1–p3. Varargs go on the stack.
   - Results come back in r2, or in p1 (and p2 for 64-bit values).
@@ -75,12 +75,14 @@ The arithmetic helpers are hand-written in `runtime/asm/`:
   - The return address is held in a virtual register, so leaf functions never touch the stack for it.
 - **32-bit operations:**
   - add: `ADDPP`/`ADDPI`
-  - subtract and compare: SUB/SBC and CMP/CPC
-  - logic: split into the two halves
-  - constant shifts: split into the halves
-  - multiply, divide and variable shifts: library calls
+  - subtract and compare: SUB/SBC and CMP/CPC. Against 0, `==`/`!=` test the OR of the halves and `<`/`>=` the high half's sign; a `CMPI r, 0` after the instruction that computed r is dropped when its flags already say the same (`optimizeCompareInstr`).
+  - logic, constant shifts and multiply: split into 16-bit halves while lowering. Halves that are already known (constants, extended 16-bit values, pairs built from halves) are looked through, so `x & 0xFC0` on a 32-bit value is one `ANDI`, and a multiply is at most four `MUL`/`MULHU` (no call).
+  - divide and variable shifts: library calls
 - **Addressing modes:**
   - `[pN + d16]`
-  - `[pN + rX*s]` for a 16-bit `int` index
+  - `[pN + rX*s]` for a 16-bit index, including one masked down from a 32-bit value
+  - `[pN]+` post-increment, when a pointer steps by the access size after a load or store
   - `[abs]` for globals and I/O registers
+- **Scheduling:** a simple model (one instruction a cycle, loads one cycle late) for the machine scheduler before register allocation and the list scheduler after it, so independent work fills load-use stalls. Flag-only results (the OR above) are moved to a register the block doesn't use, after allocation, so they don't tie the scheduler's hands (`FCPURenameDeadDefs.cpp`).
+- **Global loads in loops:** a byte store may change any object in C, so a loop that stores pixels must reload a global pointer like Doom's `dc_source` each time round. `FCPUHoistGlobalLoads.cpp` versions such loops: a check before the loop that the bytes it stores don't overlap the globals it reads chooses a copy with those loads hoisted out. (`-mllvm -fcpu-no-hoist-global-loads` turns it off.)
 - **Flags:** the compiler passes `-funsigned-char`, because `LDBU` has the short encodings.
