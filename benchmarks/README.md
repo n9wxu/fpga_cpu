@@ -126,8 +126,8 @@ hand-written versions (`doom/port/r_draw_fcpu.s`), which Doom uses too
 | | column cycles/pixel | span cycles/pixel | Doom fps |
 |---|---|---|---|
 | C, original compiler | 30.0 | 38.0 | 6.25 |
-| C, current compiler | 15.4 | 18.6 | 7.46 |
-| hand-written | 11.8 | 14.1 | 8.37 |
+| C, current compiler | 15.4 | 18.6 | 7.51 |
+| hand-written | 11.8 | 14.1 | 8.45 |
 
 The compiler changes that closed most of the gap (llvm/README.md, "Code
 generation notes"):

@@ -7,48 +7,51 @@ and every run's output was checked against a build of the same program for the d
 
 | benchmark | int | ok | cycles | instructions | CPI | 16-bit instr. | code bytes | result |
 |---|---|---|---|---|---|---|---|---|
-| dhrystone | 16 | ✓ | 13,011,319 | 8,469,712 | 1.536 | 86% | 18,000 | 22.094 DMIPS |
-| dhrystone | 32 | ✓ | 14,706,357 | 9,368,780 | 1.570 | 85% | 19,008 | 19.545 DMIPS |
-| whetstone | 16 | ✓ | 5,948,516 | 4,596,274 | 1.294 | 67% | 28,132 | 3,370 KIPS |
-| whetstone | 32 | ✓ | 5,967,408 | 4,645,829 | 1.284 | 67% | 29,852 | 3,360 KIPS |
-| richards | 16 | ✓ | 10,366,960 | 6,753,622 | 1.535 | 81% | 18,466 |  |
-| richards | 32 | ✓ | 10,929,576 | 8,253,002 | 1.324 | 84% | 19,760 |  |
-| sieve | 16 | ✓ | 2,497,709 | 1,733,736 | 1.441 | 61% | 14,464 |  |
-| sieve | 32 | ✓ | 3,707,778 | 2,827,896 | 1.311 | 71% | 15,280 |  |
-| stanford-bubblesort | 16 | ✓ | 5,261,551 | 3,949,497 | 1.332 | 65% | 14,812 |  |
-| stanford-bubblesort | 32 | ✓ | 9,423,113 | 8,032,277 | 1.173 | 59% | 15,716 |  |
-| stanford-intmm | 16 | ✓ | 8,336,563 | 6,134,143 | 1.359 | 59% | 15,150 |  |
-| stanford-intmm | 32 | ✓ | 10,550,408 | 8,035,653 | 1.313 | 49% | 16,112 |  |
-| stanford-perm | 16 | ✓ | 5,808,540 | 3,875,961 | 1.499 | 73% | 14,818 |  |
-| stanford-perm | 32 | ✓ | 7,011,539 | 5,684,532 | 1.233 | 79% | 15,758 |  |
-| stanford-puzzle | 16 | ✓ | 12,355,281 | 9,587,068 | 1.289 | 56% | 17,446 |  |
-| stanford-puzzle | 32 | ✓ | 24,865,198 | 20,200,480 | 1.231 | 55% | 19,462 |  |
-| stanford-queens | 16 | ✓ | 16,849,131 | 11,304,502 | 1.490 | 88% | 14,964 |  |
-| stanford-queens | 32 | ✓ | 25,679,789 | 19,585,062 | 1.311 | 63% | 16,118 |  |
-| stanford-quicksort | 16 | ✓ | 5,291,807 | 3,965,993 | 1.334 | 76% | 14,888 |  |
-| stanford-quicksort | 32 | ✓ | 9,460,463 | 7,424,210 | 1.274 | 70% | 15,832 |  |
-| stanford-towers | 16 | ✓ | 6,311,184 | 4,854,022 | 1.300 | 65% | 15,554 |  |
-| stanford-towers | 32 | ✓ | 9,497,280 | 7,721,225 | 1.230 | 64% | 16,736 |  |
-| stanford-treesort | 16 | ✓ | 3,932,858 | 2,942,189 | 1.337 | 88% | 16,468 |  |
-| stanford-treesort | 32 | ✓ | 4,622,408 | 3,586,822 | 1.289 | 88% | 17,410 |  |
-| stanford-floatmm | 16 | ✓ | 32,215,017 | 25,780,214 | 1.250 | 59% | 15,282 |  |
-| stanford-floatmm | 32 | ✓ | 32,777,963 | 26,912,414 | 1.218 | 57% | 16,176 |  |
-| stanford-realmm | 16 | ✓ | 16,225,275 | 12,965,132 | 1.251 | 59% | 15,272 |  |
-| stanford-realmm | 32 | ✓ | 16,553,652 | 13,573,991 | 1.220 | 58% | 16,160 |  |
-| stanford-oscar | 16 | ✓ | 24,867,754 | 18,404,808 | 1.351 | 58% | 16,818 |  |
-| stanford-oscar | 32 | ✓ | 23,946,076 | 18,275,213 | 1.310 | 57% | 17,774 |  |
-| coremark | 16 | ✓ | 11,161,279 | 7,834,837 | 1.425 | 66% | 23,916 | 0.903 CoreMark/MHz |
-| coremark | 32 | ✓ | 12,475,991 | 8,612,593 | 1.449 | 66% | 25,002 | 0.807 CoreMark/MHz |
-| basic-dhrystone | 16 | ✓ | 32,923,211 | 19,254,926 | 1.710 | 78% | – | 0.149 DMIPS |
-| basic-bm1 | 16 | ✓ | 1,823,762 | 1,207,004 | 1.511 | 81% | – | 620,928 cycles |
-| basic-bm2 | 16 | ✓ | 5,269,498 | 2,942,582 | 1.791 | 69% | – | 4,002,096 cycles |
-| basic-bm3 | 16 | ✓ | 9,130,900 | 5,107,206 | 1.788 | 66% | – | 7,755,244 cycles |
-| basic-bm4 | 16 | ✓ | 9,687,596 | 5,462,625 | 1.773 | 64% | – | 8,346,324 cycles |
-| basic-bm5 | 16 | ✓ | 10,809,091 | 6,066,628 | 1.782 | 65% | – | 9,363,933 cycles |
-| basic-bm6 | 16 | ✓ | 16,047,331 | 9,050,138 | 1.773 | 63% | – | 14,410,917 cycles |
-| basic-bm7 | 16 | ✓ | 26,767,226 | 14,239,972 | 1.880 | 64% | – | 25,046,450 cycles |
-| basic-bm8 | 16 | ✓ | 15,592,723 | 9,349,275 | 1.668 | 60% | – | 14,099,904 cycles |
-| doom | 32 | ✓ | 872,777,641 | 624,079,004 | 1.399 | 64% | 310,760 | 6.250 fps |
+| dhrystone | 16 | ✓ | 9,892,248 | 6,683,125 | 1.480 | 84% | 15,658 | 29.037 DMIPS |
+| dhrystone | 32 | ✓ | 12,459,155 | 7,785,272 | 1.600 | 82% | 17,120 | 23.098 DMIPS |
+| whetstone | 16 | ✓ | 6,041,753 | 4,501,714 | 1.342 | 67% | 25,532 | 3,317 KIPS |
+| whetstone | 32 | ✓ | 6,211,953 | 4,540,618 | 1.368 | 68% | 27,552 | 3,227 KIPS |
+| richards | 16 | ✓ | 9,244,454 | 5,956,155 | 1.552 | 75% | 16,092 |  |
+| richards | 32 | ✓ | 9,289,016 | 7,317,249 | 1.269 | 79% | 17,748 |  |
+| sieve | 16 | ✓ | 2,497,029 | 1,733,460 | 1.440 | 61% | 12,412 |  |
+| sieve | 32 | ✓ | 3,153,013 | 2,424,190 | 1.301 | 78% | 13,592 |  |
+| stanford-bubblesort | 16 | ✓ | 5,243,607 | 3,938,742 | 1.331 | 66% | 12,744 |  |
+| stanford-bubblesort | 32 | ✓ | 9,099,137 | 7,641,320 | 1.191 | 59% | 14,010 |  |
+| stanford-intmm | 16 | ✓ | 3,516,328 | 3,046,175 | 1.154 | 41% | 13,038 |  |
+| stanford-intmm | 32 | ✓ | 6,416,234 | 5,561,849 | 1.154 | 55% | 14,410 |  |
+| stanford-perm | 16 | ✓ | 5,795,100 | 3,875,709 | 1.495 | 70% | 12,758 |  |
+| stanford-perm | 32 | ✓ | 6,852,409 | 5,608,740 | 1.222 | 77% | 14,080 |  |
+| stanford-puzzle | 16 | ✓ | 13,025,940 | 10,199,570 | 1.277 | 52% | 15,336 |  |
+| stanford-puzzle | 32 | ✓ | 19,764,795 | 15,921,610 | 1.241 | 44% | 17,376 |  |
+| stanford-queens | 16 | ✓ | 15,055,956 | 10,809,651 | 1.393 | 87% | 12,898 |  |
+| stanford-queens | 32 | ✓ | 22,290,678 | 17,495,869 | 1.274 | 65% | 14,406 |  |
+| stanford-quicksort | 16 | ✓ | 4,474,670 | 3,544,925 | 1.262 | 77% | 12,808 |  |
+| stanford-quicksort | 32 | ✓ | 8,488,236 | 6,851,990 | 1.239 | 69% | 14,118 |  |
+| stanford-towers | 16 | ✓ | 6,053,667 | 4,820,946 | 1.256 | 64% | 13,490 |  |
+| stanford-towers | 32 | ✓ | 9,279,330 | 7,721,061 | 1.202 | 65% | 15,040 |  |
+| stanford-treesort | 16 | ✓ | 3,389,512 | 2,296,856 | 1.476 | 81% | 14,176 |  |
+| stanford-treesort | 32 | ✓ | 3,920,320 | 2,837,103 | 1.382 | 81% | 15,468 |  |
+| stanford-floatmm | 16 | ✓ | 28,413,731 | 23,533,844 | 1.207 | 58% | 13,230 |  |
+| stanford-floatmm | 32 | ✓ | 29,905,052 | 24,772,452 | 1.207 | 58% | 14,512 |  |
+| stanford-realmm | 16 | ✓ | 14,293,989 | 11,841,947 | 1.207 | 58% | 13,220 |  |
+| stanford-realmm | 32 | ✓ | 15,117,167 | 12,504,050 | 1.209 | 58% | 14,492 |  |
+| stanford-oscar | 16 | ✓ | 23,936,880 | 18,285,158 | 1.309 | 59% | 14,696 |  |
+| stanford-oscar | 32 | ✓ | 23,815,192 | 18,297,962 | 1.302 | 57% | 16,086 |  |
+| coremark | 16 | ✓ | 7,947,443 | 6,250,303 | 1.272 | 67% | 21,608 | 1.271 CoreMark/MHz |
+| coremark | 32 | ✓ | 9,930,176 | 7,302,029 | 1.360 | 68% | 23,042 | 1.015 CoreMark/MHz |
+| doomdraw | 32 | ✓ | 16,985,823 | 14,144,218 | 1.201 | 68% | 16,728 | 15.400 cycles/column pixel |
+| doomdraw-asm | 32 | ✓ | 15,977,943 | 13,572,788 | 1.177 | 69% | 16,216 | 11.810 cycles/column pixel |
+| basic-dhrystone | 16 | ✓ | 28,776,108 | 16,869,816 | 1.706 | 73% | – | 0.163 DMIPS |
+| basic-bm1 | 16 | ✓ | 1,476,220 | 1,017,359 | 1.451 | 72% | – | 466,312 cycles |
+| basic-bm2 | 16 | ✓ | 4,740,828 | 2,626,692 | 1.805 | 68% | – | 3,671,764 cycles |
+| basic-bm3 | 16 | ✓ | 8,180,516 | 4,576,342 | 1.788 | 66% | – | 7,028,180 cycles |
+| basic-bm4 | 16 | ✓ | 8,587,804 | 4,927,559 | 1.743 | 65% | – | 7,450,844 cycles |
+| basic-bm5 | 16 | ✓ | 9,578,210 | 5,459,310 | 1.754 | 65% | – | 8,358,695 cycles |
+| basic-bm6 | 16 | ✓ | 14,059,050 | 8,068,054 | 1.743 | 63% | – | 12,679,935 cycles |
+| basic-bm7 | 16 | ✓ | 23,943,644 | 12,771,247 | 1.875 | 64% | – | 22,496,260 cycles |
+| basic-bm8 | 16 | ✓ | 14,292,738 | 8,672,368 | 1.648 | 59% | – | 13,040,874 cycles |
+| doom | 32 | ✓ | 719,461,591 | 529,388,465 | 1.359 | 60% | 283,580 | 7.511 fps |
+| doom-asm | 32 | ✓ | 644,798,724 | 477,937,498 | 1.349 | 60% | 283,016 | 8.454 fps |
 
 ## 16-bit int against 32-bit int (variant A, base)
 
@@ -56,72 +59,125 @@ The same C source compiled with each `int` width. Ratios are 32-bit / 16-bit.
 
 | benchmark | cycles int16 | cycles int32 | cycle ratio | code ratio | both outputs correct |
 |---|---|---|---|---|---|
-| dhrystone | 13,011,319 | 14,706,357 | 1.130 | 1.056 | yes |
-| whetstone | 5,948,516 | 5,967,408 | 1.003 | 1.061 | yes |
-| richards | 10,366,960 | 10,929,576 | 1.054 | 1.070 | yes |
-| sieve | 2,497,709 | 3,707,778 | 1.484 | 1.056 | yes |
-| stanford-bubblesort | 5,261,551 | 9,423,113 | 1.791 | 1.061 | yes |
-| stanford-intmm | 8,336,563 | 10,550,408 | 1.266 | 1.063 | yes |
-| stanford-perm | 5,808,540 | 7,011,539 | 1.207 | 1.063 | yes |
-| stanford-puzzle | 12,355,281 | 24,865,198 | 2.013 | 1.116 | yes |
-| stanford-queens | 16,849,131 | 25,679,789 | 1.524 | 1.077 | yes |
-| stanford-quicksort | 5,291,807 | 9,460,463 | 1.788 | 1.063 | yes |
-| stanford-towers | 6,311,184 | 9,497,280 | 1.505 | 1.076 | yes |
-| stanford-treesort | 3,932,858 | 4,622,408 | 1.175 | 1.057 | yes |
-| stanford-floatmm | 32,215,017 | 32,777,963 | 1.017 | 1.059 | yes |
-| stanford-realmm | 16,225,275 | 16,553,652 | 1.020 | 1.058 | yes |
-| stanford-oscar | 24,867,754 | 23,946,076 | 0.963 | 1.057 | yes |
-| coremark | 11,161,279 | 12,475,991 | 1.118 | 1.045 | yes |
+| dhrystone | 9,892,248 | 12,459,155 | 1.259 | 1.093 | yes |
+| whetstone | 6,041,753 | 6,211,953 | 1.028 | 1.079 | yes |
+| richards | 9,244,454 | 9,289,016 | 1.005 | 1.103 | yes |
+| sieve | 2,497,029 | 3,153,013 | 1.263 | 1.095 | yes |
+| stanford-bubblesort | 5,243,607 | 9,099,137 | 1.735 | 1.099 | yes |
+| stanford-intmm | 3,516,328 | 6,416,234 | 1.825 | 1.105 | yes |
+| stanford-perm | 5,795,100 | 6,852,409 | 1.182 | 1.104 | yes |
+| stanford-puzzle | 13,025,940 | 19,764,795 | 1.517 | 1.133 | yes |
+| stanford-queens | 15,055,956 | 22,290,678 | 1.481 | 1.117 | yes |
+| stanford-quicksort | 4,474,670 | 8,488,236 | 1.897 | 1.102 | yes |
+| stanford-towers | 6,053,667 | 9,279,330 | 1.533 | 1.115 | yes |
+| stanford-treesort | 3,389,512 | 3,920,320 | 1.157 | 1.091 | yes |
+| stanford-floatmm | 28,413,731 | 29,905,052 | 1.052 | 1.097 | yes |
+| stanford-realmm | 14,293,989 | 15,117,167 | 1.058 | 1.096 | yes |
+| stanford-oscar | 23,936,880 | 23,815,192 | 0.995 | 1.095 | yes |
+| coremark | 7,947,443 | 9,930,176 | 1.249 | 1.066 | yes |
+
+## Encoding variant B against A (base)
+
+| benchmark | int | code bytes A | code bytes B | B/A code | B/A cycles |
+|---|---|---|---|---|---|
+| dhrystone | 16 | 15,658 | 16,448 | 1.050 | 0.971 |
+| dhrystone | 32 | 17,120 | 18,318 | 1.070 | 1.034 |
+| whetstone | 16 | 25,532 | 27,620 | 1.082 | 0.983 |
+| whetstone | 32 | 27,552 | 29,944 | 1.087 | 0.956 |
+| richards | 16 | 16,092 | 17,160 | 1.066 | 0.940 |
+| richards | 32 | 17,748 | 19,244 | 1.084 | 1.030 |
+| sieve | 16 | 12,412 | 13,162 | 1.060 | 1.000 |
+| sieve | 32 | 13,592 | 14,530 | 1.069 | 1.000 |
+| stanford-bubblesort | 16 | 12,744 | 13,494 | 1.059 | 1.000 |
+| stanford-bubblesort | 32 | 14,010 | 14,950 | 1.067 | 1.000 |
+| stanford-intmm | 16 | 13,038 | 13,840 | 1.062 | 1.000 |
+| stanford-intmm | 32 | 14,410 | 15,424 | 1.070 | 1.000 |
+| stanford-perm | 16 | 12,758 | 13,514 | 1.059 | 0.957 |
+| stanford-perm | 32 | 14,080 | 15,066 | 1.070 | 0.981 |
+| stanford-puzzle | 16 | 15,336 | 15,654 | 1.021 | 0.999 |
+| stanford-puzzle | 32 | 17,376 | 18,374 | 1.057 | 1.000 |
+| stanford-queens | 16 | 12,898 | 13,738 | 1.065 | 1.000 |
+| stanford-queens | 32 | 14,406 | 15,428 | 1.071 | 1.000 |
+| stanford-quicksort | 16 | 12,808 | 13,576 | 1.060 | 1.000 |
+| stanford-quicksort | 32 | 14,118 | 15,098 | 1.069 | 1.000 |
+| stanford-towers | 16 | 13,490 | 14,270 | 1.058 | 0.945 |
+| stanford-towers | 32 | 15,040 | 16,078 | 1.069 | 0.975 |
+| stanford-treesort | 16 | 14,176 | 15,020 | 1.060 | 0.989 |
+| stanford-treesort | 32 | 15,468 | 16,540 | 1.069 | 0.992 |
+| stanford-floatmm | 16 | 13,230 | 14,108 | 1.066 | 0.998 |
+| stanford-floatmm | 32 | 14,512 | 15,590 | 1.074 | 1.007 |
+| stanford-realmm | 16 | 13,220 | 14,098 | 1.066 | 1.001 |
+| stanford-realmm | 32 | 14,492 | 15,570 | 1.074 | 1.006 |
+| stanford-oscar | 16 | 14,696 | 15,782 | 1.074 | 1.031 |
+| stanford-oscar | 32 | 16,086 | 17,370 | 1.080 | 0.988 |
+| coremark | 16 | 21,608 | 23,898 | 1.106 | 1.000 |
+| coremark | 32 | 23,042 | 25,642 | 1.113 | 1.000 |
+| doomdraw | 32 | 16,728 | 17,800 | 1.064 | 1.000 |
+| doomdraw-asm | 32 | 16,216 | 17,172 | 1.059 | 0.998 |
+| basic-dhrystone | 16 | – | – | – | 0.993 |
+| basic-bm1 | 16 | – | – | – | 1.037 |
+| basic-bm2 | 16 | – | – | – | 0.986 |
+| basic-bm3 | 16 | – | – | – | 0.993 |
+| basic-bm4 | 16 | – | – | – | 0.997 |
+| basic-bm5 | 16 | – | – | – | 0.992 |
+| basic-bm6 | 16 | – | – | – | 1.004 |
+| basic-bm7 | 16 | – | – | – | 1.000 |
+| basic-bm8 | 16 | – | – | – | 0.991 |
+| doom | 32 | 283,580 | 312,180 | 1.101 | 1.009 |
+| doom-asm | 32 | 283,016 | 311,500 | 1.101 | 0.987 |
 
 ## Speedup over base by configuration (variant A)
 
-| benchmark | int | ext | x-dstep | x-mulpu | x-fsh | x-clz |
-|---|---|---|---|---|---|---|
-| dhrystone | 16 | 1.000× | 1.000× | 1.015× | 1.000× | 1.000× |
-| dhrystone | 32 | 0.991× | 0.988× | 1.000× | 1.000× | 1.000× |
-| whetstone | 16 | 1.145× | 1.138× | 1.004× | 1.004× | 1.000× |
-| whetstone | 32 | 1.115× | 1.109× | 1.007× | 1.008× | 1.000× |
-| richards | 16 | 1.000× | 1.000× | 1.000× | 1.000× | 1.000× |
-| richards | 32 | 1.000× | 1.000× | 1.000× | 1.000× | 1.000× |
-| sieve | 16 | 1.000× | 1.000× | 1.000× | 1.000× | 1.000× |
-| sieve | 32 | 1.000× | 1.000× | 1.000× | 1.000× | 1.000× |
-| stanford-bubblesort | 16 | 1.000× | 1.000× | 1.000× | 1.000× | 1.000× |
-| stanford-bubblesort | 32 | 1.000× | 1.000× | 1.000× | 1.000× | 1.000× |
-| stanford-intmm | 16 | 1.036× | 1.000× | 1.036× | 1.000× | 1.000× |
-| stanford-intmm | 32 | 1.023× | 1.000× | 1.023× | 1.000× | 1.000× |
-| stanford-perm | 16 | 1.000× | 1.000× | 1.000× | 1.000× | 1.000× |
-| stanford-perm | 32 | 1.000× | 1.000× | 1.000× | 1.000× | 1.000× |
-| stanford-puzzle | 16 | 1.000× | 1.000× | 1.000× | 1.000× | 1.000× |
-| stanford-puzzle | 32 | 1.000× | 1.000× | 1.000× | 1.000× | 1.000× |
-| stanford-queens | 16 | 1.000× | 1.000× | 1.000× | 1.000× | 1.000× |
-| stanford-queens | 32 | 1.000× | 1.000× | 1.000× | 1.000× | 1.000× |
-| stanford-quicksort | 16 | 1.000× | 1.000× | 1.000× | 1.000× | 1.000× |
-| stanford-quicksort | 32 | 1.003× | 1.000× | 1.003× | 1.000× | 1.000× |
-| stanford-towers | 16 | 1.000× | 1.000× | 1.000× | 1.000× | 1.000× |
-| stanford-towers | 32 | 1.000× | 1.000× | 1.000× | 1.000× | 1.000× |
-| stanford-treesort | 16 | 1.000× | 1.000× | 1.000× | 1.000× | 1.000× |
-| stanford-treesort | 32 | 1.004× | 1.000× | 1.003× | 1.000× | 1.000× |
-| stanford-floatmm | 16 | 1.075× | 1.052× | 1.012× | 1.007× | 1.000× |
-| stanford-floatmm | 32 | 1.063× | 1.040× | 1.012× | 1.006× | 1.000× |
-| stanford-realmm | 16 | 1.075× | 1.053× | 1.012× | 1.007× | 1.000× |
-| stanford-realmm | 32 | 1.063× | 1.039× | 1.012× | 1.006× | 1.000× |
-| stanford-oscar | 16 | 1.034× | 1.020× | 1.006× | 1.012× | 1.000× |
-| stanford-oscar | 32 | 1.072× | 1.061× | 1.005× | 1.011× | 1.000× |
-| coremark | 16 | 1.018× | 1.001× | 1.017× | 1.000× | 1.000× |
-| coremark | 32 | 1.015× | 0.997× | 1.015× | 1.000× | 1.000× |
-| basic-dhrystone | 16 | 1.030× | 1.029× | 1.002× | 1.024× | 1.000× |
-| basic-bm1 | 16 | 1.035× | 1.030× | 1.008× | 1.019× | 1.000× |
-| basic-bm2 | 16 | 1.032× | 1.029× | 0.996× | 1.008× | 1.000× |
-| basic-bm3 | 16 | 1.059× | 1.042× | 1.000× | 1.000× | 1.000× |
-| basic-bm4 | 16 | 1.071× | 1.057× | 0.998× | 0.997× | 1.000× |
-| basic-bm5 | 16 | 1.061× | 1.045× | 0.997× | 1.000× | 1.000× |
-| basic-bm6 | 16 | 1.044× | 1.035× | 0.996× | 0.995× | 1.000× |
-| basic-bm7 | 16 | 1.050× | 1.032× | 0.997× | 0.998× | 1.000× |
-| basic-bm8 | 16 | 1.046× | 1.028× | 1.002× | 1.008× | 1.000× |
-| doom | 32 | 1.117× | 1.107× | 1.012× | 1.004× | 1.000× |
-| **geomean** | | **1.030×** | **1.022×** | **1.004×** | **1.003×** | **1.000×** |
+| benchmark | int | ext |
+|---|---|---|
+| dhrystone | 16 | 1.015× |
+| dhrystone | 32 | 1.023× |
+| whetstone | 16 | 1.139× |
+| whetstone | 32 | 1.166× |
+| richards | 16 | 1.000× |
+| richards | 32 | 1.000× |
+| sieve | 16 | 1.000× |
+| sieve | 32 | 1.000× |
+| stanford-bubblesort | 16 | 1.000× |
+| stanford-bubblesort | 32 | 1.000× |
+| stanford-intmm | 16 | 1.000× |
+| stanford-intmm | 32 | 1.000× |
+| stanford-perm | 16 | 1.000× |
+| stanford-perm | 32 | 1.000× |
+| stanford-puzzle | 16 | 1.000× |
+| stanford-puzzle | 32 | 1.000× |
+| stanford-queens | 16 | 1.000× |
+| stanford-queens | 32 | 1.000× |
+| stanford-quicksort | 16 | 1.000× |
+| stanford-quicksort | 32 | 1.000× |
+| stanford-towers | 16 | 1.000× |
+| stanford-towers | 32 | 1.000× |
+| stanford-treesort | 16 | 1.000× |
+| stanford-treesort | 32 | 1.000× |
+| stanford-floatmm | 16 | 1.070× |
+| stanford-floatmm | 32 | 1.060× |
+| stanford-realmm | 16 | 1.067× |
+| stanford-realmm | 32 | 1.061× |
+| stanford-oscar | 16 | 1.016× |
+| stanford-oscar | 32 | 1.082× |
+| coremark | 16 | 1.001× |
+| coremark | 32 | 1.001× |
+| doomdraw | 32 | 1.055× |
+| doomdraw-asm | 32 | 1.063× |
+| basic-dhrystone | 16 | 1.003× |
+| basic-bm1 | 16 | 0.982× |
+| basic-bm2 | 16 | 1.026× |
+| basic-bm3 | 16 | 1.028× |
+| basic-bm4 | 16 | 1.027× |
+| basic-bm5 | 16 | 1.027× |
+| basic-bm6 | 16 | 1.020× |
+| basic-bm7 | 16 | 1.020× |
+| basic-bm8 | 16 | 1.030× |
+| doom | 32 | 1.125× |
+| doom-asm | 32 | 1.125× |
+| **geomean** | | **1.027×** |
 
-Configurations: `base` 2 KB I-cache, 2-cycle taken branch, no fusion; `ext` base + ISA extension X in the runtime (fcc --ext); `x-dstep` base + DSTEP only; `x-mulpu` base + MULPU only; `x-fsh` base + FSHR/FSHL only; `x-clz` base + CLZ only
+Configurations: `base` 2 KB I-cache, 2-cycle taken branch, no fusion; `ext` base + ISA extension X in the runtime (fcc --ext)
 
 ## Benchmarks
 
@@ -141,6 +197,8 @@ Configurations: `base` 2 KB I-cache, 2-cycle taken branch, no fusion; `ext` base
 - **stanford-realmm**: Stanford RealMM (Hennessy), 1 iterations
 - **stanford-oscar**: Stanford Oscar (Hennessy), 1 iterations
 - **coremark**: CoreMark 1.0 (EEMBC 2009), 10 iterations: an ISA measurement, not a reportable score
+- **doomdraw**: Doom's R_DrawColumn and R_DrawSpan in C, on a frame-like mix of walls and floors
+- **doomdraw-asm**: The same with the hand-written R_DrawColumn and R_DrawSpan (doom/port/r_draw_fcpu.s)
 - **basic-dhrystone**: Dhrystone 2.1 translated to BASIC, 100 runs, in the fpga_cpu BASIC interpreter
 - **basic-bm1**: Rugg/Feldman BASIC benchmark 1 (Kilobaud 1977)
 - **basic-bm2**: Rugg/Feldman BASIC benchmark 2 (Kilobaud 1977)
@@ -151,3 +209,4 @@ Configurations: `base` 2 KB I-cache, 2-cycle taken branch, no fusion; `ext` base
 - **basic-bm7**: Rugg/Feldman BASIC benchmark 7 (Kilobaud 1977)
 - **basic-bm8**: Rugg/Feldman BASIC benchmark 8 (Kilobaud 1977)
 - **doom**: Doom (doomgeneric), -timedemo demo1 for 100 gametics, 32-bit int, expansion RAM
+- **doom-asm**: Doom as above, with the hand-written R_DrawColumn and R_DrawSpan
