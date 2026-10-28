@@ -30,6 +30,11 @@ check: $(COMMON) src/hal_host.c $(HDRS)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Wconversion -Wsign-conversion -Wshadow -o $(BUILD)/basic-check $(COMMON) src/hal_host.c -lm
 
+# The tests run in the same workspace on the host and the target: 160 KB,
+# which fits under the target's stack now that the 8 bpp sprite buffers
+# take 053400-0C3BFF (hal_fcpu.c).
+TEST_ARENA := 163840
+
 # Each test is fed to the prompt on stdin, with files in a scratch directory
 # (tests/<name>.disk/ holds files for just that test).
 test: $(BUILD)/basic-host
@@ -37,7 +42,7 @@ test: $(BUILD)/basic-host
 	  n=$$(basename $$t .bas); d=$(BUILD)/disk-$$n; rm -rf $$d; mkdir -p $$d; \
 	  if [ -d tests/disk ]; then cp tests/disk/* $$d/ 2>/dev/null; fi; \
 	  if [ -d tests/$$n.disk ]; then cp tests/$$n.disk/* $$d/; fi; \
-	  BASIC_DISK=$$d BASIC_FASTFRAMES=1 $(BUILD)/basic-host -q < $$t > $(BUILD)/$$n.out 2>&1; \
+	  BASIC_DISK=$$d BASIC_FASTFRAMES=1 BASIC_ARENA=$(TEST_ARENA) $(BUILD)/basic-host -q < $$t > $(BUILD)/$$n.out 2>&1; \
 	  if diff -u tests/$$n.out $(BUILD)/$$n.out > $(BUILD)/$$n.diff; then echo "$$n ok"; \
 	  else echo "$$n FAILED (see $(BUILD)/$$n.diff)"; fail=1; fi; \
 	done; exit $$fail
@@ -47,7 +52,7 @@ bless: $(BUILD)/basic-host
 	  n=$$(basename $$t .bas); d=$(BUILD)/disk-$$n; rm -rf $$d; mkdir -p $$d; \
 	  if [ -d tests/disk ]; then cp tests/disk/* $$d/ 2>/dev/null; fi; \
 	  if [ -d tests/$$n.disk ]; then cp tests/$$n.disk/* $$d/; fi; \
-	  BASIC_DISK=$$d BASIC_FASTFRAMES=1 $(BUILD)/basic-host -q < $$t > tests/$$n.out 2>&1; \
+	  BASIC_DISK=$$d BASIC_FASTFRAMES=1 BASIC_ARENA=$(TEST_ARENA) $(BUILD)/basic-host -q < $$t > tests/$$n.out 2>&1; \
 	done
 
 # fpga_cpu builds: basic.<v>.bin boots to the banner; basic-test.<v>.bin is
@@ -60,18 +65,18 @@ $(BUILD)/basic.%.bin: $(SRCS) $(HDRS) $(RUNTIME)
 
 $(BUILD)/basic-test.%.bin: $(SRCS) $(HDRS) $(RUNTIME)
 	@mkdir -p $(BUILD)
-	$(FCC) -q -v $* -O2 -DBASIC_QUIET=1 -DBASIC_ARENA_MAX=262144UL $(SRCS) -o $@
+	$(FCC) -q -v $* -O2 -DBASIC_QUIET=1 -DBASIC_ARENA_MAX=$(TEST_ARENA)UL $(SRCS) -o $@
 
 # The same with the runtime that uses ISA extension X (benchmarks/run.py):
 # basic-test-ext.<v>.bin uses all of it, basic-test-x-<part>.<v>.bin one part
 # (EXT=<part>, as for fcc --ext=<part>).
 $(BUILD)/basic-test-ext.%.bin: $(SRCS) $(HDRS) $(RUNTIME)
 	@mkdir -p $(BUILD)
-	$(FCC) -q -v $* --ext -O2 -DBASIC_QUIET=1 -DBASIC_ARENA_MAX=262144UL $(SRCS) -o $@
+	$(FCC) -q -v $* --ext -O2 -DBASIC_QUIET=1 -DBASIC_ARENA_MAX=$(TEST_ARENA)UL $(SRCS) -o $@
 
 $(BUILD)/basic-test-x-%.bin: $(SRCS) $(HDRS) $(RUNTIME)
 	@mkdir -p $(BUILD)
-	$(FCC) -q -v $(lastword $(subst ., ,$*)) --ext=$(EXT) -O2 -DBASIC_QUIET=1 -DBASIC_ARENA_MAX=262144UL $(SRCS) -o $@
+	$(FCC) -q -v $(lastword $(subst ., ,$*)) --ext=$(EXT) -O2 -DBASIC_QUIET=1 -DBASIC_ARENA_MAX=$(TEST_ARENA)UL $(SRCS) -o $@
 
 test-target: $(VARIANTS:%=$(BUILD)/basic-test.%.bin)
 	@fail=0; for v in $(VARIANTS); do for t in $(TESTS); do \

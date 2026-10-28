@@ -135,7 +135,7 @@ static void key_event(const SDL_Event &e)
                 dev_key(&cpu.dev, (uint16_t)*p);
         return;
     }
-    if (e.type != SDL_KEYDOWN)
+    if (e.type != SDL_KEYDOWN && e.type != SDL_KEYUP)
         return;
     SDL_Keycode k = e.key.keysym.sym;
     uint16_t mod = e.key.keysym.mod;
@@ -160,9 +160,15 @@ static void key_event(const SDL_Event &e)
             code = 0x90 + (k - SDLK_F1);
         else if ((mod & KMOD_CTRL) && k >= SDLK_a && k <= SDLK_z)
             code = 1 + (k - SDLK_a);
+        else if (e.type == SDL_KEYUP && k >= 32 && k < 127)
+            code = (int)k; /* printable keys are pressed via SDL_TEXTINPUT; released here, unshifted */
     }
-    if (code >= 0)
+    if (code < 0)
+        return;
+    if (e.type == SDL_KEYDOWN)
         dev_key(&cpu.dev, (uint16_t)code);
+    else
+        dev_key_up(&cpu.dev, (uint16_t)code); /* queued only if the program asked (KBD_CTRL) */
 }
 
 // FSIM_GUI_SELFTEST=1: exercise breakpoints, step over and step out without

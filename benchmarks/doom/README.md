@@ -28,9 +28,9 @@ and column/span rasterizing.
     memory (centered) and Doom's palette goes into the hardware palette.
     Palette index 0 is transparent on this machine, so the backdrop is
     set to black.
-  - The keyboard queue only reports presses, so a key is released on the
-    next poll; Ctrl (fire), Shift (run) and Alt (strafe) follow the live
-    modifier state.
+  - Keys: the port turns on key releases (`KBD_CTRL`, docs/io.md), so a
+    held key stays held; Ctrl (fire), Shift (run) and Alt (strafe) follow
+    the live modifier state.
   - Time is the CPU cycle counter at 50 MHz.
   - Arguments come from `DOOMARGS.TXT` on the disk, if it exists.
 - `doomgeneric_host.c`: the same engine headless on the development
@@ -49,7 +49,19 @@ Two, both marked `fpga_cpu:` in the source:
   second of real time on any machine, so leaving it out keeps a short
   timedemo a measure of game frames.
 
-## Running it
+## Playing it
+
+In the browser: the web simulator (`web/`, published at
+https://n9wxu.github.io/fpga_cpu/?prog=doom) has Doom under Program.
+Locally: `make` here builds `build/doom.A.bin`, then
+
+```sh
+./get_wad.sh
+mkdir -p build/disk && cp wad/DOOM.WAD build/disk/
+../../sim/build/fsim-gui --xram 14 --load 0x100000 --disk build/disk --true-color build/doom.A.bin
+```
+
+## Running the benchmark
 
 ```sh
 ./get_wad.sh

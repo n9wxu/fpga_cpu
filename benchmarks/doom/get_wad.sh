@@ -5,11 +5,12 @@
 # yourself: it is used first, and its demo1 is the classic timedemo.
 # Otherwise this fetches Freedoom: Phase 1 (BSD licensed) from its GitHub
 # release and installs freedoom1.wad as wad/DOOM.WAD (the file service
-# takes 8.3 names).
+# takes 8.3 names). FREEDOOM=1 fetches Freedoom even if DOOM1.WAD is there
+# (the web simulator publishes only Freedoom).
 set -e
 cd "$(dirname "$0")"
 mkdir -p wad
-if [ -f wad/DOOM1.WAD ]; then
+if [ -f wad/DOOM1.WAD ] && [ -z "$FREEDOOM" ]; then
   sum=$(sha1sum wad/DOOM1.WAD | cut -d' ' -f1)
   [ "$sum" = 5b2e249b9c5133ec987b3ea77596381dc0d6bc1d ] && echo "wad/DOOM1.WAD: shareware v1.9" \
     || echo "wad/DOOM1.WAD: not the v1.9 shareware file (sha1 $sum); used anyway"

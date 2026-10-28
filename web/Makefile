@@ -1,9 +1,11 @@
-# fpga_cpu BASIC in the browser: the simulator core compiled to WebAssembly
-#   make         build build/{index.html,fsim.js,fsim.wasm,fsim.data}
+# fpga_cpu BASIC and Doom in the browser: the simulator core compiled to WebAssembly
+#   make         build build/{index.html,fsim.js,fsim.wasm,fsim.data} and Doom's
+#                build/{doom.A.bin,doom.B.bin,DOOM.WAD.gz,FREEDOOM-COPYING.txt}
 #   make serve   build, then serve on http://localhost:8000
 #   make deploy  build, then rsync to $(DEPLOY), e.g. user@host:/srv/www/basic/
 #                (set DEPLOY on the command line or in web/local.mk, which git ignores)
-# Needs emcc (Emscripten) and the BASIC images (make -C ../basic target).
+# Needs emcc (Emscripten), the BASIC images (make -C ../basic target) and,
+# for Doom, the LLVM toolchain and network access for Freedoom (get_wad.sh).
 
 ROOT   := ..
 SIM    := $(ROOT)/sim
@@ -15,6 +17,10 @@ EMCC   ?= emcc
 CORE   := $(SIM)/src/cpu.c $(SIM)/src/dev.c $(SIM)/src/video.c $(SIM)/src/front.c $(SIM)/src/font8x14.c \
           $(SIM)/src/gen/isa_gen.c $(SIM)/src/gen/exec_gen.c
 ROMS   := $(BASIC)/build/basic.A.bin $(BASIC)/build/basic.B.bin
+DOOM   := $(ROOT)/benchmarks/doom
+DOOMBINS := $(DOOM)/build/doom.A.bin $(DOOM)/build/doom.B.bin
+# The site publishes only Freedoom (BSD), never a shareware DOOM1.WAD.
+WAD    := $(DOOM)/wad/DOOM.WAD
 EXAMPLES := $(wildcard $(BASIC)/examples/*.BAS)
 
 EMFLAGS := -O3 -std=gnu11 -Wall -Wno-unused-parameter -I$(SIM)/src \
@@ -24,7 +30,28 @@ EMFLAGS := -O3 -std=gnu11 -Wall -Wno-unused-parameter -I$(SIM)/src \
            $(foreach r,$(ROMS),--preload-file $(r)@/rom/$(notdir $(r))) \
            --preload-file $(BASIC)/examples@/examples
 
-all: $(BUILD)/fsim.js $(BUILD)/index.html
+all: $(BUILD)/fsim.js $(BUILD)/index.html doom
+
+# Doom is fetched by the page when picked, not preloaded
+doom: $(BUILD)/doom.A.bin $(BUILD)/doom.B.bin $(BUILD)/DOOM.WAD.gz $(BUILD)/FREEDOOM-COPYING.txt
+
+$(DOOMBINS) &:
+	$(MAKE) -C $(DOOM)
+
+$(BUILD)/doom.%.bin: $(DOOM)/build/doom.%.bin
+	@mkdir -p $(BUILD)
+	cp $< $@
+
+$(WAD):
+	FREEDOOM=1 $(DOOM)/get_wad.sh
+
+$(BUILD)/DOOM.WAD.gz: $(WAD)
+	@mkdir -p $(BUILD)
+	gzip -9 -n -c $< > $@
+
+$(BUILD)/FREEDOOM-COPYING.txt: $(WAD)
+	@mkdir -p $(BUILD)
+	cp $(DOOM)/wad/FREEDOOM-COPYING.txt $@
 
 $(SIM)/build/gen.stamp: $(ROOT)/cpu/isa.yaml
 	$(MAKE) -C $(SIM) build/gen.stamp
@@ -50,4 +77,4 @@ deploy: all
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all serve deploy clean
+.PHONY: all doom serve deploy clean

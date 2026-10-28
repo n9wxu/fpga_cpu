@@ -25,6 +25,7 @@ writes the low half first. There are no interrupts yet, so software polls.
 |---|---|---|---|
 | F00100 | R | `KBD_DATA` | next key from the queue, 0xFFFF if none (reading removes it) |
 | F00102 | R | `KBD_MOD` | live modifier state: bit 0 shift, 1 ctrl, 2 alt |
+| F00104 | RW | `KBD_CTRL` | bit 0: also queue key releases, as the key's code with bit 15 set (0 after reset). Games use it to know which keys are held. |
 
 Key codes are ASCII for printable keys. Others:
 
@@ -38,7 +39,9 @@ Key codes are ASCII for printable keys. Others:
 | 0x7F | Delete | 1–26 | Ctrl-A … Ctrl-Z |
 
 On hardware, PS/2 scan codes are translated into this queue by FPGA
-logic.
+logic; a release is the PS/2 break code. A release carries the code its
+press had (Ctrl-A released is 1 | 0x8000), and printable keys are released
+as their unshifted character.
 
 ## Video (F00200)
 

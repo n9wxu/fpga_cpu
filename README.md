@@ -38,8 +38,9 @@ interpreter built with the LLVM backend. Click the screen, then type
 - **BASIC** (`basic/`). An MS-BASIC-style interpreter in C with graphics,
   sprites, sound and files. It gives the same test output on the host and
   in the simulator on both encodings.
-- **Web build** (`web/`). The simulator and BASIC in a browser, with a
-  disk kept in the browser's storage.
+- **Web build** (`web/`). The simulator in a browser running BASIC, with
+  a disk kept in the browser's storage, or Doom
+  ([play it](https://n9wxu.github.io/fpga_cpu/?prog=doom)).
 
 Not started yet: the Verilog RTL (`verilog/`), the ISE build (`fpga/`) and
 the expansion board (`pcb/`). The open design questions are in the

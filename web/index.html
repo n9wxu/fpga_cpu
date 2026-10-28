@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>fpga_cpu BASIC</title>
+<title>fpga_cpu simulator</title>
 <style>
   :root { --bg: #15171a; --panel: #202328; --fg: #d8dadd; --dim: #8a9099; --accent: #6cc070; --led-off: #1d3a1f; }
   * { box-sizing: border-box; }
@@ -32,22 +32,23 @@
 </head>
 <body>
 <main>
-  <h1>fpga_cpu BASIC</h1>
-  <p class="sub">The BASIC interpreter compiled for the fpga_cpu 16-bit CPU, running on the cycle-counting simulator
-    compiled to WebAssembly. Click the screen and type.</p>
+  <h1>fpga_cpu simulator</h1>
+  <p class="sub">The fpga_cpu 16-bit CPU's cycle-counting simulator compiled to WebAssembly, running BASIC or Doom.
+    Click the screen and type.</p>
   <div class="wrap">
     <canvas id="screen" width="1280" height="720" tabindex="0"></canvas>
     <div id="hint">Loading…</div>
   </div>
   <div class="bar">
+    <label>Program <select id="prog"><option value="basic">BASIC</option><option value="doom">Doom</option></select></label>
     <button id="reset">Reset</button>
     <label>Encoding <select id="variant"><option>A</option><option>B</option></select></label>
     <label>Speed <select id="speed"><option value="1">50 MHz (real)</option><option value="0">Maximum</option></select></label>
     <label>Colors <select id="color"><option value="0">3-bit (board)</option><option value="1">Full palette</option></select></label>
     <button id="sound">Sound off</button>
-    <label>Disk <select id="files"></select></label>
+    <span id="diskui"><label>Disk <select id="files"></select></label>
     <button id="download">Download</button>
-    <button id="upload">Upload…</button>
+    <button id="upload">Upload…</button></span>
     <input type="file" id="picker" multiple hidden>
     <span class="leds" id="leds"></span>
     <span id="status"></span>
@@ -57,6 +58,14 @@
     <p><code>DIR</code>, <code>RUN "SPIRO.BAS"</code>, <code>RUN "SPRITES.BAS"</code>, <code>RUN "WALKER.BAS"</code>, <code>RUN "MUSIC.BAS"</code>
       (turn sound on first), <code>LIST</code>. Esc stops a running program. Programs you <code>SAVE</code> are kept
       in this browser.</p>
+    <p><b>Doom</b>: pick it under Program. The first time, it downloads the game data (about 10 MB). Arrow keys move,
+      Ctrl fires, Space opens doors, Shift runs, Alt strafes, 1–7 pick weapons, Esc is the menu, Enter selects. The
+      CPU draws every frame itself at 50 MHz, so expect about 6 frames per second, as the simulator measures; a
+      browser too slow for real time runs it slower still. This is
+      <a href="https://github.com/ozkl/doomgeneric">doomgeneric</a> (GPL v2, source in
+      <a href="https://github.com/n9wxu/fpga_cpu/tree/main/benchmarks/doom">benchmarks/doom</a>) with
+      <a href="https://freedoom.github.io/">Freedoom: Phase 1</a> (<a href="FREEDOOM-COPYING.txt">BSD license</a>)
+      as its game data. It runs from 14 MB of simulator-only expansion RAM, more than the board has.</p>
   </details>
 </main>
 <script>
@@ -112,12 +121,58 @@ function listFiles() {
 }
 
 let cpuMs = 0, drawMs = 0, cyclesPerMs = 50e3, running = false, lastT = 0, lastCycles = 0, lastInsts = 0, rateT = 0;
+let booting = 0;
 function boot(v) {
-  if (Module.ccall('web_boot', 'number', ['string'], [v]) !== 0) { hint.textContent = 'Boot failed'; return; }
-  hint.style.display = 'none';
-  running = true;
-  canvas.focus();
-  // ?keys=TEXT types TEXT after boot (\n = Enter), like fsim-gui --keys
+  const prog = $('prog').value, n = ++booting;
+  running = false;
+  releaseAll();
+  $('diskui').style.display = prog === 'basic' ? '' : 'none';
+  (prog === 'doom' ? bootDoom(v) : Promise.resolve(Module.ccall('web_boot', 'number', ['string'], [v])))
+    .then(r => {
+      if (n !== booting) return;
+      if (r !== 0) { hint.textContent = 'Boot failed'; hint.style.display = ''; return; }
+      hint.style.display = 'none';
+      running = true;
+      canvas.focus();
+      if (prog === 'basic') typeKeys();
+    }, e => { if (n === booting) { hint.textContent = 'Doom: ' + e; hint.style.display = ''; } });
+}
+
+// Doom: its image and the Freedoom WAD (gzipped) are fetched the first time,
+// into memory: /rom/doom.<v>.bin and /doom/DOOM.WAD.
+async function fetchBytes(url, what) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${url}: ${r.status}`);
+  const total = +r.headers.get('content-length') || 0, parts = [];
+  let got = 0;
+  for (const rd = r.body.getReader();;) {
+    const { done, value } = await rd.read();
+    if (done) break;
+    parts.push(value); got += value.length;
+    hint.textContent = `Loading ${what}… ` + (total ? Math.round(100 * got / total) + '%' : (got >> 20) + ' MB');
+  }
+  return new Blob(parts);
+}
+async function bootDoom(v) {
+  hint.style.display = '';
+  const img = '/rom/doom.' + v + '.bin';
+  if (!FS.analyzePath(img).exists)
+    FS.writeFile(img, new Uint8Array(await (await fetchBytes('doom.' + v + '.bin', 'Doom')).arrayBuffer()));
+  if (!FS.analyzePath('/doom').exists) FS.mkdir('/doom');
+  if (!FS.analyzePath('/doom/DOOM.WAD').exists) {
+    const gz = await fetchBytes('DOOM.WAD.gz', 'Freedoom');
+    hint.textContent = 'Unpacking Freedoom…';
+    const wad = await new Response(gz.stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+    FS.writeFile('/doom/DOOM.WAD', new Uint8Array(wad));
+  }
+  hint.textContent = 'Starting Doom…';
+  $('color').value = '1';   // Doom's 256-color palette, not the board's 3-bit dither
+  return Module.ccall('web_boot_image', 'number', ['string', 'string', 'number', 'number', 'string'],
+                      [v, img, 0x100000, 14, '/doom']);
+}
+
+// ?keys=TEXT types TEXT after boot (\n = Enter), like fsim-gui --keys
+function typeKeys() {
   for (const ch of (new URLSearchParams(location.search).get('keys') || '').replace(/\\n/g, '\n'))
     Module._web_key(ch === '\n' ? 13 : ch.charCodeAt(0));
 }
@@ -163,8 +218,20 @@ requestAnimationFrame(frame);
 // ---- keyboard: the codes of docs/io.md ----
 const SPECIAL = { Enter: 13, Backspace: 8, Tab: 9, Escape: 27, Delete: 0x7F, ArrowUp: 0x80, ArrowDown: 0x81,
   ArrowLeft: 0x82, ArrowRight: 0x83, Home: 0x84, End: 0x85, PageUp: 0x86, PageDown: 0x87, Insert: 0x88 };
+// Key releases go to the program too (it sees them only if it turned them
+// on, as Doom does); each release repeats the code its press sent.
+const down = new Map();          // KeyboardEvent.code -> code sent on press
+const mods = e => (e.shiftKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.altKey ? 4 : 0);
+function releaseAll() {
+  if (!Module._web_key_up) return;
+  for (const c of down.values()) Module._web_key_up(c);
+  down.clear();
+  Module._web_mod(0);
+}
 canvas.addEventListener('keydown', e => {
   if (e.metaKey) return;                 // leave browser shortcuts alone
+  Module._web_mod(mods(e));
+  if (e.key === 'Alt') e.preventDefault();
   let code = -1;
   if (e.key in SPECIAL) code = SPECIAL[e.key];
   else if (/^F([1-9]|1[0-2])$/.test(e.key)) code = 0x90 + +e.key.slice(1) - 1;
@@ -172,8 +239,16 @@ canvas.addEventListener('keydown', e => {
   else if (e.key.length === 1 && !e.altKey) { const c = e.key.charCodeAt(0); if (c >= 32 && c < 127) code = c; }
   if (code < 0) return;
   e.preventDefault();
+  if (e.repeat && $('prog').value === 'doom') return;   // a held key stays held
+  down.set(e.code, code);
   Module._web_key(code);
 });
+canvas.addEventListener('keyup', e => {
+  Module._web_mod(mods(e));
+  if (e.key === 'Alt') e.preventDefault();
+  if (down.has(e.code)) { Module._web_key_up(down.get(e.code)); down.delete(e.code); }
+});
+canvas.addEventListener('blur', releaseAll);
 canvas.addEventListener('paste', e => {
   e.preventDefault();
   for (const ch of e.clipboardData.getData('text').replace(/\r\n?/g, '\n'))
@@ -205,6 +280,9 @@ $('sound').onclick = () => {
 
 // ---- controls ----
 $('reset').onclick = () => boot($('variant').value);
+// ?prog=doom starts Doom
+if (new URLSearchParams(location.search).get('prog') === 'doom') $('prog').value = 'doom';
+$('prog').onchange = () => boot($('variant').value);
 $('variant').onchange = () => boot($('variant').value);
 $('speed').onchange = () => canvas.focus();
 // hi-color display: ?color=full, else the last choice

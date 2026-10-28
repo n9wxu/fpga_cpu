@@ -49,6 +49,7 @@ void dev_reset(iodev_t *d)
     d->fs_name = d->fs_buf = d->fs_size = d->fs_pos = 0;
     d->leds = d->seg7 = d->seg7_ctrl = 0;
     d->kbd_head = d->kbd_tail = 0;
+    d->kbd_ctrl = 0;
 }
 
 void dev_free(iodev_t *d)
@@ -63,6 +64,12 @@ void dev_key(iodev_t *d, uint16_t code)
         return; /* full: drop, like a real keyboard buffer */
     d->kbd_q[d->kbd_tail] = code;
     d->kbd_tail = n;
+}
+
+void dev_key_up(iodev_t *d, uint16_t code)
+{
+    if (d->kbd_ctrl & 1)
+        dev_key(d, (uint16_t)(code | KBD_RELEASE));
 }
 
 void dev_con_in(iodev_t *d, uint16_t ch)
@@ -288,6 +295,7 @@ uint16_t dev_read(cpu_t *c, uint32_t a)
             return k;
         }
     case IO_KBD_MOD: return d->kbd_mod;
+    case IO_KBD_CTRL: return d->kbd_ctrl;
     }
     if (a >= IO_VID && a < IO_VID + 2 * V__COUNT) {
         int r = (int)(a - IO_VID) / 2;
@@ -365,6 +373,7 @@ void dev_write(cpu_t *c, uint32_t a, uint32_t v)
     case IO_FS + 0x10: d->fs_len = (uint16_t)v; return;
     case IO_FS + 0x18: set_lo(&d->fs_pos, v); return;
     case IO_FS + 0x1A: set_hi(&d->fs_pos, v); return;
+    case IO_KBD_CTRL: d->kbd_ctrl = (uint16_t)(v & 1); return;
     case IO_BOARD + 0x0: d->leds = (uint16_t)(v & 0xFF); return;
     case IO_BOARD + 0x6: d->seg7 = (uint16_t)v; return;
     case IO_BOARD + 0x8: d->seg7_ctrl = (uint16_t)(v & 0xFF); return;

@@ -9,8 +9,9 @@
  * buffer", which is exactly the hi-color bitmap's layout, so the engine's
  * 320x200 picture is copied straight into video memory, centered, and
  * Doom's palette goes into the hardware palette.
- * Input: the keyboard queue only reports presses, so each key is released
- * on the next poll; Ctrl, Shift and Alt come from the live modifier state.
+ * Input: the keyboard queue, with key releases switched on (KBD_CTRL bit 0:
+ * a release arrives as its code | 0x8000), so held keys stay held. Ctrl,
+ * Shift and Alt (fire, run, strafe) come from the live modifier state.
  * Time: the CPU cycle counter at 50 MHz.
  * Files: the C runtime's stdio on the file service (8.3 names).
  *
@@ -33,6 +34,8 @@
 #define VID_BMP_HI   IO16(0xF0020A)
 #define PAL_INDEX    IO16(0xF00210)
 #define PAL_DATA     IO16(0xF00212)
+#define KBD_CTRL     IO16(0xF00104)
+#define KBD_RELEASE  0x8000
 #define BMP_ADDR     0x0C3C00UL
 #define SCREEN_W     640
 #define SCREEN_H     360
@@ -79,6 +82,7 @@ void DG_Init(void)
     memset((void *)BMP_ADDR, 0, (size_t)SCREEN_W * SCREEN_H);
     VID_BACKDROP = 0;  /* palette index 0 is transparent: let black show through */
     VID_CTRL = 0x06;   /* hi-color bitmap on, text off */
+    KBD_CTRL = 1;      /* queue key releases too */
     /* Draw straight into video memory, 80 lines down so the 200 lines are
      * centered. (doomgeneric_Create's own buffer goes unused.) */
     DG_ScreenBuffer = (pixel_t *)(BMP_ADDR + 80UL * SCREEN_W);
@@ -100,8 +104,6 @@ void DG_SetWindowTitle(const char *title) { (void)title; }
 
 /* ---- keyboard ---- */
 
-static unsigned char release_key;
-static int pending_release;
 static uint16_t mods;
 
 static unsigned char map_key(uint16_t k)
@@ -139,20 +141,12 @@ int DG_GetKey(int *pressed, unsigned char *key)
             *key = keys[i];
             return 1;
         }
-    if (pending_release) {
-        pending_release = 0;
-        *pressed = 0;
-        *key = release_key;
-        return 1;
-    }
     while ((k = KBD_DATA) != 0xFFFF) {
-        unsigned char d = map_key(k);
+        unsigned char d = map_key(k & ~KBD_RELEASE);
         if (!d)
             continue;
-        *pressed = 1;
+        *pressed = !(k & KBD_RELEASE);
         *key = d;
-        release_key = d;
-        pending_release = 1;
         return 1;
     }
     return 0;

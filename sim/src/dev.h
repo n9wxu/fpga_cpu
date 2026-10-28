@@ -17,6 +17,8 @@ struct cpu;
 #define IO_VSTAT     0xF0000Cu /* R: bit 0 vblank, bits 15:4 scan line */
 #define IO_KBD_DATA  0xF00100u
 #define IO_KBD_MOD   0xF00102u
+#define IO_KBD_CTRL  0xF00104u /* RW: bit 0 = also queue key releases (code | 0x8000) */
+#define KBD_RELEASE  0x8000u
 #define IO_VID       0xF00200u /* video registers F00200-F0021F */
 #define IO_SND       0xF00400u /* 3 voices x 8 bytes */
 #define IO_FS        0xF00500u /* file service F00500-F0051B */
@@ -55,6 +57,7 @@ typedef struct iodev {
     uint16_t kbd_q[KBD_QLEN];
     unsigned kbd_head, kbd_tail;
     uint16_t kbd_mod;
+    uint16_t kbd_ctrl;
     /* video */
     uint16_t vid[V__COUNT];
     uint16_t pal[256];
@@ -81,6 +84,7 @@ void dev_free(iodev_t *d);
 uint16_t dev_read(struct cpu *c, uint32_t a);
 void dev_write(struct cpu *c, uint32_t a, uint32_t v);
 void dev_key(iodev_t *d, uint16_t code);   /* push a key into the keyboard queue */
+void dev_key_up(iodev_t *d, uint16_t code); /* a key was released: queued only if KBD_CTRL bit 0 */
 void dev_con_in(iodev_t *d, uint16_t ch);  /* push a character into CON_IN */
 uint32_t dev_frame(uint64_t cycles);
 uint32_t dev_line(uint64_t cycles);
