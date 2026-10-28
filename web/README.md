@@ -50,10 +50,23 @@ Any static web server can host it. Browsers will not load it from a
   there across reloads. Download and Upload copy files out and in.
   Upload names are cut down to 8.3 upper case.
 - **LEDs:** the board LEDs.
+- **Debug:** opens the fsim-gui windows below the screen. `?debug=1` opens
+  them at load; the page remembers the choice.
+  - Run (F5), Stop, Step (F11), Step over (F10) and Step out (Shift+F11).
+    The keys work when the screen does not have the focus.
+  - Registers, PC and flags, editable while stopped. Each pair is shown
+    with the nearest symbol.
+  - Disassembly with the program's symbols (BASIC, or Doom). Click a line to toggle a
+    breakpoint. Type an address or symbol to go there; the wheel scrolls.
+  - Memory as a hex dump, with the same go-to box.
+  - Statistics: CPI, I-cache, branches, stall cycles and fusion candidates.
+  - Board: the 7-segment display, LEDs, switches and push buttons.
+  - Serial console: CON_OUT, plus a line input that feeds CON_IN.
 - **`?keys=TEXT`:** types TEXT after boot (`\n` = Enter). For example
   `?keys=RUN "SPIRO.BAS"\n`.
 
 `web.c` is the whole front end: boot, run a frame's worth of cycles and
 render, keys (presses, releases for programs that turn them on with
-`KBD_CTRL`, and the live modifiers), and sound. The serial console (CON_IN/CON_OUT) is not
-connected in the browser.
+`KBD_CTRL`, and the live modifiers), sound, and the debugger's state as
+JSON. Run control (breakpoints and stepping) is `sim/src/dbg.c`, shared
+with fsim-gui.

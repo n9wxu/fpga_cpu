@@ -28,7 +28,8 @@ interpreter built with the LLVM backend. Click the screen, then type
   [`docs/io.md`](docs/io.md): 640×360 video with text, bitmap and sprite
   layers, keyboard, 3-voice sound, files, and the board's LEDs and switches.
   `fsim` runs headless; `fsim-gui` adds registers, disassembly, breakpoints,
-  stepping, memory, console and statistics windows.
+  stepping, memory, console and statistics windows. The web page has the
+  same windows under its Debug button.
 - **Assembler and linker** (`sim/tools/asm.py`). Multi-file, sections,
   library archives, symbol files, and the shortest encoding for every
   instruction.

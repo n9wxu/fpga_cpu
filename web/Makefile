@@ -1,6 +1,6 @@
 # fpga_cpu BASIC and Doom in the browser: the simulator core compiled to WebAssembly
 #   make         build build/{index.html,fsim.js,fsim.wasm,fsim.data} and Doom's
-#                build/{doom.A.bin,doom.B.bin,DOOM.WAD.gz,FREEDOOM-COPYING.txt}
+#                build/{doom.A.bin,doom.B.bin,doom.A.sym,doom.B.sym,DOOM.WAD.gz,FREEDOOM-COPYING.txt}
 #   make serve   build, then serve on http://localhost:8000
 #   make deploy  build, then rsync to $(DEPLOY), e.g. user@host:/srv/www/basic/
 #                (set DEPLOY on the command line or in web/local.mk, which git ignores)
@@ -14,9 +14,10 @@ BUILD  := build
 EMCC   ?= emcc
 -include local.mk
 
-CORE   := $(SIM)/src/cpu.c $(SIM)/src/dev.c $(SIM)/src/video.c $(SIM)/src/front.c $(SIM)/src/font8x14.c \
+CORE   := $(SIM)/src/cpu.c $(SIM)/src/dev.c $(SIM)/src/video.c $(SIM)/src/front.c $(SIM)/src/dbg.c $(SIM)/src/font8x14.c \
           $(SIM)/src/gen/isa_gen.c $(SIM)/src/gen/exec_gen.c
 ROMS   := $(BASIC)/build/basic.A.bin $(BASIC)/build/basic.B.bin
+SYMS   := $(ROMS:.bin=.sym)
 DOOM   := $(ROOT)/benchmarks/doom
 DOOMBINS := $(DOOM)/build/doom.A.bin $(DOOM)/build/doom.B.bin
 # The site publishes only Freedoom (BSD), never a shareware DOOM1.WAD.
@@ -27,20 +28,25 @@ EMFLAGS := -O3 -std=gnu11 -Wall -Wno-unused-parameter -I$(SIM)/src \
            -sALLOW_MEMORY_GROWTH -sINITIAL_MEMORY=64MB -sENVIRONMENT=web -lidbfs.js \
            -sEXPORTED_FUNCTIONS=_main,_malloc \
            -sEXPORTED_RUNTIME_METHODS=FS,IDBFS,ccall,UTF8ToString,HEAPU8,HEAPF32 \
-           $(foreach r,$(ROMS),--preload-file $(r)@/rom/$(notdir $(r))) \
+           $(foreach r,$(ROMS) $(SYMS),--preload-file $(r)@/rom/$(notdir $(r))) \
            --preload-file $(BASIC)/examples@/examples
 
 all: $(BUILD)/fsim.js $(BUILD)/index.html doom
 
 # Doom is fetched by the page when picked, not preloaded
-doom: $(BUILD)/doom.A.bin $(BUILD)/doom.B.bin $(BUILD)/DOOM.WAD.gz $(BUILD)/FREEDOOM-COPYING.txt
+doom: $(BUILD)/doom.A.bin $(BUILD)/doom.B.bin $(BUILD)/doom.A.sym $(BUILD)/doom.B.sym $(BUILD)/DOOM.WAD.gz $(BUILD)/FREEDOOM-COPYING.txt
 
-$(DOOMBINS) &:
+$(DOOMBINS):
 	$(MAKE) -C $(DOOM)
 
 $(BUILD)/doom.%.bin: $(DOOM)/build/doom.%.bin
 	@mkdir -p $(BUILD)
 	cp $< $@
+
+# symbols for the debugger panels (fcc writes them beside the image)
+$(BUILD)/doom.%.sym: $(DOOM)/build/doom.%.bin
+	@mkdir -p $(BUILD)
+	cp $(DOOM)/build/doom.$*.sym $@
 
 $(WAD):
 	FREEDOOM=1 $(DOOM)/get_wad.sh
@@ -56,10 +62,10 @@ $(BUILD)/FREEDOOM-COPYING.txt: $(WAD)
 $(SIM)/build/gen.stamp: $(ROOT)/cpu/isa.yaml
 	$(MAKE) -C $(SIM) build/gen.stamp
 
-$(ROMS) &:
+$(ROMS) $(SYMS):
 	$(MAKE) -C $(BASIC) target
 
-$(BUILD)/fsim.js: web.c $(CORE) $(SIM)/build/gen.stamp $(SIM)/src/cpu.h $(SIM)/src/dev.h $(SIM)/src/front.h $(ROMS) $(EXAMPLES)
+$(BUILD)/fsim.js: web.c $(CORE) $(SIM)/build/gen.stamp $(SIM)/src/cpu.h $(SIM)/src/dev.h $(SIM)/src/front.h $(SIM)/src/dbg.h $(ROMS) $(SYMS) $(EXAMPLES)
 	@mkdir -p $(BUILD)
 	$(EMCC) $(EMFLAGS) -o $@ web.c $(CORE)
 

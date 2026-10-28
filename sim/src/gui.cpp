@@ -6,6 +6,7 @@
 // The core headers come first: their addressing-mode enum has an M_PI that
 // <math.h> (pulled in by SDL and ImGui) would otherwise turn into a number.
 extern "C" {
+#include "dbg.h"
 #include "front.h"
 }
 
@@ -26,22 +27,12 @@ static cpu_t cpu;
 static opts_t opt;
 static uint32_t frame_px[SCREEN_W * SCREEN_H];
 
-// ---- execution control ----
+// ---- execution control (dbg.c) ----
 
-enum RunMode { STOPPED, RUNNING, STEP_OVER, STEP_OUT };
-static RunMode mode = RUNNING;
-static uint32_t over_target, over_sp, out_sp;
-static std::vector<uint8_t> bp(1u << 23); // one flag per 2-byte address
+static dbg_t dbg;
 static bool max_speed = false;
 static std::string serial;
 static double achieved_mhz;
-
-static uint32_t sp_of(const cpu_t *c) { return c->r[14] | (uint32_t)(c->r[15] & 0xFF) << 16; }
-
-static bool decode_at(uint32_t pc, dinst_t *d)
-{
-    return decode(cpu.var, cpu_peek16(&cpu, pc), cpu_peek16(&cpu, (pc + 2) & 0xFFFFFF), d) != 0;
-}
 
 static void serial_hook(void *, int ch)
 {
@@ -64,61 +55,6 @@ static void reset_machine()
     load_image(&cpu, opt.image, opt.load);
     cpu.pc = opt.entry == 0xFFFFFFFF ? opt.load : opt.entry;
     serial.clear();
-}
-
-static void step_one() { cpu_step(&cpu); }
-
-static void start_step_over()
-{
-    dinst_t d;
-    if (decode_at(cpu.pc, &d) && (d.op == OP_JAL || d.op == OP_JALR)) {
-        over_target = (cpu.pc + d.len) & 0xFFFFFF;
-        over_sp = sp_of(&cpu);
-        mode = STEP_OVER;
-        step_one(); // leave the breakpoint we may be sitting on
-    } else {
-        step_one();
-    }
-}
-
-static void start_step_out()
-{
-    out_sp = sp_of(&cpu);
-    mode = STEP_OUT;
-}
-
-// Run up to `budget` cycles.  Stops at breakpoints (except on the first
-// instruction, so Run can leave a breakpoint) and at step-over/out targets.
-static void run_cycles(uint64_t budget)
-{
-    uint64_t end = cpu.st.cycles + budget;
-    bool first = true;
-    while (cpu.st.cycles < end) {
-        if (cpu.halted) {
-            mode = STOPPED;
-            return;
-        }
-        uint32_t pc = cpu.pc;
-        if (!first && bp[pc >> 1]) {
-            mode = STOPPED;
-            return;
-        }
-        first = false;
-        if (mode == STEP_OVER && pc == over_target && sp_of(&cpu) >= over_sp) {
-            mode = STOPPED;
-            return;
-        }
-        bool is_ret = false;
-        if (mode == STEP_OUT) {
-            dinst_t d;
-            is_ret = decode_at(pc, &d) && d.op == OP_JR;
-        }
-        cpu_step(&cpu);
-        if (is_ret && sp_of(&cpu) >= out_sp) {
-            mode = STOPPED;
-            return;
-        }
-    }
 }
 
 // ---- keyboard ----
@@ -180,30 +116,31 @@ static int selftest()
         fprintf(stderr, "selftest needs --sym with fill32 and text\n");
         return 1;
     }
-    auto go = [](RunMode m) { mode = m; while (mode != STOPPED) run_cycles(1000000); };
-    bp[fill >> 1] = 1;
-    go(RUNNING);
+    auto go = [] { while (dbg.mode != DBG_STOPPED) dbg_run(&dbg, 1000000); };
+    dbg_toggle_bp(&dbg, fill);
+    dbg.mode = DBG_RUNNING;
+    go();
     uint32_t call_ret = (uint32_t)(cpu.r[12] | cpu.r[13] << 16);
     printf("break at fill32: pc=%06x (want %06x)\n", cpu.pc, fill);
-    bp[fill >> 1] = 0; // fill32 loops back to its own entry
-    start_step_out();
-    go(STEP_OUT);
+    dbg_toggle_bp(&dbg, fill); // fill32 loops back to its own entry
+    dbg_step_out(&dbg);
+    go();
     printf("step out:        pc=%06x (want %06x)\n", cpu.pc, call_ret);
-    bp[text >> 1] = 1;
-    go(RUNNING); // stops at text, entered by a JAL
+    dbg_toggle_bp(&dbg, text);
+    dbg.mode = DBG_RUNNING;
+    go(); // stops at text, entered by a JAL
     uint32_t after = (uint32_t)(cpu.r[12] | cpu.r[13] << 16);
-    bp[text >> 1] = 0;
-    start_step_out();
-    go(STEP_OUT);
+    dbg_toggle_bp(&dbg, text);
+    dbg_step_out(&dbg);
+    go();
     printf("step out:        pc=%06x (want %06x)\n", cpu.pc, after);
     // step over the next JAL
     dinst_t d;
-    while (decode_at(cpu.pc, &d) && d.op != OP_JAL)
-        step_one();
+    while (dbg_decode_at(&cpu, cpu.pc, &d) && d.op != OP_JAL)
+        dbg_step(&dbg);
     uint32_t want = cpu.pc + d.len;
-    start_step_over();
-    if (mode == STEP_OVER)
-        go(STEP_OVER);
+    dbg_step_over(&dbg);
+    go();
     printf("step over JAL:   pc=%06x (want %06x)\n", cpu.pc, want);
     // keyboard translation: text, Enter, Up, F1, Ctrl-C
     display_focused = true;
@@ -252,26 +189,26 @@ static void win_controls()
     ImGui::SetNextWindowPos(ImVec2(980, 0), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(700, 64), ImGuiCond_FirstUseEver);
     ImGui::Begin("Controls");
-    bool stopped = mode == STOPPED;
+    bool stopped = dbg.mode == DBG_STOPPED;
     ImGui::BeginDisabled(!stopped || cpu.halted);
     if (ImGui::Button("Run (F5)"))
-        mode = RUNNING, run_cycles(1);
+        dbg_resume(&dbg);
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::BeginDisabled(stopped);
     if (ImGui::Button("Stop"))
-        mode = STOPPED;
+        dbg.mode = DBG_STOPPED;
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::BeginDisabled(!stopped || cpu.halted);
     if (ImGui::Button("Step (F11)"))
-        step_one();
+        dbg_step(&dbg);
     ImGui::SameLine();
     if (ImGui::Button("Over (F10)"))
-        start_step_over();
+        dbg_step_over(&dbg);
     ImGui::SameLine();
     if (ImGui::Button("Out"))
-        start_step_out();
+        dbg_step_out(&dbg);
     ImGui::EndDisabled();
     ImGui::SameLine();
     if (ImGui::Button("Reset"))
@@ -288,7 +225,7 @@ static void win_controls()
     ImGui::SameLine();
     if (cpu.halted)
         ImGui::TextColored(ImVec4(1, 0.5f, 0.3f, 1), "halted: %s", cpu.halt_reason);
-    else if (mode == STOPPED)
+    else if (stopped)
         ImGui::Text("stopped at %06x", cpu.pc);
     else
         ImGui::Text("running %.1f MHz", achieved_mhz);
@@ -300,7 +237,7 @@ static void win_registers()
     ImGui::SetNextWindowPos(ImVec2(980, 64), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(320, 430), ImGuiCond_FirstUseEver);
     ImGui::Begin("Registers");
-    bool edit = mode == STOPPED;
+    bool edit = dbg.mode == DBG_STOPPED;
     static const char *const pname[8] = { "p0", "p1", "p2", "p3", "p4", "p5", "lr", "sp" };
     if (ImGui::BeginTable("regs", 4, ImGuiTableFlags_SizingFixedFit)) {
         for (int p = 0; p < 8; p++) {
@@ -362,22 +299,6 @@ static void win_registers()
     ImGui::End();
 }
 
-static bool parse_addr(const char *s, uint32_t *a)
-{
-    while (*s == ' ')
-        s++;
-    if (!*s)
-        return false;
-    if (sym_find(s, a))
-        return true;
-    char *e;
-    unsigned long v = strtoul(s[0] == '$' ? s + 1 : s, &e, 16);
-    if (*e)
-        return false;
-    *a = (uint32_t)v & 0xFFFFFF;
-    return true;
-}
-
 static void win_disasm()
 {
     static uint32_t top;
@@ -389,7 +310,7 @@ static void win_disasm()
     ImGui::SetNextItemWidth(160);
     if (ImGui::InputTextWithHint("##go", "address or symbol", go, sizeof go, ImGuiInputTextFlags_EnterReturnsTrue)) {
         uint32_t a;
-        if (parse_addr(go, &a))
+        if (dbg_parse_addr(go, &a))
             top = a & ~1u, follow = false;
     }
     ImGui::SameLine();
@@ -409,7 +330,7 @@ static void win_disasm()
                 break;
             }
             dinst_t d;
-            a = (a + (decode_at(a, &d) ? d.len : 2)) & 0xFFFFFF;
+            a = (a + (dbg_decode_at(&cpu, a, &d) ? d.len : 2)) & 0xFFFFFF;
         }
         if (!seen) {
             uint32_t off;
@@ -426,42 +347,25 @@ static void win_disasm()
             if (++i >= rows)
                 break;
         }
-        dinst_t d;
-        char text[96] = "??";
-        int len = 2;
-        if (decode_at(a, &d)) {
-            disasm(&d, a, text, sizeof text);
-            len = d.len;
-            // annotate branch targets with symbols
-            if (op_info[d.op].cls == CLS_BR || op_info[d.op].cls == CLS_JAL || op_info[d.op].cls == CLS_LEAPC) {
-                uint32_t t = (a + (uint32_t)d.imm) & 0xFFFFFF, off;
-                const char *s = nsyms ? sym_near(t, &off) : nullptr;
-                if (s) {
-                    size_t n = strlen(text);
-                    if (off)
-                        snprintf(text + n, sizeof text - n, " <%s+%u>", s, off);
-                    else
-                        snprintf(text + n, sizeof text - n, " <%s>", s);
-                }
-            }
-        }
+        char text[96];
+        int len = dbg_disasm(&cpu, a, text, sizeof text);
         char hex[16];
         if (len == 4)
             snprintf(hex, sizeof hex, "%04X %04X", cpu_peek16(&cpu, a), cpu_peek16(&cpu, a + 2));
         else
             snprintf(hex, sizeof hex, "%04X     ", cpu_peek16(&cpu, a));
         char line[160];
-        snprintf(line, sizeof line, "%c %06X  %s  %s", bp[a >> 1] ? '*' : ' ', a, hex, text);
+        snprintf(line, sizeof line, "%c %06X  %s  %s", dbg_bp(&dbg, a) ? '*' : ' ', a, hex, text);
         bool at_pc = a == cpu.pc;
         if (at_pc)
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 0.3f, 1));
-        else if (bp[a >> 1])
+        else if (dbg_bp(&dbg, a))
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.4f, 0.4f, 1));
         ImGui::PushID((int)a);
         if (ImGui::Selectable(line, at_pc))
-            bp[a >> 1] ^= 1;
+            dbg_toggle_bp(&dbg, a);
         ImGui::PopID();
-        if (at_pc || bp[a >> 1])
+        if (at_pc || dbg_bp(&dbg, a))
             ImGui::PopStyleColor();
         a = (a + (uint32_t)len) & 0xFFFFFF;
     }
@@ -483,7 +387,7 @@ static void win_memory()
     ImGui::SetNextItemWidth(160);
     if (ImGui::InputTextWithHint("##go", "address or symbol", go, sizeof go, ImGuiInputTextFlags_EnterReturnsTrue)) {
         uint32_t a;
-        if (parse_addr(go, &a))
+        if (dbg_parse_addr(go, &a))
             scroll_to = (int)(a / 16);
     }
     ImGui::SameLine();
@@ -683,7 +587,8 @@ int main(int argc, char **argv)
     cpu.dev.con_stdin = 0;
     cpu.dev.con_hook = serial_hook;
     max_speed = opt.max_speed;
-    mode = opt.paused ? STOPPED : RUNNING;
+    dbg_init(&dbg, &cpu);
+    dbg.mode = opt.paused ? DBG_STOPPED : DBG_RUNNING;
     if (getenv("FSIM_GUI_SELFTEST"))
         return selftest();
 
@@ -752,12 +657,12 @@ int main(int argc, char **argv)
             ImGui_ImplSDL2_ProcessEvent(&e);
             if (e.type == SDL_QUIT)
                 quit = true;
-            if (e.type == SDL_KEYDOWN && !display_focused && mode == STOPPED && !cpu.halted && !io.WantTextInput) {
-                if (e.key.keysym.sym == SDLK_F11) step_one();
-                if (e.key.keysym.sym == SDLK_F10) start_step_over();
+            if (e.type == SDL_KEYDOWN && !display_focused && dbg.mode == DBG_STOPPED && !cpu.halted && !io.WantTextInput) {
+                if (e.key.keysym.sym == SDLK_F11) dbg_step(&dbg);
+                if (e.key.keysym.sym == SDLK_F10) dbg_step_over(&dbg);
             }
-            if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_F5 && mode == STOPPED && !cpu.halted)
-                mode = RUNNING, run_cycles(1);
+            if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_F5 && dbg.mode == DBG_STOPPED && !cpu.halted)
+                dbg_resume(&dbg);
             else
                 key_event(e);
         }
@@ -772,18 +677,18 @@ int main(int argc, char **argv)
             dt = 0.1;
         if (opt.frames)
             dt = 1.0 / 60; // scripted runs: exactly one display frame per loop
-        if (mode != STOPPED) {
+        if (dbg.mode != DBG_STOPPED) {
             uint64_t c0 = cpu.st.cycles;
             if (max_speed && !opt.frames) {
                 Uint64 stop = now + freq * 14 / 1000;
-                while (mode != STOPPED && SDL_GetPerformanceCounter() < stop)
-                    run_cycles(200000);
+                while (dbg.mode != DBG_STOPPED && SDL_GetPerformanceCounter() < stop)
+                    dbg_run(&dbg, 200000);
             } else {
-                run_cycles((uint64_t)(dt * CPU_HZ));
+                dbg_run(&dbg, (uint64_t)(dt * CPU_HZ));
             }
             mhz_cycles += (double)(cpu.st.cycles - c0);
             if (opt.max_cycles && cpu.st.cycles >= opt.max_cycles)
-                mode = STOPPED;
+                dbg.mode = DBG_STOPPED;
         }
         mhz_time += dt;
         if (mhz_time >= 0.5) {
@@ -832,6 +737,7 @@ int main(int argc, char **argv)
     SDL_DestroyWindow(win);
     SDL_Quit();
     int rc = cpu.halted ? cpu.exit_code : 0;
+    dbg_free(&dbg);
     cpu_free(&cpu);
     return rc;
 }

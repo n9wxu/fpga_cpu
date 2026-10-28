@@ -28,6 +28,7 @@ typedef struct { uint32_t addr; char *name; } sym_t;
 extern sym_t *syms;
 extern int nsyms;
 int sym_load(const char *path);
+void sym_free(void);
 const char *sym_at(uint32_t addr);                  /* exact match or NULL */
 const char *sym_near(uint32_t addr, uint32_t *off); /* nearest symbol at or below */
 int sym_find(const char *name, uint32_t *addr);
