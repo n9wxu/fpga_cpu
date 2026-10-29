@@ -4,8 +4,8 @@
 // core configuration that fsim can time, so the compiler can be built for
 // the core the hardware will have:
 //
-//   generic  no model: instructions stay in source order (the original
-//            compiler, kept so earlier results stay reproducible)
+//   generic  FCPUModel (FCPU.td): load latency only, no instruction classes,
+//            post-RA list scheduler (the default compiler)
 //   fcpu1    single issue; a load's result is ready one cycle late
 //            (fsim's load-use penalty), so the scheduler fills that slot
 //   fcpu2    asymmetric dual issue (fsim --dual=ports --dual-any

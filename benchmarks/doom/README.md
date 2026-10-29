@@ -33,6 +33,10 @@ and column/span rasterizing.
     the live modifier state.
   - Time is the CPU cycle counter at 50 MHz.
   - Arguments come from `DOOMARGS.TXT` on the disk, if it exists.
+- `r_draw_fcpu.s`: `R_DrawColumn` and `R_DrawSpan` by hand (built with
+  `-DFCPU_DRAW_ASM`, which leaves out the C ones in `src/r_draw.c`). The
+  Makefile and the web simulator use them; `make DRAW=c` builds the C.
+  `../run.py` measures both: `doom` (C) and `doom-asm`.
 - `doomgeneric_host.c`: the same engine headless on the development
   machine, the reference for the simulator run.
 - `include/`: the few POSIX headers the engine includes. Everything else
@@ -41,10 +45,12 @@ and column/span rasterizing.
 
 ## Changes to the engine (`src/`)
 
-Two, both marked `fpga_cpu:` in the source:
+Three, all marked `fpga_cpu:` in the source:
 
 - `g_game.c`: `-timedemotics N` ends a timedemo after N gametics, so a
   slow (simulated) machine can be timed on part of a demo.
+- `r_draw.c`: `FCPU_DRAW_ASM` leaves out `R_DrawColumn` and
+  `R_DrawSpan` for the hand-written ones.
 - `d_main.c`: no screen melt during a timedemo. The melt runs for about a
   second of real time on any machine, so leaving it out keeps a short
   timedemo a measure of game frames.

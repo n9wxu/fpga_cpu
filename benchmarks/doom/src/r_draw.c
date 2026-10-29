@@ -99,6 +99,9 @@ int			dccount;
 // Thus a special case loop for very fast rendering can
 //  be used. It has also been used with Wolfenstein 3D.
 // 
+// fpga_cpu: -DFCPU_DRAW_ASM uses the hand-written R_DrawColumn and
+// R_DrawSpan in port/r_draw_fcpu.s instead of these two.
+#ifndef FCPU_DRAW_ASM
 void R_DrawColumn (void) 
 { 
     int			count; 
@@ -143,6 +146,7 @@ void R_DrawColumn (void)
 	
     } while (count--); 
 } 
+#endif /* FCPU_DRAW_ASM */
 
 
 
@@ -587,6 +591,7 @@ int			dscount;
 
 //
 // Draws the actual span.
+#ifndef FCPU_DRAW_ASM /* fpga_cpu: see R_DrawColumn */
 void R_DrawSpan (void) 
 { 
     unsigned int position, step;
@@ -637,6 +642,7 @@ void R_DrawSpan (void)
 
     } while (count--);
 }
+#endif /* FCPU_DRAW_ASM */
 
 
 

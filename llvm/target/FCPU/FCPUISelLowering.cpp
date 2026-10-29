@@ -2,9 +2,11 @@
 //
 // i16 lives in one register (GPR) and i32 in a pair (PR). Pointers are
 // i32. i32 add uses ADDPP/ADDPI; subtract and compare are pseudos that
-// expand into SUB/SBC and CMP/CPC; logic is split into halves by patterns;
-// constant shifts are split here; multiply, divide and variable shifts
-// are library calls. float and double are soft-float.
+// expand into SUB/SBC and CMP/CPC (compares with 0 use one half, or OR of
+// the halves); logic and constant shifts are split into i16 halves here,
+// looking through halves that are already known (half()); multiply,
+// divide and variable shifts are library calls. float and double are
+// soft-float.
 //
 //===----------------------------------------------------------------------===//
 
@@ -64,9 +66,21 @@ FCPUTargetLowering::FCPUTargetLowering(const TargetMachine &TM,
                        VT, Expand);
     setOperationAction(ISD::DYNAMIC_STACKALLOC, VT, Expand);
   }
-  setOperationAction(ISD::MUL, MVT::i32, LibCall);
+  // 32-bit multiply inline: four 16x16 products at most, fewer when a half
+  // is known (constants, extended 16-bit values). No call, so no lr save.
+  setOperationAction(ISD::MUL, MVT::i32, Custom);
   setOperationAction({ISD::MULHS, ISD::MULHU}, MVT::i32, Expand);
   setOperationAction({ISD::SHL, ISD::SRL, ISD::SRA}, MVT::i32, Custom);
+  // 32-bit logic is split into 16-bit halves while lowering, so the DAG
+  // combiner folds halves that are constant (x & 0, x | 0, x & 0xFFFF...).
+  setOperationAction({ISD::AND, ISD::OR, ISD::XOR}, MVT::i32, Custom);
+  // [pN]+ for every load and store (step = the access size)
+  for (MVT VT : {MVT::i8, MVT::i16, MVT::i32}) {
+    setIndexedLoadAction(ISD::POST_INC, VT, Legal);
+    setIndexedStoreAction(ISD::POST_INC, VT, Legal);
+  }
+  // ... and split again when the combiner makes new ones after legalizing.
+  setTargetDAGCombine({ISD::AND, ISD::OR, ISD::XOR});
 
   setOperationAction({ISD::BRCOND, ISD::BR_JT}, MVT::Other, Expand);
   setOperationAction({ISD::GlobalAddress, ISD::ExternalSymbol,
@@ -361,6 +375,12 @@ SDValue FCPUTargetLowering::LowerOperation(SDValue Op,
   case ISD::SRL:
   case ISD::SRA:
     return lowerShift32(Op, DAG);
+  case ISD::AND:
+  case ISD::OR:
+  case ISD::XOR:
+    return lowerLogic32(Op, DAG);
+  case ISD::MUL:
+    return lowerMul32(Op, DAG);
   case ISD::SIGN_EXTEND_INREG: {
     SDLoc DL(Op);
     SDValue Lo = DAG.getTargetExtractSubreg(FCPU::sub_lo, DL, MVT::i16,
@@ -421,13 +441,97 @@ static FCPUCC::CondCode mapCC(ISD::CondCode CC) {
   }
 }
 
+// One 16-bit half of an i32 value (Idx = sub_lo or sub_hi). Halves that
+// are already known are returned directly, so later combines can fold
+// them: a pair built by join(), a constant, or a 16-bit value extended.
+static SDValue halfRaw(SelectionDAG &DAG, const SDLoc &DL, SDValue V,
+                       unsigned Idx) {
+  bool Lo = Idx == FCPU::sub_lo;
+  if (V.isMachineOpcode() && V.getMachineOpcode() == TargetOpcode::REG_SEQUENCE &&
+      V.getNumOperands() == 5 && V.getConstantOperandVal(0) == FCPU::PRRegClassID) {
+    for (unsigned I = 1; I < 5; I += 2)
+      if (V.getConstantOperandVal(I + 1) == Idx)
+        return V.getOperand(I);
+  }
+  if (auto *C = dyn_cast<ConstantSDNode>(V)) {
+    uint64_t X = C->getZExtValue();
+    return DAG.getConstant(Lo ? X & 0xFFFF : (X >> 16) & 0xFFFF, DL, MVT::i16);
+  }
+  unsigned Opc = V.getOpcode();
+  if ((Opc == ISD::ZERO_EXTEND || Opc == ISD::SIGN_EXTEND ||
+       Opc == ISD::ANY_EXTEND) &&
+      V.getOperand(0).getValueType() == MVT::i16) {
+    SDValue X = V.getOperand(0);
+    if (Lo)
+      return X;
+    if (Opc == ISD::ZERO_EXTEND)
+      return DAG.getConstant(0, DL, MVT::i16);
+    if (Opc == ISD::SIGN_EXTEND)
+      return DAG.getNode(ISD::SRA, DL, MVT::i16, X,
+                         DAG.getConstant(15, DL, MVT::i16));
+    return DAG.getUNDEF(MVT::i16);
+  }
+  return DAG.getTargetExtractSubreg(Idx, DL, MVT::i16, V);
+}
+
+static SDValue join(SelectionDAG &DAG, const SDLoc &DL, SDValue Lo,
+                    SDValue Hi) {
+  // A zero high half is a zero extension: keeps [pN + rX.z*s] foldable.
+  if (isNullConstant(Hi))
+    return DAG.getNode(ISD::ZERO_EXTEND, DL, MVT::i32, Lo);
+  SDValue Ops[] = {DAG.getTargetConstant(FCPU::PRRegClassID, DL, MVT::i32), Lo,
+                   DAG.getTargetConstant(FCPU::sub_lo, DL, MVT::i32), Hi,
+                   DAG.getTargetConstant(FCPU::sub_hi, DL, MVT::i32)};
+  return SDValue(
+      DAG.getMachineNode(TargetOpcode::REG_SEQUENCE, DL, MVT::i32, Ops), 0);
+}
+
+// half() of a value whose own lowering would split it: the legalizer
+// visits users before operands, so an operand may still be an i32 logic op
+// or constant shift; lower it here so its halves are visible.
+SDValue FCPUTargetLowering::half(SelectionDAG &DAG, const SDLoc &DL, SDValue V,
+                                 unsigned Idx) const {
+  if (V.getValueType() == MVT::i32 && !V.isMachineOpcode()) {
+    switch (V.getOpcode()) {
+    case ISD::AND:
+    case ISD::OR:
+    case ISD::XOR:
+      V = lowerLogic32(V, DAG);
+      break;
+    case ISD::SHL:
+    case ISD::SRL:
+    case ISD::SRA:
+      if (isa<ConstantSDNode>(V.getOperand(1))) {
+        SDValue L = lowerShift32(V, DAG);
+        if (L.getNode() != V.getNode())
+          V = L;
+      }
+      break;
+    }
+  }
+  return halfRaw(DAG, DL, V, Idx);
+}
+
 // Compare LHS with RHS; returns the flags as glue and sets TargetCC.
-static SDValue emitCmp(SDValue LHS, SDValue RHS, ISD::CondCode CC,
-                       SDValue &TargetCC, const SDLoc &DL, SelectionDAG &DAG) {
+SDValue FCPUTargetLowering::emitCmp(SDValue LHS, SDValue RHS, ISD::CondCode CC,
+                                    SDValue &TargetCC, const SDLoc &DL,
+                                    SelectionDAG &DAG) const {
   // A constant on the left: swap, so the immediate compare form applies.
   if (isa<ConstantSDNode>(LHS) && !isa<ConstantSDNode>(RHS)) {
     std::swap(LHS, RHS);
     CC = ISD::getSetCCSwappedOperands(CC);
+  }
+  // A 32-bit value against 0: == and != test the OR of the halves (OR sets
+  // Z; the peephole drops the CMPI), < and >= test the high half's sign.
+  if (LHS.getValueType() == MVT::i32 && isNullConstant(RHS)) {
+    if (CC == ISD::SETEQ || CC == ISD::SETNE) {
+      LHS = DAG.getNode(ISD::OR, DL, MVT::i16, half(DAG, DL, LHS, FCPU::sub_lo),
+                        half(DAG, DL, LHS, FCPU::sub_hi));
+      RHS = DAG.getConstant(0, DL, MVT::i16);
+    } else if (CC == ISD::SETLT || CC == ISD::SETGE) {
+      LHS = half(DAG, DL, LHS, FCPU::sub_hi);
+      RHS = DAG.getConstant(0, DL, MVT::i16);
+    }
   }
   TargetCC = DAG.getTargetConstant(mapCC(CC), DL, MVT::i16);
   return DAG.getNode(FCPUISD::CMP, DL, MVT::Glue, LHS, RHS);
@@ -455,19 +559,6 @@ SDValue FCPUTargetLowering::lowerSELECT_CC(SDValue Op,
                      Op.getOperand(2), Op.getOperand(3), TargetCC, Flags);
 }
 
-static SDValue half(SelectionDAG &DAG, const SDLoc &DL, SDValue V,
-                    unsigned Idx) {
-  return DAG.getTargetExtractSubreg(Idx, DL, MVT::i16, V);
-}
-
-static SDValue join(SelectionDAG &DAG, const SDLoc &DL, SDValue Lo,
-                    SDValue Hi) {
-  SDValue Ops[] = {DAG.getTargetConstant(FCPU::PRRegClassID, DL, MVT::i32), Lo,
-                   DAG.getTargetConstant(FCPU::sub_lo, DL, MVT::i32), Hi,
-                   DAG.getTargetConstant(FCPU::sub_hi, DL, MVT::i32)};
-  return SDValue(
-      DAG.getMachineNode(TargetOpcode::REG_SEQUENCE, DL, MVT::i32, Ops), 0);
-}
 
 // 32-bit shifts by a constant become 16-bit shifts of the halves; others
 // call __ashlsi3 / __lshrsi3 / __ashrsi3.
@@ -522,6 +613,78 @@ SDValue FCPUTargetLowering::lowerShift32(SDValue Op, SelectionDAG &DAG) const {
     }
   }
   return join(DAG, DL, RLo, RHi);
+}
+
+// 32-bit AND / OR / XOR: one i16 operation per half.
+SDValue FCPUTargetLowering::lowerLogic32(SDValue Op, SelectionDAG &DAG) const {
+  SDLoc DL(Op);
+  unsigned Opc = Op.getOpcode();
+  SDValue A = Op.getOperand(0), B = Op.getOperand(1);
+  SDValue Lo = DAG.getNode(Opc, DL, MVT::i16, half(DAG, DL, A, FCPU::sub_lo),
+                           half(DAG, DL, B, FCPU::sub_lo));
+  SDValue Hi = DAG.getNode(Opc, DL, MVT::i16, half(DAG, DL, A, FCPU::sub_hi),
+                           half(DAG, DL, B, FCPU::sub_hi));
+  return join(DAG, DL, Lo, Hi);
+}
+
+// a * b mod 2^32 = alo*blo + (alo*bhi + ahi*blo) << 16
+SDValue FCPUTargetLowering::lowerMul32(SDValue Op, SelectionDAG &DAG) const {
+  SDLoc DL(Op);
+  SDValue A = Op.getOperand(0), B = Op.getOperand(1);
+  SDValue ALo = half(DAG, DL, A, FCPU::sub_lo), AHi = half(DAG, DL, A, FCPU::sub_hi);
+  SDValue BLo = half(DAG, DL, B, FCPU::sub_lo), BHi = half(DAG, DL, B, FCPU::sub_hi);
+  SDValue Lo = DAG.getNode(ISD::MUL, DL, MVT::i16, ALo, BLo);
+  SDValue Hi = DAG.getNode(ISD::MULHU, DL, MVT::i16, ALo, BLo);
+  Hi = DAG.getNode(ISD::ADD, DL, MVT::i16, Hi,
+                   DAG.getNode(ISD::MUL, DL, MVT::i16, ALo, BHi));
+  Hi = DAG.getNode(ISD::ADD, DL, MVT::i16, Hi,
+                   DAG.getNode(ISD::MUL, DL, MVT::i16, AHi, BLo));
+  return join(DAG, DL, Lo, Hi);
+}
+
+// A load or store followed by "pointer += access size": fold it into
+// [pN]+.
+bool FCPUTargetLowering::getPostIndexedAddressParts(SDNode *N, SDNode *Op,
+                                                    SDValue &Base,
+                                                    SDValue &Offset,
+                                                    ISD::MemIndexedMode &AM,
+                                                    SelectionDAG &DAG) const {
+  EVT VT, RegVT;   // memory type, register type
+  if (auto *LD = dyn_cast<LoadSDNode>(N)) {
+    VT = LD->getMemoryVT();
+    RegVT = LD->getValueType(0);
+  } else if (auto *ST = dyn_cast<StoreSDNode>(N)) {
+    VT = ST->getMemoryVT();
+    RegVT = ST->getValue().getValueType();
+  } else {
+    return false;
+  }
+  // only the forms that exist: i8/i16 in a register, i32 in a pair
+  if (!((VT == MVT::i8 || VT == MVT::i16) && RegVT == MVT::i16) &&
+      !(VT == MVT::i32 && RegVT == MVT::i32))
+    return false;
+  if (Op->getOpcode() != ISD::ADD || Op->getValueType(0) != MVT::i32)
+    return false;
+  auto *C = dyn_cast<ConstantSDNode>(Op->getOperand(1));
+  if (!C || C->getSExtValue() != (int64_t)VT.getStoreSize())
+    return false;
+  Base = Op->getOperand(0);
+  Offset = Op->getOperand(1);
+  AM = ISD::POST_INC;
+  return true;
+}
+
+SDValue FCPUTargetLowering::PerformDAGCombine(SDNode *N,
+                                              DAGCombinerInfo &DCI) const {
+  switch (N->getOpcode()) {
+  case ISD::AND:
+  case ISD::OR:
+  case ISD::XOR:
+    if (N->getValueType(0) == MVT::i32 && DCI.isAfterLegalizeDAG())
+      return lowerLogic32(SDValue(N, 0), DCI.DAG);
+    break;
+  }
+  return SDValue();
 }
 
 SDValue FCPUTargetLowering::lowerVASTART(SDValue Op, SelectionDAG &DAG) const {

@@ -14,15 +14,18 @@ add_public_tablegen_target(FCPUCommonTableGen)
 add_llvm_target(FCPUCodeGen
   FCPUAsmPrinter.cpp
   FCPUFrameLowering.cpp
+  FCPUHoistGlobalLoads.cpp
   FCPUInstrInfo.cpp
   FCPUISelDAGToDAG.cpp
   FCPUISelLowering.cpp
   FCPUMCInstLower.cpp
+  FCPURenameDeadDefs.cpp
   FCPURegisterInfo.cpp
   FCPUSubtarget.cpp
   FCPUTargetMachine.cpp
 
   LINK_COMPONENTS
+  Analysis
   AsmPrinter
   CodeGen
   CodeGenTypes
@@ -34,6 +37,7 @@ add_llvm_target(FCPUCodeGen
   Support
   Target
   TargetParser
+  TransformUtils
 
   ADD_TO_COMPONENT
   FCPU

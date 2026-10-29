@@ -42,15 +42,22 @@ public:
   const SelectionDAGTargetInfo *getSelectionDAGInfo() const override {
     return &TSInfo;
   }
-
-  // Only the fcpu1/fcpu2 models schedule; generic keeps source order.
+  // Track the two halves of a pair separately, so a value read from one
+  // half does not tie up (or force a copy of) the whole pair.
+  bool enableSubRegLiveness() const override { return true; }
+  // Schedule before and after register allocation, mainly to keep an
+  // instruction from using a load result the next cycle.
   bool enableMachineScheduler() const override;
+  // After allocation, generic (FCPUModel) uses the post-RA list scheduler;
+  // the core models fcpu1/fcpu2 use the post-RA machine scheduler, which
+  // keeps the macro-fusion pairs (FCPUTargetMachine.cpp) together.
   bool enablePostRAScheduler() const override {
-    return getSchedModel().hasInstrSchedModel();
+    return !getSchedModel().hasInstrSchedModel();
   }
   bool enablePostRAMachineScheduler() const override {
     return getSchedModel().hasInstrSchedModel();
   }
+  AntiDepBreakMode getAntiDepBreakMode() const override { return ANTIDEP_NONE; }
 };
 
 } // namespace llvm

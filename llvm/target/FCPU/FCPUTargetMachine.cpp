@@ -10,12 +10,14 @@
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Transforms/Utils.h"
 using namespace llvm;
 
 extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeFCPUTarget() {
   RegisterTargetMachine<FCPUTargetMachine> X(getTheFCPUTarget());
   PassRegistry &PR = *PassRegistry::getPassRegistry();
   initializeFCPUDAGToDAGISelLegacyPass(PR);
+  initializeFCPUHoistGlobalLoadsPass(PR);
 }
 
 // Must match clang/lib/Basic/Targets/FCPU.h.
@@ -63,20 +65,23 @@ class FCPUPassConfig : public TargetPassConfig {
 public:
   FCPUPassConfig(FCPUTargetMachine &TM, PassManagerBase &PM)
       : TargetPassConfig(TM, PM) {
-    substitutePass(&PostRASchedulerID, &PostMachineSchedulerID);
+    // Both post-RA schedulers are in the pipeline; the subtarget enables one.
+    insertPass(&PostRASchedulerID, &PostMachineSchedulerID);
   }
 
   ScheduleDAGInstrs *
   createMachineScheduler(MachineSchedContext *C) const override {
     ScheduleDAGMILive *DAG = createGenericSchedLive(C);
-    DAG->addMutation(createMacroFusionDAGMutation(shouldScheduleAdjacent));
+    if (C->MF->getSubtarget().getSchedModel().hasInstrSchedModel())
+      DAG->addMutation(createMacroFusionDAGMutation(shouldScheduleAdjacent));
     return DAG;
   }
 
   ScheduleDAGInstrs *
   createPostMachineScheduler(MachineSchedContext *C) const override {
     ScheduleDAGMI *DAG = createGenericSchedPostRA(C);
-    DAG->addMutation(createMacroFusionDAGMutation(shouldScheduleAdjacent));
+    if (C->MF->getSubtarget().getSchedModel().hasInstrSchedModel())
+      DAG->addMutation(createMacroFusionDAGMutation(shouldScheduleAdjacent));
     return DAG;
   }
 
@@ -86,7 +91,16 @@ public:
 
   void addIRPasses() override {
     addPass(createAtomicExpandLegacyPass());
+    if (getOptLevel() != CodeGenOptLevel::None) {
+      addPass(createLoopSimplifyPass());
+      addPass(createFCPUHoistGlobalLoadsPass());
+    }
     TargetPassConfig::addIRPasses();
+  }
+
+  void addPreSched2() override {
+    if (getOptLevel() != CodeGenOptLevel::None)
+      addPass(createFCPURenameDeadDefsPass());
   }
 
   bool addInstSelector() override {

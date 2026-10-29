@@ -10,8 +10,8 @@ against a runtime built the same way, for C written for 32-bit
 machines. --ext links runtime routines that use the optional extension X
 instructions (DSTEP, MULPU, FSHR/FSHL, CLZ; run with fsim --ext);
 --ext=dstep,mulpu,fsh,clz picks some of them.
---cpu schedules the code for a core configuration: generic (no
-scheduling, the default), fcpu1 (single issue, hides the load-use cycle)
+--cpu schedules the code for a core configuration: generic (the
+default: load latency only), fcpu1 (single issue, hides the load-use cycle)
 or fcpu2 (asymmetric dual issue; see target/FCPU/FCPUSchedule.td). The
 runtime is built once per --cpu.
 --cflag passes a flag to clang for your files (for example

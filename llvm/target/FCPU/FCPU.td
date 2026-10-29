@@ -21,7 +21,21 @@ include "FCPUCallingConv.td"
 include "FCPUInstrInfo.td"
 include "FCPUSchedule.td"
 
-def : ProcessorModel<"generic", NoSchedModel, []>;
+// The timing generic plans for (sim/README.md "Timing model"): one
+// instruction a cycle, in order, and a load's result one cycle late (a
+// load-use stall), so the scheduler fills that cycle when it can. Taken
+// branches cost more, but that is the branch layout's business. It has no
+// per-instruction classes; fcpu1/fcpu2 (FCPUSchedule.td) are the core
+// models of docs/cores.md.
+def FCPUModel : SchedMachineModel {
+  let IssueWidth = 1;
+  let MicroOpBufferSize = 0;   // in order
+  let LoadLatency = 2;
+  let MispredictPenalty = 2;
+  let CompleteModel = 0;
+}
+
+def : ProcessorModel<"generic", FCPUModel, []>;
 def : ProcessorModel<"fcpu1", FCPU1Model, []>;
 def : ProcessorModel<"fcpu2", FCPU2Model, []>;
 

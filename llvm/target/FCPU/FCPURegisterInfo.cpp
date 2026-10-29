@@ -28,8 +28,9 @@ FCPURegisterInfo::getCallPreservedMask(const MachineFunction &MF,
 
 BitVector FCPURegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   BitVector R(getNumRegs());
-  for (MCPhysReg Reg : {FCPU::R0, FCPU::R1, FCPU::P0, FCPU::R14, FCPU::R15,
-                        FCPU::P7, FCPU::SR})
+  // p0 (r0, r1) is allocatable: the [abs] loads and stores that the
+  // assembler expands through it declare it clobbered (FCPUInstrInfo.td).
+  for (MCPhysReg Reg : {FCPU::R14, FCPU::R15, FCPU::P7, FCPU::SR})
     R.set(Reg);
   if (MF.getSubtarget().getFrameLowering()->hasFP(MF))
     for (MCPhysReg Reg : {FCPU::R10, FCPU::R11, FCPU::P5})

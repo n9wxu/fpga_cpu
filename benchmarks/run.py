@@ -151,6 +151,16 @@ BENCHMARKS = [
          require=r"crclist\s*:\s*0xe714[\s\S]*crcmatrix\s*:\s*0x1fd7[\s\S]*crcstate\s*:\s*0x8e3a",
          ignore=r".", metric=("CoreMark/MHz", None),
          about="CoreMark 1.0 (EEMBC 2009), 10 iterations: an ISA measurement, not a reportable score"),
+    # Doom's two pixel loops alone (c/doomdraw): the compiler's C, and by hand
+    dict(name="doomdraw", kind="c", srcs=[f"{C}/doomdraw/doomdraw.c"], ints=[32],
+         compare="exact", ignore=r"cycles/pixel",
+         metric=("cycles/column pixel", r"column cycles/pixel:\s*([\d.]+)"),
+         about="Doom's R_DrawColumn and R_DrawSpan in C, on a frame-like mix of walls and floors"),
+    dict(name="doomdraw-asm", kind="c", srcs=[f"{C}/doomdraw/doomdraw.c"], ints=[32],
+         fcc_srcs=[f"{HERE}/doom/port/r_draw_fcpu.s"], fcc_defs=["DRAW_ASM"],
+         compare="exact", ignore=r"cycles/pixel",
+         metric=("cycles/column pixel", r"column cycles/pixel:\s*([\d.]+)"),
+         about="The same with the hand-written R_DrawColumn and R_DrawSpan (doom/port/r_draw_fcpu.s)"),
     dict(name="basic-dhrystone", kind="basic", file="DHRY", compare="exact",
          ignore=r"CYCLES|DHRYSTONES PER|DMIPS|FRAMES", metric=("DMIPS", r"DMIPS:\s*([\d.E+-]+)"),
          about="Dhrystone 2.1 translated to BASIC, 100 runs, in the fpga_cpu BASIC interpreter"),
@@ -161,6 +171,10 @@ BENCHMARKS = [
 DOOM = dict(name="doom", kind="doom", ints=[32], compare="doom", tics=100,
             metric=("fps", r"\(([\d.]+) fps\)"),
             about="Doom (doomgeneric), -timedemo demo1 for 100 gametics, 32-bit int, expansion RAM")
+# The same with R_DrawColumn and R_DrawSpan hand-written (port/r_draw_fcpu.s)
+DOOM_ASM = dict(DOOM, name="doom-asm", draw_asm=True,
+                about="Doom as above, with the hand-written R_DrawColumn and R_DrawSpan")
+DOOMS = [DOOM, DOOM_ASM]
 
 
 def sh(cmd, **kw):
@@ -183,9 +197,10 @@ def fcc(b, variant, bits, out, ext=False, cpu="generic"):
         cmd.append(f"--ext={ext}")
     if cpu != "generic":
         cmd.append(f"--cpu={cpu}")
-    cmd += [f"-D{d}" for d in b.get("defs", [])] + [f"-I{i}" for i in b.get("incs", [])]
+    cmd += [f"-D{d}" for d in b.get("defs", []) + b.get("fcc_defs", [])]
+    cmd += [f"-I{i}" for i in b.get("incs", [])]
     cmd += [f"--cflag={f}" for f in b.get("cflags", []) + ["-w"]]
-    cmd += b.get("fcc_extra", []) + b["srcs"]
+    cmd += b.get("fcc_extra", []) + b["srcs"] + b.get("fcc_srcs", [])
     r = sh(cmd)
     if r.returncode:
         raise RuntimeError(f"fcc failed for {b['name']} [{variant}, int{bits}]:\n{r.stdout}{r.stderr}")
@@ -358,7 +373,7 @@ def run_doom(b, variants, configs):
                   if f.endswith(".c"))
     args = f"-timedemo demo1 -timedemotics {b['tics']}"
     # host reference: the same engine and demo; its last frame as palette indices
-    hdir = os.path.join(BUILD, "doom", "host")
+    hdir = os.path.join(BUILD, b["name"], "host")
     os.makedirs(hdir, exist_ok=True)
     hb = os.path.join(hdir, "doom-host")
     r = sh(["cc", "-O2", "-w", *[f"-D{d}" for d in DOOM_DEFS], "-DLINUX", "-D_DEFAULT_SOURCE",
@@ -372,14 +387,19 @@ def run_doom(b, variants, configs):
     want = r.stdout + r.stderr  # the "timed ..." line comes from I_Error, on stderr
     host_frame = open(os.path.join(hdir, "LASTFRAME.IDX"), "rb").read()
     # the simulator's disk: the IWAD and the arguments
-    disk = os.path.join(BUILD, "doom", "disk")
+    disk = os.path.join(BUILD, b["name"], "disk")
     os.makedirs(disk, exist_ok=True)
     if not os.path.exists(os.path.join(disk, wad)):
         os.symlink(os.path.join(DOOMDIR, "wad", wad), os.path.join(disk, wad))
     with open(os.path.join(disk, "DOOMARGS.TXT"), "w") as f:
         f.write(args + "\n")
-    b = dict(b, srcs=srcs + [os.path.join(DOOMDIR, "port", "doomgeneric_fcpu.c")],
-             incs=[f"{DOOMDIR}/src", f"{DOOMDIR}/port/include"], defs=DOOM_DEFS,
+    port = [os.path.join(DOOMDIR, "port", "doomgeneric_fcpu.c")]
+    defs = DOOM_DEFS
+    if b.get("draw_asm"):
+        port.append(os.path.join(DOOMDIR, "port", "r_draw_fcpu.s"))
+        defs = DOOM_DEFS + ["FCPU_DRAW_ASM"]
+    b = dict(b, srcs=srcs + port,
+             incs=[f"{DOOMDIR}/src", f"{DOOMDIR}/port/include"], defs=defs,
              fcc_extra=["--base", "0x100000", "--stack", "0xF00000"])
     rows = []
     for v in variants:
@@ -387,7 +407,7 @@ def run_doom(b, variants, configs):
         for cfg in configs:
             key = build_of(cfg)
             if key not in built:
-                p = os.path.join(BUILD, "doom", f"doom.int32.{v}{ext_tag(*key)}.bin")
+                p = os.path.join(BUILD, b["name"], f"{b['name']}.int32.{v}{ext_tag(*key)}.bin")
                 built[key] = p, fcc(b, v, 32, p, *key)
             binp, stats = built[key]
             dump = binp[:-4] + f".{cfg}.frame"
@@ -423,7 +443,7 @@ def fmt(x, d=0):
 def report(rows, variants, configs):
     by = {(r["bench"], r["variant"], r["int"], r["config"]): r for r in rows}
     names = list(dict.fromkeys(r["bench"] for r in rows))
-    about = {b["name"]: b["about"] for b in BENCHMARKS + [DOOM]}
+    about = {b["name"]: b["about"] for b in BENCHMARKS + DOOMS}
     v0 = variants[0]
     L = ["# Benchmark results", "",
          "Generated by `benchmarks/run.py`; do not edit. The CPU runs at 50 MHz in the simulator, ",
@@ -439,7 +459,7 @@ def report(rows, variants, configs):
                 continue
             res = ""
             if r["metric"] is not None:
-                b = next(b for b in BENCHMARKS + [DOOM] if b["name"] == n)
+                b = next(b for b in BENCHMARKS + DOOMS if b["name"] == n)
                 res = f"{r['metric']:.3f} {b['metric'][0]}" if r["metric"] < 1000 else f"{r['metric']:,.0f} {b['metric'][0]}"
             L.append(f"| {n} | {bits} | {'✓' if r['ok'] else '✗'} | {fmt(r['cycles'])} | {fmt(r['insts'])} | "
                      f"{r['cycles'] / r['insts']:.3f} | {100 * r['len16'] / r['insts']:.0f}% | "
@@ -512,9 +532,9 @@ def main():
     ap.add_argument("--list", action="store_true")
     ap.add_argument("-j", type=int, default=os.cpu_count() or 2)
     a = ap.parse_args()
-    benches = BENCHMARKS + ([DOOM] if a.doom or "doom" in a.names else [])
+    benches = BENCHMARKS + (DOOMS if a.doom or any(n.startswith("doom") for n in a.names) else [])
     if a.list:
-        for b in BENCHMARKS + [DOOM]:
+        for b in BENCHMARKS + DOOMS:
             print(f"{b['name']:20} {b['about']}")
         return
     if a.names:
@@ -552,7 +572,7 @@ def main():
             rows += rs
             good = sum(r["ok"] for r in rs)
             print(f"{b['name']:20} {good}/{len(rs)} runs correct")
-    order = {b["name"]: i for i, b in enumerate(BENCHMARKS + [DOOM])}
+    order = {b["name"]: i for i, b in enumerate(BENCHMARKS + DOOMS)}
     rows.sort(key=lambda r: (order[r["bench"]], r["int"], r["variant"], configs.index(r["config"])))
     with open(os.path.join(HERE, "results.json"), "w") as f:
         json.dump(dict(configs=configs, variants=variants, rows=rows), f, indent=1)

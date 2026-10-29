@@ -12,7 +12,7 @@ static cl::opt<bool> PreRASched("fcpu-prera-sched", cl::init(true), cl::Hidden,
                                 cl::desc("FCPU: schedule before register allocation too"));
 
 bool FCPUSubtarget::enableMachineScheduler() const {
-  return PreRASched && getSchedModel().hasInstrSchedModel();
+  return PreRASched;
 }
 
 #define DEBUG_TYPE "fcpu-subtarget"

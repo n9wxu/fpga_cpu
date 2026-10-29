@@ -147,6 +147,7 @@ let Defs = [SR] in {
 
   def CMPrr : FI<(outs), (ins GPR:$rs, GPR:$rt), "CMP\t$rs, $rt",
                  [(FCPUcmp GPR:$rs, GPR:$rt)]>;
+  let isCompare = 1 in
   def CMPI : FI<(outs), (ins GPR:$rs, i16imm:$imm), "CMPI\t$rs, $imm",
                 [(FCPUcmp GPR:$rs, imm:$imm)]>;
 }
@@ -276,19 +277,23 @@ multiclass LoadM<string mn, RegisterClass RC, PatFrag ld> {
                [(set RC:$rd, (ld addrd:$a))]>;
     def x : FI<(outs RC:$rd), (ins memx:$a), mn # "\t$rd, $a",
                [(set RC:$rd, (ld addrx:$a))]>;
+    // [abs]: variant A (and B, for most ops) has no direct form, so the
+    // assembler makes it LEA p0, [abs] then op [p0]: p0 is clobbered.
+    let Defs = [P0] in
     def a : FI<(outs RC:$rd), (ins mema:$a), mn # "\t$rd, $a",
                [(set RC:$rd, (ld addra:$a))]>;
   }
 }
 
-multiclass StoreM<string mn, RegisterClass RC, PatFrag st> {
+multiclass StoreM<string mn, RegisterClass RC, RegisterClass RCabs, PatFrag st> {
   let mayStore = 1 in {
     def d : FI<(outs), (ins RC:$rd, memd:$a), mn # "\t$rd, $a",
                [(st RC:$rd, addrd:$a)]>;
     def x : FI<(outs), (ins RC:$rd, memx:$a), mn # "\t$rd, $a",
                [(st RC:$rd, addrx:$a)]>;
-    def a : FI<(outs), (ins RC:$rd, mema:$a), mn # "\t$rd, $a",
-               [(st RC:$rd, addra:$a)]>;
+    let Defs = [P0] in
+    def a : FI<(outs), (ins RCabs:$rd, mema:$a), mn # "\t$rd, $a",
+               [(st RCabs:$rd, addra:$a)]>;
   }
 }
 
@@ -296,9 +301,30 @@ defm LDW  : LoadM<"LDW",  GPR, load>;
 defm LDBU : LoadM<"LDBU", GPR, zextloadi8>;
 defm LDBS : LoadM<"LDBS", GPR, sextloadi8>;
 defm LDP  : LoadM<"LDP",  PR,  load>;
-defm STW  : StoreM<"STW", GPR, store>;
-defm STB  : StoreM<"STB", GPR, truncstorei8>;
-defm STP  : StoreM<"STP", PR,  store>;
+defm STW  : StoreM<"STW", GPR, GPRnoP0, store>;
+defm STB  : StoreM<"STB", GPR, GPRnoP0, truncstorei8>;
+defm STP  : StoreM<"STP", PR,  PRnoP0, store>;
+
+// Post-increment: [pN]+ steps pN by the access size afterwards. The DAG
+// combiner forms these when a pointer is bumped by exactly that size after
+// the access (getPostIndexedAddressParts); loads are selected in
+// FCPUISelDAGToDAG.cpp, stores by these patterns.
+let Constraints = "$pn = $wb" in {
+  let mayLoad = 1 in {
+    def LDWpi  : FI<(outs GPR:$rd, PR:$wb), (ins PR:$pn), "LDW\t$rd, [$pn]+">;
+    def LDBUpi : FI<(outs GPR:$rd, PR:$wb), (ins PR:$pn), "LDBU\t$rd, [$pn]+">;
+    def LDBSpi : FI<(outs GPR:$rd, PR:$wb), (ins PR:$pn), "LDBS\t$rd, [$pn]+">;
+    def LDPpi  : FI<(outs PR:$rd, PR:$wb), (ins PR:$pn), "LDP\t$rd, [$pn]+">;
+  }
+  let mayStore = 1 in {
+    def STWpi : FI<(outs PR:$wb), (ins GPR:$rd, PR:$pn), "STW\t$rd, [$pn]+",
+                   [(set PR:$wb, (post_store GPR:$rd, PR:$pn, imm))]>;
+    def STBpi : FI<(outs PR:$wb), (ins GPR:$rd, PR:$pn), "STB\t$rd, [$pn]+",
+                   [(set PR:$wb, (post_truncsti8 GPR:$rd, PR:$pn, imm))]>;
+    def STPpi : FI<(outs PR:$wb), (ins PR:$rd, PR:$pn), "STP\t$rd, [$pn]+",
+                   [(set PR:$wb, (post_store PR:$rd, PR:$pn, imm))]>;
+  }
+}
 
 def : Pat<(i16 (extloadi8 addrd:$a)), (LDBUd addrd:$a)>;
 def : Pat<(i16 (extloadi8 addrx:$a)), (LDBUx addrx:$a)>;
