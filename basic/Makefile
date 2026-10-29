@@ -78,6 +78,11 @@ $(BUILD)/basic-test-x-%.bin: $(SRCS) $(HDRS) $(RUNTIME)
 	@mkdir -p $(BUILD)
 	$(FCC) -q -v $(lastword $(subst ., ,$*)) --ext=$(EXT) -O2 -DBASIC_QUIET=1 -DBASIC_ARENA_MAX=$(TEST_ARENA)UL $(SRCS) -o $@
 
+# Scheduled for a core configuration (fcc --cpu): basic-test-cpu-<cpu>.<v>.bin
+$(BUILD)/basic-test-cpu-%.bin: $(SRCS) $(HDRS) $(RUNTIME)
+	@mkdir -p $(BUILD)
+	$(FCC) -q -v $(lastword $(subst ., ,$*)) --cpu=$(firstword $(subst ., ,$*)) -O2 -DBASIC_QUIET=1 -DBASIC_ARENA_MAX=$(TEST_ARENA)UL $(SRCS) -o $@
+
 test-target: $(VARIANTS:%=$(BUILD)/basic-test.%.bin)
 	@fail=0; for v in $(VARIANTS); do for t in $(TESTS); do \
 	  n=$$(basename $$t .bas); d=$(BUILD)/tdisk-$$n.$$v; rm -rf $$d; mkdir -p $$d; \

@@ -11,6 +11,7 @@ for the development machine, and timed in cycles.
 ./run.py dhrystone stanford  # some of them
 ./run.py doom                # Doom (needs doom/get_wad.sh first)
 ./run.py --list
+./run.py --doom --configs c0,c1,c2,c3   # the core ladder (docs/cores.md)
 ```
 
 Results go to `results.md` (tables) and `results.json` (every run). The

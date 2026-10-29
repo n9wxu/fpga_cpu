@@ -165,6 +165,10 @@ About 3.0–3.45k of 3,840 LUTs and 11 of 12 block RAMs. This is close to
 the limit, so if place and route gets tight, the optional fusion logic
 goes first.
 
+The CPU scales through a ladder of core configurations (c0–c3), each a
+set of simulator, compiler and later RTL parameters, ordered by speed per
+LUT: see [cores.md](cores.md).
+
 ## Toolchain
 
 - **Simulator:** written from scratch in C, table-driven from `cpu/isa.yaml`.

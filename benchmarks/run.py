@@ -7,6 +7,7 @@ their output and record what they cost.
   run.py --configs base,fuse-br  timing configurations (see CONFIGS)
   run.py --variants A            encoding variants
   run.py --quick                 base configuration only (and ext)
+  run.py --configs c0,c1,c2,c3   the core ladder (fsim --core, fcc --cpu)
   run.py --list                  list the benchmarks
 
 Every benchmark is also built for the development machine, and the
@@ -57,7 +58,36 @@ CONFIGS = {
     "x-fsh":    (["--ext"], "base + FSHR/FSHL only", "fsh"),
     "x-clz":    (["--ext"], "base + CLZ only", "clz"),
     "ext+dual+br": (["--ext", "--dual", "--fuse=cmpbr,alubr"], "extension X + dual issue + branch fusion", "all"),
+    # asymmetric dual issue: slot 2 is a register-only pipe (see fsim --dual-ops)
+    "bp1+d2":   (["--branch-pen", "1", "--fuse=cmpbr,alubr", "--dual=ports"],
+                 "bp1+br + slot 2 (alu, movi, branch), younger instruction only"),
+    "bp1+d2any": (["--branch-pen", "1", "--fuse=cmpbr,alubr", "--dual=ports", "--dual-any"],
+                  "bp1+d2, either instruction of the pair in slot 2"),
+    "bp1+d2any+sh": (["--branch-pen", "1", "--fuse=cmpbr,alubr", "--dual=ports", "--dual-any",
+                      "--dual-ops=alu,movi,branch,shift"], "bp1+d2any + shifter in slot 2"),
+    "bp1+d2any+ptr": (["--branch-pen", "1", "--fuse=cmpbr,alubr", "--dual=ports", "--dual-any",
+                       "--dual-ops=alu,movi,branch,ptr"], "bp1+d2any + pointer adder in slot 2"),
+    "bp1+d2any+sh+ptr": (["--branch-pen", "1", "--fuse=cmpbr,alubr", "--dual=ports", "--dual-any",
+                          "--dual-ops=alu,movi,branch,shift,ptr"], "bp1+d2any + shifter and pointer adder"),
+    "bp1+d2-16any+sh+ptr": (["--branch-pen", "1", "--fuse=cmpbr,alubr", "--dual=ports", "--dual-any", "--dual-16",
+                             "--dual-ops=alu,movi,branch,shift,ptr"], "as bp1+d2any+sh+ptr, 16-bit encodings only"),
 }
+# The core ladder (fsim --core cN), each built with its scheduling model
+# (fcc --cpu, the fourth field). The -g configurations run the same core
+# with unscheduled code (fcc --cpu=generic), to separate what the hardware
+# and the compiler each contribute.
+CONFIGS.update({
+    "c0":   (["--core", "c0"], "core c0: base hardware, generic code", "", "generic"),
+    "c0s":  (["--core", "c0"], "core c0, code scheduled for it (fcc --cpu=fcpu1)", "", "fcpu1"),
+    "c1g":  (["--core", "c1"], "core c1: + 1-cycle branch and branch fusion, generic code", "", "generic"),
+    "c1":   (["--core", "c1"], "core c1, code scheduled for it (fcpu1)", "", "fcpu1"),
+    "c2":   (["--core", "c2"], "core c2: + 4 KB I-cache (fcpu1)", "", "fcpu1"),
+    "c3g":  (["--core", "c3"], "core c3: + second pipe, generic code", "", "generic"),
+    "c3s1": (["--core", "c3"], "core c3, code scheduled single issue (fcpu1)", "", "fcpu1"),
+    "c3":   (["--core", "c3"], "core c3, code scheduled for dual issue (fcpu2)", "", "fcpu2"),
+    "c1d":  (["--core", "c3", "--icache", "2048"], "c1 + second pipe, 2 KB I-cache (fcpu2)", "", "fcpu2"),
+})
+CORE_CONFIGS = ["c0", "c0s", "c1g", "c1", "c2", "c3g", "c3s1", "c3", "c1d"]
 DEFAULT_CONFIGS = ["base", "fuse-br", "bp1+br", "dual+br", "nocache", "ic512",
                    "ext", "x-dstep", "x-mulpu", "x-fsh", "x-clz", "ext+dual+br"]
 
@@ -67,8 +97,19 @@ def is_ext(cfg):
     return CONFIGS[cfg][2] if len(CONFIGS[cfg]) > 2 else ""
 
 
-def ext_tag(ext):
-    return "" if not ext else ".ext" if ext == "all" else ".x-" + ext.replace(",", "-")
+def cpu_of(cfg):
+    """fcc's --cpu for this configuration's binaries."""
+    return CONFIGS[cfg][3] if len(CONFIGS[cfg]) > 3 else "generic"
+
+
+def build_of(cfg):
+    """What the binaries depend on: (ext, cpu)."""
+    return is_ext(cfg), cpu_of(cfg)
+
+
+def ext_tag(ext, cpu="generic"):
+    tag = "" if not ext else ".ext" if ext == "all" else ".x-" + ext.replace(",", "-")
+    return tag + ("" if cpu == "generic" else "." + cpu)
 
 C = os.path.join(HERE, "c")
 
@@ -133,13 +174,15 @@ def fail(msg):
 
 # ---- building ----
 
-def fcc(b, variant, bits, out, ext=False):
+def fcc(b, variant, bits, out, ext=False, cpu="generic"):
     os.makedirs(os.path.dirname(out), exist_ok=True)
     cmd = [PY, FCC, "-q", "-v", variant, "-O2", "--stats", "-o", out]
     if bits == 32:
         cmd.append("--int32")
     if ext:
         cmd.append(f"--ext={ext}")
+    if cpu != "generic":
+        cmd.append(f"--cpu={cpu}")
     cmd += [f"-D{d}" for d in b.get("defs", [])] + [f"-I{i}" for i in b.get("incs", [])]
     cmd += [f"--cflag={f}" for f in b.get("cflags", []) + ["-w"]]
     cmd += b.get("fcc_extra", []) + b["srcs"]
@@ -246,11 +289,11 @@ def run_c(b, variants, configs):
         for v in variants:
             built = {}
             for cfg in configs:
-                ext = is_ext(cfg)
-                if ext not in built:
-                    binp = os.path.join(BUILD, b["name"], f"{b['name']}.int{bits}.{v}{ext_tag(ext)}.bin")
-                    built[ext] = binp, fcc(b, v, bits, binp, ext)
-                binp, stats = built[ext]
+                key = build_of(cfg)
+                if key not in built:
+                    binp = os.path.join(BUILD, b["name"], f"{b['name']}.int{bits}.{v}{ext_tag(*key)}.bin")
+                    built[key] = binp, fcc(b, v, bits, binp, *key)
+                binp, stats = built[key]
                 out, rc, st = fsim(binp, v, cfg)
                 rows.append(record(b, v, bits, cfg, out, rc, st, want, stats))
     return rows
@@ -259,12 +302,15 @@ def run_c(b, variants, configs):
 def basic_bins(variants, configs):
     bins = {}
     for v in variants:
-        for ext in sorted({is_ext(c) for c in configs}):
-            name = f"build/basic-test{ext_tag(ext).replace('.', '-')}.{v}.bin"
+        for ext, cpu in sorted({build_of(c) for c in configs}):
+            if ext and cpu != "generic":
+                raise RuntimeError("BASIC: --ext with --cpu is not built (basic/Makefile)")
+            tag = ext_tag(ext).replace('.', '-') if ext else "" if cpu == "generic" else "-cpu-" + cpu
+            name = f"build/basic-test{tag}.{v}.bin"
             r = sh(["make", "-C", BASIC, name] + ([f"EXT={ext}"] if ext else []))
             if r.returncode:
                 raise RuntimeError(f"BASIC target build failed [{v}]:\n{r.stdout[-2000:]}{r.stderr[-2000:]}")
-            bins[v, ext] = os.path.join(BASIC, name)
+            bins[v, (ext, cpu)] = os.path.join(BASIC, name)
     host = os.path.join(BASIC, "build", "basic-host")
     if sh(["make", "-C", BASIC, "build/basic-host"]).returncode:
         raise RuntimeError("BASIC host build failed")
@@ -279,10 +325,10 @@ def run_basic(b, variants, configs, bins, host):
     rows = []
     for v in variants:
         for cfg in configs:
-            src = bins[v, is_ext(cfg)]
+            src = bins[v, build_of(cfg)]
             stats = json.load(open(src[:-4] + ".json")) if os.path.exists(src[:-4] + ".json") else {}
             # a scratch copy of the binary per run so the run JSONs don't collide
-            binp = os.path.join(BUILD, b["name"], f"{b['name']}.{v}{ext_tag(is_ext(cfg))}.bin")
+            binp = os.path.join(BUILD, b["name"], f"{b['name']}.{v}{ext_tag(*build_of(cfg))}.bin")
             os.makedirs(os.path.dirname(binp), exist_ok=True)
             shutil.copyfile(src, binp)
             out, rc, st = fsim(binp, v, cfg, disk=disk, stdin=cmd)
@@ -339,11 +385,11 @@ def run_doom(b, variants, configs):
     for v in variants:
         built = {}
         for cfg in configs:
-            ext = is_ext(cfg)
-            if ext not in built:
-                p = os.path.join(BUILD, "doom", f"doom.int32.{v}{ext_tag(ext)}.bin")
-                built[ext] = p, fcc(b, v, 32, p, ext)
-            binp, stats = built[ext]
+            key = build_of(cfg)
+            if key not in built:
+                p = os.path.join(BUILD, "doom", f"doom.int32.{v}{ext_tag(*key)}.bin")
+                built[key] = p, fcc(b, v, 32, p, *key)
+            binp, stats = built[key]
             dump = binp[:-4] + f".{cfg}.frame"
             out, rc, st = fsim_doom(binp, v, cfg, disk, dump)
             ok_text = re.search(r"timed (\d+) gametics", out)

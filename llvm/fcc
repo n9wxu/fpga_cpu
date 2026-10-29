@@ -2,7 +2,7 @@
 """fcc: C compiler driver for fpga_cpu.
 
 usage: fcc [-v A|B] [-O<n>] [-S] [-I dir] [-D name[=val]] [-o out.bin]
-           [--int32] [--ext[=LIST]] [--base ADDR] [--stack ADDR] [--cflag FLAG ...]
+           [--int32] [--ext[=LIST]] [--cpu NAME] [--base ADDR] [--stack ADDR] [--cflag FLAG ...]
            [--lst] [--stats] [--keep] [--] files.c|files.s ...
 
 --int32 compiles with a 32-bit int (clang's int32 target feature)
@@ -10,6 +10,10 @@ against a runtime built the same way, for C written for 32-bit
 machines. --ext links runtime routines that use the optional extension X
 instructions (DSTEP, MULPU, FSHR/FSHL, CLZ; run with fsim --ext);
 --ext=dstep,mulpu,fsh,clz picks some of them.
+--cpu schedules the code for a core configuration: generic (no
+scheduling, the default), fcpu1 (single issue, hides the load-use cycle)
+or fcpu2 (asymmetric dual issue; see target/FCPU/FCPUSchedule.td). The
+runtime is built once per --cpu.
 --cflag passes a flag to clang for your files (for example
 -std=gnu89 for K&R C). --base sets the load address (default 0x1000) and --stack the
 initial stack pointer (default 0x053400); the heap runs from the end of
@@ -78,16 +82,26 @@ def stale(out, *srcs):
 
 
 INT32 = False
+CPUS = ["generic", "fcpu1", "fcpu2"]
+CPU = "generic"
+
+
+# FCC_MLLVM="-opt=v ...": backend options for experiments, for every file
+# including the runtime (built apart for each setting)
+MLLVM = os.environ.get("FCC_MLLVM", "").split()
 
 
 def compile_c(src, out, opt, extra):
-    run([CLANG, *(TRIPLE32 if INT32 else TRIPLE16), *CFLAGS, opt, *extra, "-S", src, "-o", out])
+    cpu = [] if CPU == "generic" else ["-Xclang", "-target-cpu", "-Xclang", CPU]
+    cpu += [x for m in MLLVM for x in ("-mllvm", m)]
+    run([CLANG, *(TRIPLE32 if INT32 else TRIPLE16), *cpu, *CFLAGS, opt, *extra, "-S", src, "-o", out])
 
 
 def runtime():
     """Build the runtime library on demand; returns (crt0, [library files]).
-    The int32 runtime is kept apart from the 16-bit one."""
-    rt_build = RT_BUILD + ("-int32" if INT32 else "")
+    The int32 runtime and each --cpu are kept apart."""
+    rt_build = RT_BUILD + ("-int32" if INT32 else "") + ("" if CPU == "generic" else "-" + CPU)
+    rt_build += "".join("-" + m.lstrip("-").replace("=", "_") for m in MLLVM)
     os.makedirs(rt_build, exist_ok=True)
     libs = []
     asm_dir = os.path.join(RT, "asm")
@@ -132,12 +146,14 @@ def main(argv):
     ap.add_argument("--ext", nargs="?", const="all", default=None,
                     help="runtime uses ISA extension X: all of it, or a list of "
                          "dstep,mulpu,fsh,clz (run with fsim --ext)")
+    ap.add_argument("--cpu", default="generic", choices=CPUS, help="schedule for this core")
     ap.add_argument("--cflag", action="append", default=[], help="extra clang flag for your files")
     ap.add_argument("--base", default="0x1000", help="load address")
     ap.add_argument("--stack", default="0x053400", help="initial stack pointer")
     args = ap.parse_args(argv)
-    global INT32
+    global INT32, CPU
     INT32 = args.int32
+    CPU = args.cpu
 
     out = args.out or os.path.splitext(args.files[0])[0] + ".bin"
     stem = os.path.splitext(out)[0]

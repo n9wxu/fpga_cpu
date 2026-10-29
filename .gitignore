@@ -14,6 +14,7 @@ cpu/gen/*.tmp
 # Simulator / C builds
 build/
 build-int32/
+llvm/runtime/build-*/
 *.o
 *.d
 *.a

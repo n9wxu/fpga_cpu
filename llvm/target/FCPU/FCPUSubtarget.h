@@ -42,6 +42,15 @@ public:
   const SelectionDAGTargetInfo *getSelectionDAGInfo() const override {
     return &TSInfo;
   }
+
+  // Only the fcpu1/fcpu2 models schedule; generic keeps source order.
+  bool enableMachineScheduler() const override;
+  bool enablePostRAScheduler() const override {
+    return getSchedModel().hasInstrSchedModel();
+  }
+  bool enablePostRAMachineScheduler() const override {
+    return getSchedModel().hasInstrSchedModel();
+  }
 };
 
 } // namespace llvm

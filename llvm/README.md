@@ -36,6 +36,7 @@ encoding stays measurable.
 | `--base ADDR` | load address (default `0x1000`) |
 | `--stack ADDR` | initial stack pointer (default `0x053400`, below the sprite buffers). The heap runs from the end of BSS to 16 KB below it. Programs above `0x0FFFFF` need `fsim --xram`. |
 | `--ext[=LIST]` | link runtime routines that use the optional ISA extension X (`DSTEP`, `MULPU`, `FSHR`/`FSHL`, `CLZ`; see [cpu/isa.md](../cpu/isa.md)); `LIST` picks parts: `dstep,mulpu,fsh,clz`. Run the result with `fsim --ext`. |
+| `--cpu NAME` | schedule the code for a core: `generic` (default, no scheduling), `fcpu1` (single issue, fills the load-use cycle) or `fcpu2` (asymmetric dual issue). Models in `target/FCPU/FCPUSchedule.td`; the runtime is built once per CPU (`runtime/build-fcpu2/`). See [docs/cores.md](../docs/cores.md). |
 | `--cflag FLAG` | pass a flag to clang for your files, e.g. `--cflag=-std=gnu89` |
 | `--stats`, `--lst`, `--keep` | encoding statistics, listing, keep the `.s` files |
 

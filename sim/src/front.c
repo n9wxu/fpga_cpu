@@ -19,7 +19,11 @@ void opts_usage(int gui)
             "  --fuse=LIST       apply only these kinds: cmpbr,addadc,leamem,ldpair,alubr\n"
             "  --dual[=banked|ports]  in-order dual issue; banked (default) = even/odd write banks,\n"
             "                    ports = a full second register write port\n"
+            "  --dual-ops=LIST   what slot 2 executes: alu,movi,branch,shift,mul,ptr (default alu,movi,branch)\n"
+            "  --dual-16         slot 2 takes only 16-bit encodings\n"
+            "  --dual-any        the slot-2 instruction may be the older one of the pair\n"
             "  --branch-pen N    taken-branch penalty (default 2)\n"
+            "  --core NAME       a core configuration (below); later options override it\n"
             "  --ext             allow extension X (DSTEP, MULPU, FSHR, FSHL, CLZ; see cpu/isa.yaml)\n"
             "  --video P:B       video steals B of every P port cycles (default 56:4 = 7%%, 0:0 = off)\n"
             "  --xram MB         simulator-only expansion RAM at 0x100000, up to 14 MB (default none)\n"
@@ -43,7 +47,37 @@ void opts_usage(int gui)
                 "  --trace           trace every instruction to stderr\n"
                 "  --profile FILE    write instructions and cycles per address (sim/tools/profile.py)\n"
                 "  -q                no summary on stderr\n");
+    fprintf(stderr, "core configurations (each adds to the one before; build with fcc --cpu as shown):\n");
+    for (int i = 0; i < NUM_CORES; i++)
+        fprintf(stderr, "  %-4s fcc --cpu=%-8s %s\n", cores[i].name, cores[i].cpu, cores[i].about);
     exit(2);
+}
+
+/* The scaling ladder: each core adds hardware to the one before, cheapest
+ * speed per LUT first (docs/cores.md). An RTL build will take the same
+ * choices as parameters. */
+const core_t cores[NUM_CORES] = {
+    { "c0", "generic", "2 KB I-cache, 2-cycle taken branch, single issue" },
+    { "c1", "fcpu1",   "+ 1-cycle taken branch, CMP+Bcc and ALU+Bcc fusion" },
+    { "c2", "fcpu1",   "+ 4 KB I-cache (one more block RAM)" },
+    { "c3", "fcpu2",   "+ second pipe: ALU, MOVI, branch, shift, pointer ops; either order; 2nd write port" },
+};
+
+int apply_core(tcfg_t *cfg, const char *name)
+{
+    int k = 0;
+    while (k < NUM_CORES && strcmp(cores[k].name, name))
+        k++;
+    if (k == NUM_CORES)
+        return -1;
+    cfg->icache_bytes = k >= 2 ? 4096 : 2048;
+    cfg->branch_pen = k >= 1 ? 1 : 2;
+    cfg->fuse = k >= 1 ? 1 << FU_CMPBR | 1 << FU_ALUBR : 0;
+    cfg->dual = k >= 3 ? DUAL_PORTS : DUAL_OFF;
+    cfg->dual_ops = k >= 3 ? 1u << PS_ALU | 1u << PS_MOVI | 1u << PS_BRANCH | 1u << PS_SHIFT | 1u << PS_PTR : 0;
+    cfg->dual_any = k >= 3;
+    cfg->dual_16 = 0;
+    return k;
 }
 
 static uint32_t num(const char *s) { return (uint32_t)strtoul(s, NULL, 0); }
@@ -72,7 +106,7 @@ static int parse_fuse(const char *s, int *mask)
 int opts_parse(opts_t *o, int argc, char **argv, int gui)
 {
     memset(o, 0, sizeof *o);
-    o->cfg = (tcfg_t){ 2048, 16, 1, 0, 2, 1, 2, 56, 4, DUAL_OFF, 0, 0 };
+    o->cfg = (tcfg_t){ 2048, 16, 1, 0, 2, 1, 2, 56, 4, DUAL_OFF, 0, 0, 0, 0, 0 };
     o->vname = "A";
     o->load = 0x1000;
     o->entry = 0xFFFFFFFF;
@@ -94,8 +128,28 @@ int opts_parse(opts_t *o, int argc, char **argv, int gui)
                 return -1;
         } else if (!strcmp(a, "--dual") || !strcmp(a, "--dual=banked")) o->cfg.dual = DUAL_BANKED;
         else if (!strcmp(a, "--dual=ports")) o->cfg.dual = DUAL_PORTS;
+        else if (!strncmp(a, "--dual-ops=", 11)) {
+            o->cfg.dual_ops = 0;
+            for (char *t = strtok(strdup(a + 11), ","); t; t = strtok(NULL, ",")) {
+                int k = -1;
+                for (int i = 0; i < PS__COUNT; i++)
+                    if (!strcmp(t, pair_slot_names[i]))
+                        k = i;
+                if (k < 0) {
+                    fprintf(stderr, "--dual-ops: unknown kind %s\n", t);
+                    return 1;
+                }
+                o->cfg.dual_ops |= 1u << k;
+            }
+        } else if (!strcmp(a, "--dual-16")) o->cfg.dual_16 = 1;
+        else if (!strcmp(a, "--dual-any")) o->cfg.dual_any = 1;
         else if (!strcmp(a, "--ext")) o->cfg.ext = 1;
-        else if (!strcmp(a, "--branch-pen") && more) o->cfg.branch_pen = (int)num(argv[++i]);
+        else if (!strcmp(a, "--core") && more) {
+            if (apply_core(&o->cfg, argv[++i]) < 0) {
+                fprintf(stderr, "--core: unknown core %s\n", argv[i]);
+                return -1;
+            }
+        } else if (!strcmp(a, "--branch-pen") && more) o->cfg.branch_pen = (int)num(argv[++i]);
         else if (!strcmp(a, "--video") && more) {
             char *colon;
             o->cfg.vperiod = (uint32_t)strtoul(argv[++i], &colon, 0);

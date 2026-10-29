@@ -4,7 +4,10 @@
 #include "FCPU.h"
 #include "FCPUMachineFunctionInfo.h"
 #include "TargetInfo/FCPUTargetInfo.h"
+#include "llvm/CodeGen/MacroFusion.h"
+#include "llvm/CodeGen/MachineScheduler.h"
 #include "llvm/CodeGen/Passes.h"
+#include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/MC/TargetRegistry.h"
 using namespace llvm;
@@ -43,10 +46,39 @@ MachineFunctionInfo *FCPUTargetMachine::createMachineFunctionInfo(
 }
 
 namespace {
+// Keep a flag-setting instruction next to the Bcc that reads the flags:
+// fsim fuses CMP+Bcc and ALU+Bcc only when they are adjacent.
+bool shouldScheduleAdjacent(const TargetInstrInfo &TII,
+                            const TargetSubtargetInfo &STI,
+                            const MachineInstr *First,
+                            const MachineInstr &Second) {
+  if (Second.getOpcode() != FCPU::Bcc)
+    return false;
+  if (!First) // any predecessor may pair with the branch
+    return true;
+  return First->definesRegister(FCPU::SR, /*TRI=*/nullptr);
+}
+
 class FCPUPassConfig : public TargetPassConfig {
 public:
   FCPUPassConfig(FCPUTargetMachine &TM, PassManagerBase &PM)
-      : TargetPassConfig(TM, PM) {}
+      : TargetPassConfig(TM, PM) {
+    substitutePass(&PostRASchedulerID, &PostMachineSchedulerID);
+  }
+
+  ScheduleDAGInstrs *
+  createMachineScheduler(MachineSchedContext *C) const override {
+    ScheduleDAGMILive *DAG = createGenericSchedLive(C);
+    DAG->addMutation(createMacroFusionDAGMutation(shouldScheduleAdjacent));
+    return DAG;
+  }
+
+  ScheduleDAGInstrs *
+  createPostMachineScheduler(MachineSchedContext *C) const override {
+    ScheduleDAGMI *DAG = createGenericSchedPostRA(C);
+    DAG->addMutation(createMacroFusionDAGMutation(shouldScheduleAdjacent));
+    return DAG;
+  }
 
   FCPUTargetMachine &getFCPUTargetMachine() const {
     return getTM<FCPUTargetMachine>();

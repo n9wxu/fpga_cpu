@@ -16,11 +16,14 @@ include "llvm/Target/Target.td"
 def FeatureInt32 : SubtargetFeature<"int32", "HasInt32", "true",
                                     "32-bit int (front end only)">;
 
-def : ProcessorModel<"generic", NoSchedModel, []>;
-
 include "FCPURegisterInfo.td"
 include "FCPUCallingConv.td"
 include "FCPUInstrInfo.td"
+include "FCPUSchedule.td"
+
+def : ProcessorModel<"generic", NoSchedModel, []>;
+def : ProcessorModel<"fcpu1", FCPU1Model, []>;
+def : ProcessorModel<"fcpu2", FCPU2Model, []>;
 
 def FCPUInstrInfo : InstrInfo;
 

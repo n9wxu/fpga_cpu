@@ -59,6 +59,12 @@ public:
   void getTargetDefines(const LangOptions &Opts,
                         MacroBuilder &Builder) const override;
 
+  // scheduling models (llvm/target/FCPU/FCPUSchedule.td); fcc --cpu
+  bool isValidCPUName(StringRef Name) const override {
+    return Name == "generic" || Name == "fcpu1" || Name == "fcpu2";
+  }
+  bool setCPU(const std::string &Name) override { return isValidCPUName(Name); }
+
   ArrayRef<Builtin::Info> getTargetBuiltins() const override {
     return std::nullopt;
   }

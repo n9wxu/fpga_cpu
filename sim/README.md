@@ -55,6 +55,7 @@ front ends take the same options (`fsim -h`):
 | `--true-color` | show hi-color palette colors instead of the 3-bit dither |
 | `--trace`, `--json FILE`, `-q` | headless only: instruction trace, statistics, no summary |
 | `--dump A:N:FILE` | headless only: write N bytes of memory from A at exit |
+| `--core c0\|c1\|c2\|c3` | a core configuration from the scaling ladder ([docs/cores.md](../docs/cores.md)); later timing options override parts of it |
 | `--ext` | allow the optional extension X instructions (`DSTEP`, `MULPU`, `FSHR`, `FSHL`, `CLZ`; [cpu/isa.md](../cpu/isa.md)); without it they trap as illegal |
 | `--profile FILE` | headless only: instructions and cycles per address; `tools/profile.py prog.sym FILE` totals them by function |
 

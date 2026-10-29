@@ -37,6 +37,9 @@ typedef struct {
     int dual;              /* in-order dual issue: DUAL_OFF, DUAL_BANKED or DUAL_PORTS */
     int ext;               /* extension X instructions allowed (isa.yaml: DSTEP, MULPU, FSHR/FSHL, CLZ) */
     uint32_t xram_mb;      /* simulator-only RAM after the SRAM (100000-), same timing; 0 = none */
+    unsigned dual_ops;     /* slot-2 instruction kinds, 1 << PS_*; 0 = alu, movi and branch */
+    int dual_16;           /* slot 2 takes only 16-bit encodings */
+    int dual_any;          /* the slot-2 instruction may be the older one of the pair */
 } tcfg_t;
 
 /* Macro-op fusion kinds.  ALUBR is a flag-setting ALU op (not CMP) followed
@@ -56,7 +59,7 @@ enum { DUAL_OFF, DUAL_BANKED, DUAL_PORTS };
 enum { PB_WINDOW, PB_SLOT1, PB_SLOT2, PB_RAW, PB_WAW, PB_BANK, PB_FLAGS, PB__COUNT };
 extern const char *const pair_block_names[PB__COUNT];
 /* What slot 2 held when a pair issued. */
-enum { PS_ALU, PS_MOVI, PS_BRANCH, PS__COUNT };
+enum { PS_ALU, PS_MOVI, PS_BRANCH, PS_SHIFT, PS_MUL, PS_PTR, PS__COUNT };
 extern const char *const pair_slot_names[PS__COUNT];
 
 typedef struct {

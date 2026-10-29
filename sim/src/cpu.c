@@ -7,7 +7,7 @@
 const char *const fuse_names[FU__COUNT] = { "cmp+branch", "add+adc pair", "lea+mem", "ldw/stw pair", "alu+branch" };
 const char *const fuse_keys[FU__COUNT] = { "cmpbr", "addadc", "leamem", "ldpair", "alubr" };
 const char *const pair_block_names[PB__COUNT] = { "window", "slot1", "slot2", "raw", "waw", "bank", "flags" };
-const char *const pair_slot_names[PS__COUNT] = { "alu", "movi", "branch" };
+const char *const pair_slot_names[PS__COUNT] = { "alu", "movi", "branch", "shift", "mul", "ptr" };
 
 /* ---- decoder (table-driven, tables from gen/isa_gen.c) ---- */
 
@@ -470,9 +470,11 @@ static int check_fusion(cpu_t *c, const dinst_t *d, uint32_t pc)
     return -1;
 }
 
-/* Slot-2 pipe: a 16-bit adder and logic unit, no shifter, multiplier or
- * pointer adder, no memory port.  Returns the PS_* class or -1. */
-static int slot2_class(const dinst_t *d)
+/* Slot-2 pipe: a 16-bit adder and logic unit, no pointer adder and no
+ * memory port.  dual_ops can add a shifter, the 16x16 multiplier and a
+ * pointer adder (MOVP, ADDP*, LEA), and
+ * dual_16 limits it to 16-bit encodings.  Returns the PS_* class or -1. */
+static int slot2_kind(const dinst_t *d)
 {
     switch (d->op) {
     case OP_ADD: case OP_ADC: case OP_SUB: case OP_SBC: case OP_AND: case OP_OR: case OP_XOR:
@@ -483,8 +485,23 @@ static int slot2_class(const dinst_t *d)
         return PS_MOVI;
     case OP_B:
         return PS_BRANCH;
+    case OP_SHL: case OP_SHR: case OP_SAR: case OP_SHLI: case OP_SHRI: case OP_SARI:
+        return PS_SHIFT;
+    case OP_MUL: case OP_MULHU: case OP_MULH:
+        return PS_MUL;
+    case OP_MOVP: case OP_ADDP: case OP_ADDPU: case OP_ADDPP: case OP_ADDPI: case OP_LEA:
+        return PS_PTR; /* register-only, but needs a 32-bit adder */
     }
     return -1;
+}
+
+static int slot2_class(const cpu_t *c, const dinst_t *d)
+{
+    int k = slot2_kind(d);
+    unsigned ops = c->cfg.dual_ops ? c->cfg.dual_ops : 1u << PS_ALU | 1u << PS_MOVI | 1u << PS_BRANCH;
+    if (k < 0 || !(ops >> k & 1) || (c->cfg.dual_16 && d->len != 2))
+        return -1;
+    return k;
 }
 
 static int bank_set(uint16_t regs) { return ((regs & 0x5555) ? 1 : 0) | ((regs & 0xAAAA) ? 2 : 0); }
@@ -507,7 +524,11 @@ static int check_pair(cpu_t *c, const dinst_t *d, uint32_t pc)
         s->pair_block[PB_SLOT1]++;
         return -1;
     }
-    int k = slot2_class(d);
+    /* the younger instruction goes to slot 2; with dual_any the older one
+     * may go there instead, the younger one taking the full pipe */
+    int k = slot2_class(c, d);
+    if (k < 0 && c->cfg.dual_any && !(op_info[d->op].cls == CLS_SYS || op_info[d->op].cls == CLS_NONE))
+        k = slot2_class(c, p);
     if (k < 0) {
         s->pair_block[PB_SLOT2]++;
         return -1;

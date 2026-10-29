@@ -17,6 +17,12 @@ typedef struct {
     int max_speed, paused;
 } opts_t;
 
+/* core configurations: fsim --core NAME; cpu = the matching fcc --cpu */
+typedef struct { const char *name, *cpu, *about; } core_t;
+#define NUM_CORES 4
+extern const core_t cores[NUM_CORES];
+int apply_core(tcfg_t *cfg, const char *name); /* index, or -1 if unknown */
+
 void opts_usage(int gui);
 int opts_parse(opts_t *o, int argc, char **argv, int gui); /* 0 = ok */
 const variant_t *find_variant(const char *name);
