@@ -5,6 +5,7 @@
 //   +trace=FILE   lockstep: one line per fsim instruction, written by
 //                 t1run.py: "pc r0 .. r15 flags kind" in hex; kind 1 = MFSR,
 //                 2 = a load (resync if it read I/O, where counters differ)
+//   +entry=HEX    start address (default = the load address)
 //   +max=N        stop after N cycles
 //   +busstat      at the end, print what every bus cycle did, and why idle
 //                 cycles were idle, by instruction class
@@ -18,6 +19,7 @@
 `default_nettype none
 
 module t1_tb;
+    parameter EXT_X = 1;
     reg clk = 1'b0, rst = 1'b1;
     always #5 clk = ~clk;
 
@@ -29,7 +31,7 @@ module t1_tb;
     reg  [15:0] sr_in;
     reg  [23:0] reset_pc;
 
-    t1_core core (.clk(clk), .rst(rst), .reset_pc(reset_pc), .addr(addr), .mem_rd(mem_rd), .mem_wr(mem_wr),
+    t1_core #(.EXT_X(EXT_X)) core (.clk(clk), .rst(rst), .reset_pc(reset_pc), .addr(addr), .mem_rd(mem_rd), .mem_wr(mem_wr),
                   .dout(dout), .din(din), .sr_sel(sr_sel), .sr_in(sr_in),
                   .halted(halted), .halt_code(halt_code), .retire(retire));
 
@@ -112,6 +114,10 @@ module t1_tb;
         end
     endtask
 
+    // nothing may reach the bus or the register file while in reset
+    always @(posedge clk) if (rst && (mem_rd !== 1'b0 || mem_wr !== 1'b0 || core.rf.we !== 1'b0))
+        $display("\nT1 bus or register-file write during reset (rd=%b wr=%b we=%b)", mem_rd, mem_wr, core.rf.we);
+
     always @(posedge clk) if (!rst) begin
         cycles <= cycles + 1;
         if (retire) insts <= insts + 1;
@@ -126,12 +132,14 @@ module t1_tb;
                 print_busstat;
                 $finish;
             end else if (addr[23:16] != 8'hF0) begin
-                $display("\nT1 write to unmapped %06x", addr);
+                $display("\n(bus error: write to unmapped %06x)", addr);
+                $display("T1 cycles=%0d insts=%0d halt=253", cycles, insts);       // as fsim: a fault
                 $finish;
             end
         end
         if (mem_rd && addr >= 24'h100000 && addr[23:16] != 8'hF0 && addr[23:16] != 8'hFF) begin
-            $display("\nT1 read from unmapped %06x (pc near %06x)", addr, cur_pc);
+            $display("\n(bus error: read from unmapped %06x, pc near %06x)", addr, cur_pc);
+            $display("T1 cycles=%0d insts=%0d halt=253", cycles, insts);           // as fsim: a fault
             $finish;
         end
         if (halted) begin
@@ -194,7 +202,7 @@ module t1_tb;
         end
         if (mem_rd && core.bus_ar && addr[23:16] == 8'hF0) io_read = 1'b1;
         if ((core.state == 3'd0 && core.nbn == 2'd1) || (core.done && core.state_n != 3'd0))
-            cur_pc = {{4{core.pcf_n[20]}}, core.pcf_n[19:0]} - 24'd2;
+            cur_pc = (core.pcx_n ? {4'h1, core.pcf_n[19:0]} : {{4{core.pcf_n[20]}}, core.pcf_n[19:0]}) - 24'd2;
     end
 
     reg [8*512-1:0] path;
@@ -211,8 +219,8 @@ module t1_tb;
         else begin $display("usage: +image=FILE"); $finish; end
         tf = 0;
         if ($value$plusargs("trace=%s", path)) tf = $fopen(path, "r");
-        reset_pc = load;
-        cur_pc = load;
+        if (!$value$plusargs("entry=%h", reset_pc)) reset_pc = load;
+        cur_pc = reset_pc;
         repeat (2) @(posedge clk);
         rst = 1'b0;
     end
