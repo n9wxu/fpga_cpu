@@ -123,11 +123,23 @@ static void io_write(cpu_t *c, uint32_t a, uint32_t v)
     dev_write(c, a, v);
 }
 
+/* --log record: two little-endian 32-bit words. Instruction: pc | length
+ * << 24, then the cycle count when it started. Data access: kind << 28
+ * (1 = read, 2 = write) | size << 24 | address, then the value. */
+static void log_rec(cpu_t *c, uint32_t w0, uint32_t w1)
+{
+    uint8_t b[8] = {(uint8_t)w0, (uint8_t)(w0 >> 8), (uint8_t)(w0 >> 16), (uint8_t)(w0 >> 24),
+                    (uint8_t)w1, (uint8_t)(w1 >> 8), (uint8_t)(w1 >> 16), (uint8_t)(w1 >> 24)};
+    fwrite(b, 1, 8, c->log);
+}
+#define LOG_DATA(kind, size, a, v) \
+    do { if (c->logging) log_rec(c, (kind) << 28 | (size) << 24 | (a), (v)); } while (0)
+
 #define IN_SRAM(a) ((a) < c->ram_size) /* SRAM or expansion RAM */
 #define IN_ROM(a)  ((a) >= ROM_BASE)
 #define IN_IO(a)   ((a) >= IO_BASE && (a) < IO_BASE + IO_SIZE)
 
-uint16_t mem_rd8(cpu_t *c, uint32_t a)
+static uint16_t rd8(cpu_t *c, uint32_t a)
 {
     if (IN_SRAM(a)) { c->dwords++; return c->sram[a]; }
     if (IN_ROM(a)) return c->rom[a - ROM_BASE];
@@ -136,7 +148,7 @@ uint16_t mem_rd8(cpu_t *c, uint32_t a)
     return 0;
 }
 
-uint16_t mem_rd16(cpu_t *c, uint32_t a)
+static uint16_t rd16(cpu_t *c, uint32_t a)
 {
     if (a & 1) { fault(c, "unaligned 16-bit read", a); return 0; }
     if (IN_SRAM(a)) { c->dwords++; return c->sram[a] | c->sram[a + 1] << 8; }
@@ -144,6 +156,20 @@ uint16_t mem_rd16(cpu_t *c, uint32_t a)
     if (IN_IO(a)) return io_read(c, a);
     fault(c, "read from unmapped", a);
     return 0;
+}
+
+uint16_t mem_rd8(cpu_t *c, uint32_t a)
+{
+    uint16_t v = rd8(c, a);
+    LOG_DATA(1u, 1u, a, v);
+    return v;
+}
+
+uint16_t mem_rd16(cpu_t *c, uint32_t a)
+{
+    uint16_t v = rd16(c, a);
+    LOG_DATA(1u, 2u, a, v);
+    return v;
 }
 
 uint32_t mem_rd32(cpu_t *c, uint32_t a)
@@ -161,6 +187,7 @@ uint32_t mem_rd32(cpu_t *c, uint32_t a)
 
 void mem_wr8(cpu_t *c, uint32_t a, uint32_t v)
 {
+    LOG_DATA(2u, 1u, a, v & 0xFF);
     if (IN_SRAM(a)) { c->dwords++; c->sram[a] = (uint8_t)v; pdc_inval(a, 1); return; }
     if (IN_IO(a)) { io_write(c, a, v); return; }
     fault(c, IN_ROM(a) ? "write to boot ROM" : "write to unmapped", a);
@@ -169,6 +196,7 @@ void mem_wr8(cpu_t *c, uint32_t a, uint32_t v)
 void mem_wr16(cpu_t *c, uint32_t a, uint32_t v)
 {
     if (a & 1) { fault(c, "unaligned 16-bit write", a); return; }
+    LOG_DATA(2u, 2u, a, v & 0xFFFF);
     if (IN_SRAM(a)) {
         c->dwords++;
         c->sram[a] = (uint8_t)v;
@@ -697,7 +725,12 @@ int cpu_step(cpu_t *c)
         disasm(d, pc, buf, sizeof buf);
         fprintf(stderr, "%06x  %-30s  ", pc, buf);
     }
+    if (c->log) {
+        log_rec(c, pc | (uint32_t)d->len << 24, (uint32_t)cyc0);
+        c->logging = 1;
+    }
     exec_inst(c, d);
+    c->logging = 0;
     if (c->trace) {
         for (int r = 0; r < 16; r++)
             fprintf(stderr, "%04x ", c->r[r]);

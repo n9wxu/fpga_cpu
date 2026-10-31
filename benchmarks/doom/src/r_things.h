@@ -41,6 +41,8 @@ extern fixed_t		sprtopscreen;
 
 extern fixed_t		pspritescale;
 extern fixed_t		pspriteiscale;
+extern fixed_t		pspritescaley;	// fpga_cpu: vertical
+extern fixed_t		pspriteiscaley;
 
 
 void R_DrawMaskedColumn (column_t* column);

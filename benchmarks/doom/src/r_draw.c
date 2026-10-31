@@ -42,7 +42,7 @@
 #define MAXHEIGHT			832
 
 // status bar height at bottom of screen
-#define SBARHEIGHT		32
+#define SBARHEIGHT		SCALEY(32)	// fpga_cpu: screen rows
 
 //
 // All drawing to the view buffer is accomplished in this file.
@@ -209,6 +209,7 @@ void R_DrawColumn (void)
 #endif
 
 
+#ifndef FCPU_DRAW_ASM /* fpga_cpu: see R_DrawColumn */
 void R_DrawColumnLow (void) 
 { 
     int			count; 
@@ -253,6 +254,7 @@ void R_DrawColumnLow (void)
 
     } while (count--);
 }
+#endif /* FCPU_DRAW_ASM */
 
 
 //
@@ -722,6 +724,7 @@ void R_DrawSpan (void)
 //
 // Again..
 //
+#ifndef FCPU_DRAW_ASM /* fpga_cpu: see R_DrawColumn */
 void R_DrawSpanLow (void)
 {
     unsigned int position, step;
@@ -771,6 +774,7 @@ void R_DrawSpanLow (void)
 
     } while (count--);
 }
+#endif /* FCPU_DRAW_ASM */
 
 //
 // R_InitBuffer 
@@ -877,40 +881,41 @@ void R_FillBackScreen (void)
     } 
      
     // Draw screen and bezel; this is done to a separate screen buffer.
+    // fpga_cpu: in screen pixels, around the view.
 
     V_UseBuffer(background_buffer);
 
     patch = W_CacheLumpName(DEH_String("brdr_t"),PU_CACHE);
 
     for (x=0 ; x<scaledviewwidth ; x+=8)
-	V_DrawPatch(viewwindowx+x, viewwindowy-8, patch);
+	V_DrawPatchUnscaled(viewwindowx+x, viewwindowy-8, patch);
     patch = W_CacheLumpName(DEH_String("brdr_b"),PU_CACHE);
 
     for (x=0 ; x<scaledviewwidth ; x+=8)
-	V_DrawPatch(viewwindowx+x, viewwindowy+viewheight, patch);
+	V_DrawPatchUnscaled(viewwindowx+x, viewwindowy+viewheight, patch);
     patch = W_CacheLumpName(DEH_String("brdr_l"),PU_CACHE);
 
     for (y=0 ; y<viewheight ; y+=8)
-	V_DrawPatch(viewwindowx-8, viewwindowy+y, patch);
+	V_DrawPatchUnscaled(viewwindowx-8, viewwindowy+y, patch);
     patch = W_CacheLumpName(DEH_String("brdr_r"),PU_CACHE);
 
     for (y=0 ; y<viewheight ; y+=8)
-	V_DrawPatch(viewwindowx+scaledviewwidth, viewwindowy+y, patch);
+	V_DrawPatchUnscaled(viewwindowx+scaledviewwidth, viewwindowy+y, patch);
 
     // Draw beveled edge. 
-    V_DrawPatch(viewwindowx-8,
+    V_DrawPatchUnscaled(viewwindowx-8,
                 viewwindowy-8,
                 W_CacheLumpName(DEH_String("brdr_tl"),PU_CACHE));
     
-    V_DrawPatch(viewwindowx+scaledviewwidth,
+    V_DrawPatchUnscaled(viewwindowx+scaledviewwidth,
                 viewwindowy-8,
                 W_CacheLumpName(DEH_String("brdr_tr"),PU_CACHE));
     
-    V_DrawPatch(viewwindowx-8,
+    V_DrawPatchUnscaled(viewwindowx-8,
                 viewwindowy+viewheight,
                 W_CacheLumpName(DEH_String("brdr_bl"),PU_CACHE));
     
-    V_DrawPatch(viewwindowx+scaledviewwidth,
+    V_DrawPatchUnscaled(viewwindowx+scaledviewwidth,
                 viewwindowy+viewheight,
                 W_CacheLumpName(DEH_String("brdr_br"),PU_CACHE));
 

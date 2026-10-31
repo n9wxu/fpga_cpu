@@ -189,6 +189,8 @@ def main(argv):
         cmd += ["--stats", stem + ".json"]
     if args.quiet:
         cmd += ["-q"]
+    for d in args.defs:         # -D names also reach .s files (.ifdef)
+        cmd += ["-D", d.split("=")[0]]
     if args.ext:
         parts = EXT_PARTS if args.ext == "all" else args.ext.lower().split(",")
         for x in parts:

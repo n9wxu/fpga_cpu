@@ -59,6 +59,7 @@ int			centery;
 fixed_t			centerxfrac;
 fixed_t			centeryfrac;
 fixed_t			projection;
+fixed_t			projectiony;
 
 // just for profiling purposes
 int			framecount;	
@@ -479,7 +480,7 @@ fixed_t R_ScaleFromGlobalAngle (angle_t visangle)
     // both sines are allways positive
     sinea = finesine[anglea>>ANGLETOFINESHIFT];	
     sineb = finesine[angleb>>ANGLETOFINESHIFT];
-    num = FixedMul(projection,sineb)<<detailshift;
+    num = FixedMul(projectiony,sineb)<<detailshift;
     den = FixedMul(rw_distance,sinea);
 
     if (den > num>>16)
@@ -622,7 +623,7 @@ void R_InitLightTables (void)
 	startmap = ((LIGHTLEVELS-1-i)*2)*NUMCOLORMAPS/LIGHTLEVELS;
 	for (j=0 ; j<MAXLIGHTZ ; j++)
 	{
-	    scale = FixedDiv ((SCREENWIDTH/2*FRACUNIT), (j+1)<<LIGHTZSHIFT);
+	    scale = FixedDiv ((ORIGWIDTH/2*FRACUNIT), (j+1)<<LIGHTZSHIFT);  // fpga_cpu: as at 320x200
 	    scale >>= LIGHTSCALESHIFT;
 	    level = startmap - scale/DISTMAP;
 	    
@@ -682,8 +683,8 @@ void R_ExecuteSetViewSize (void)
     }
     else
     {
-	scaledviewwidth = setblocks*32;
-	viewheight = (setblocks*168/10)&~7;
+	scaledviewwidth = SCALEX(setblocks*32);
+	viewheight = SCALEY((setblocks*168/10)&~7);
     }
     
     detailshift = setdetail;
@@ -694,6 +695,7 @@ void R_ExecuteSetViewSize (void)
     centerxfrac = centerx<<FRACBITS;
     centeryfrac = centery<<FRACBITS;
     projection = centerxfrac;
+    projectiony = centerxfrac / ASPECT_DEN * ASPECT_NUM;
 
     if (!detailshift)
     {
@@ -715,8 +717,11 @@ void R_ExecuteSetViewSize (void)
     R_InitTextureMapping ();
     
     // psprite scales
-    pspritescale = FRACUNIT*viewwidth/SCREENWIDTH;
-    pspriteiscale = FRACUNIT*SCREENWIDTH/viewwidth;
+    // fpga_cpu: the weapon is placed in 320x200 coordinates
+    pspritescale = FRACUNIT*viewwidth/ORIGWIDTH;
+    pspriteiscale = FRACUNIT*ORIGWIDTH/viewwidth;
+    pspritescaley = pspritescale / ASPECT_DEN * ASPECT_NUM;
+    pspriteiscaley = FRACUNIT*ORIGWIDTH*ASPECT_DEN/(viewwidth*ASPECT_NUM);
     
     // thing clipping
     for (i=0 ; i<viewwidth ; i++)
@@ -727,7 +732,7 @@ void R_ExecuteSetViewSize (void)
     {
 	dy = ((i-viewheight/2)<<FRACBITS)+FRACUNIT/2;
 	dy = abs(dy);
-	yslope[i] = FixedDiv ( (viewwidth<<detailshift)/2*FRACUNIT, dy);
+	yslope[i] = FixedDiv ( (viewwidth<<detailshift)/2*FRACUNIT/ASPECT_DEN*ASPECT_NUM, dy);
     }
 	
     for (i=0 ; i<viewwidth ; i++)
@@ -743,7 +748,8 @@ void R_ExecuteSetViewSize (void)
 	startmap = ((LIGHTLEVELS-1-i)*2)*NUMCOLORMAPS/LIGHTLEVELS;
 	for (j=0 ; j<MAXLIGHTSCALE ; j++)
 	{
-	    level = startmap - j*SCREENWIDTH/(viewwidth<<detailshift)/DISTMAP;
+	    // fpga_cpu: j is a vertical scale (SCREENHEIGHT/ORIGHEIGHT of 320x200's)
+	    level = startmap - j*ORIGHEIGHT*SCREENWIDTH/(SCREENHEIGHT*(viewwidth<<detailshift))/DISTMAP;
 	    
 	    if (level < 0)
 		level = 0;

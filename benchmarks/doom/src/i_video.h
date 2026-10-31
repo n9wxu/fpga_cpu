@@ -23,9 +23,46 @@
 #include "doomtype.h"
 
 // Screen width and height.
+//
+// fpga_cpu: DOOM_HIRES renders at 640x350 (the machine's full screen).
+// The menus, status bar, HUD, intermission and finale keep working in the
+// original 320x200 coordinates (ORIGWIDTH/ORIGHEIGHT); v_video.c scales
+// them by SCALEX/SCALEY when it draws. The 3D view keeps the original
+// framing, stretched like the 2D graphics: its vertical scale is
+// ASPECT_NUM/ASPECT_DEN of the horizontal one (r_main.c projectiony).
+// Without DOOM_HIRES everything is the original 320x200, unchanged.
 
+#define ORIGWIDTH    320
+#define ORIGHEIGHT   200
+
+#if defined(DOOM_640x480)
+// 640x480, for comparing with other machines (4:3, so pixels have the
+// original's shape); taller than this machine's 360-line bitmap
+#define SCREENWIDTH  640
+#define SCREENHEIGHT 480
+#define ASPECT_NUM   6          // (480/200) / (640/320)
+#define ASPECT_DEN   5
+#elif defined(DOOM_HIRES)
+#define SCREENWIDTH  640
+#define SCREENHEIGHT 350
+#define ASPECT_NUM   7          // (350/200) / (640/320)
+#define ASPECT_DEN   8
+#else
 #define SCREENWIDTH  320
 #define SCREENHEIGHT 200
+#define ASPECT_NUM   1
+#define ASPECT_DEN   1
+#endif
+
+// A 320x200 coordinate on the screen, and the first screen row of a
+// 320x200 row (row y covers screen rows SCALEY(y) .. SCALEY(y+1)-1).
+#if SCREENWIDTH == ORIGWIDTH && SCREENHEIGHT == ORIGHEIGHT
+#define SCALEX(x)    (x)
+#define SCALEY(y)    (y)
+#else
+#define SCALEX(x)    ((x) * SCREENWIDTH / ORIGWIDTH)
+#define SCALEY(y)    (((y) * SCREENHEIGHT + ORIGHEIGHT - 1) / ORIGHEIGHT)
+#endif
 
 // Screen width used for "squash" scale functions
 

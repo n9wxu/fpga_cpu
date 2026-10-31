@@ -24,6 +24,7 @@ The Makefile creates `.venv/` (PyYAML) on first use. The GUI needs SDL2
 | `tools/bench_ref.py` | Python reference results for the benchmarks (`--update` rewrites the `; expect:` lines) |
 | `tools/devtest.py` | Device test: runs `demo/devtest.s` headless and checks the keyboard queue, file service and board I/O |
 | `tools/profile.py` | Flat profile by function from `fsim --profile` output and a symbol file |
+| `tools/memlog.py` | Reads `fsim --log`: cycles, instructions and bus bytes per frame, and frames rebuilt from video-memory writes |
 | `tools/mkfont.py` | Builds the 8×14 character ROM (`assets/font8x14.mem` for the FPGA, `src/font8x14.c` for the simulator) from the Terminus BDF |
 | `src/cpu.c` | CPU core: decode, memory map, timing model, `cpu_step`/`cpu_run` |
 | `src/dev.c` | I/O devices from [docs/io.md](../docs/io.md): console, frame timing, keyboard, video registers, sound, file service, board I/O |
@@ -58,6 +59,7 @@ front ends take the same options (`fsim -h`):
 | `--core c0\|c1\|c2\|c3` | a core configuration from the scaling ladder ([docs/cores.md](../docs/cores.md)); later timing options override parts of it |
 | `--ext` | allow the optional extension X instructions (`DSTEP`, `MULPU`, `FSHR`, `FSHL`, `CLZ`; [cpu/isa.md](../cpu/isa.md)); without it they trap as illegal |
 | `--profile FILE` | headless only: instructions and cycles per address; `tools/profile.py prog.sym FILE` totals them by function |
+| `--log FILE` | headless only: a binary record of every instruction (address, length, start cycle) and data access (address, size, value); `tools/memlog.py` reads it |
 
 The I/O registers and the memory layout are in [docs/io.md](../docs/io.md).
 Headless, `CON_OUT` goes to stdout and `CON_IN` reads stdin.

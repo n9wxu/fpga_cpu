@@ -287,7 +287,13 @@ void I_InitGraphics (void)
 
 
     /* Allocate screen to draw to */
+#ifdef DOOM_DIRECT
+    // fpga_cpu: draw straight into the frame buffer, no copy per frame
+    // (the frame buffer must be SCREENWIDTH wide)
+	I_VideoBuffer = (byte*)DG_ScreenBuffer;
+#else
 	I_VideoBuffer = (byte*)Z_Malloc (SCREENWIDTH * SCREENHEIGHT, PU_STATIC, NULL);  // For DOOM to draw on
+#endif
 
 	screenvisible = true;
 
@@ -297,7 +303,9 @@ void I_InitGraphics (void)
 
 void I_ShutdownGraphics (void)
 {
+#ifndef DOOM_DIRECT
 	Z_Free (I_VideoBuffer);
+#endif
 }
 
 void I_StartFrame (void)
@@ -338,6 +346,9 @@ void I_FinishUpdate (void)
     line_out = (unsigned char *) DG_ScreenBuffer;
 
     y = SCREENHEIGHT;
+#ifdef DOOM_DIRECT
+    y = 0;      // fpga_cpu: already there
+#endif
 
     while (y--)
     {

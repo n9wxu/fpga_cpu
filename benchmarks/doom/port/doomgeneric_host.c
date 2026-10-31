@@ -17,20 +17,23 @@ static uint8_t rgb[256][3];
 
 static void save(void)
 {
+    /* the picture: SCREENWIDTH x SCREENHEIGHT, centered horizontally in the
+     * frame buffer, from its top line (I_FinishUpdate) */
+    const pixel_t *pic = DG_ScreenBuffer + (DOOMGENERIC_RESX - SCREENWIDTH) / 2;
     FILE *f = fopen("LASTFRAME.IDX", "wb");
     int x, y;
     if (f) {
-        for (y = 0; y < 200; y++)
-            fwrite(DG_ScreenBuffer + y * DOOMGENERIC_RESX + 160, 1, 320, f);
+        for (y = 0; y < SCREENHEIGHT; y++)
+            fwrite(pic + y * DOOMGENERIC_RESX, 1, SCREENWIDTH, f);
         fclose(f);
     }
     f = fopen("LASTFRAME.PPM", "wb");
     if (!f)
         return;
-    fprintf(f, "P6\n320 200\n255\n");
-    for (y = 0; y < 200; y++)
-        for (x = 0; x < 320; x++)
-            fwrite(rgb[DG_ScreenBuffer[y * DOOMGENERIC_RESX + 160 + x]], 1, 3, f);
+    fprintf(f, "P6\n%d %d\n255\n", SCREENWIDTH, SCREENHEIGHT);
+    for (y = 0; y < SCREENHEIGHT; y++)
+        for (x = 0; x < SCREENWIDTH; x++)
+            fwrite(rgb[pic[y * DOOMGENERIC_RESX + x]], 1, 3, f);
     fclose(f);
 }
 

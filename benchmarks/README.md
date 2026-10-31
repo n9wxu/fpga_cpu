@@ -30,9 +30,10 @@ that itself).
 | `c/sieve` | BYTE Sieve of Eratosthenes | J. & G. Gilbreath, BYTE, 1981 |
 | `c/coremark` | CoreMark 1.0 | EEMBC, 2009, with an fpga_cpu port in `fcpu/` |
 | `c/doomdraw` | Doom's `R_DrawColumn` and `R_DrawSpan` alone, in C and by hand (`doom/port/r_draw_fcpu.s`) | doomgeneric, GPL v2 |
+| `c/doomframe` | Doom's renderer cut down to fit 64 KB: whole frames (BSP, walls, floors, sprites) of a small generated level, drawn into video memory; checked and timed from `fsim --log` (`c/doomframe/README.md`) | doomgeneric, GPL v2 |
 | `basic/DHRY.BAS` | Dhrystone 2.1 in BASIC | translated here from the C version |
 | `basic/BM1.BAS`–`BM8.BAS` | Rugg/Feldman BASIC benchmarks | Kilobaud, June 1977 |
-| `doom` | Doom via doomgeneric | id Software 1993, GPL v2; see `doom/README.md` |
+| `doom` | Doom via doomgeneric, 320×200; `doom640` renders the full 640×350 screen; `-asm` variants use the hand-written draw loops | id Software 1993, GPL v2; see `doom/README.md` |
 
 Each directory keeps its upstream license and, where it came from a
 repository, the commit in `UPSTREAM`.

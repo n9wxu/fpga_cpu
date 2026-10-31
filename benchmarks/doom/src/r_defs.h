@@ -359,6 +359,7 @@ typedef struct vissprite_s
     
     // negative if flipped
     fixed_t		xiscale;	
+    fixed_t		yiscale;	// fpga_cpu: vertical texture step (dc_iscale)
 
     fixed_t		texturemid;
     int			patch;
@@ -418,6 +419,17 @@ typedef struct
 
 
 //
+// fpga_cpu: a visplane's top/bottom screen rows; more than 255 rows need
+// 16 bits. VISROW_NONE (all ones, so memset 0xff still clears) marks an
+// empty column.
+#if SCREENHEIGHT > 255
+typedef unsigned short visrow_t;
+#define VISROW_NONE 0xffff
+#else
+typedef byte visrow_t;
+#define VISROW_NONE 0xff
+#endif
+
 // Now what is a visplane, anyway?
 // 
 typedef struct
@@ -430,15 +442,15 @@ typedef struct
   
   // leave pads for [minx-1]/[maxx+1]
   
-  byte		pad1;
+  visrow_t	pad1;
   // Here lies the rub for all
   //  dynamic resize/change of resolution.
-  byte		top[SCREENWIDTH];
-  byte		pad2;
-  byte		pad3;
+  visrow_t	top[SCREENWIDTH];
+  visrow_t	pad2;
+  visrow_t	pad3;
   // See above.
-  byte		bottom[SCREENWIDTH];
-  byte		pad4;
+  visrow_t	bottom[SCREENWIDTH];
+  visrow_t	pad4;
 
 } visplane_t;
 

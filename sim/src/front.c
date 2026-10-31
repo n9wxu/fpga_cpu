@@ -46,6 +46,7 @@ void opts_usage(int gui)
                 "  --dump A:N:FILE   write N bytes of memory from address A to FILE at exit\n"
                 "  --trace           trace every instruction to stderr\n"
                 "  --profile FILE    write instructions and cycles per address (sim/tools/profile.py)\n"
+                "  --log FILE        log every instruction and data access, binary (sim/tools/memlog.py)\n"
                 "  -q                no summary on stderr\n");
     fprintf(stderr, "core configurations (each adds to the one before; build with fcc --cpu as shown):\n");
     for (int i = 0; i < NUM_CORES; i++)
@@ -164,6 +165,7 @@ int opts_parse(opts_t *o, int argc, char **argv, int gui)
         else if (!gui && !strcmp(a, "--trace")) o->trace = 1;
         else if (!gui && !strcmp(a, "--dump") && more) o->dump = argv[++i];
         else if (!gui && !strcmp(a, "--profile") && more) o->profile = argv[++i];
+        else if (!gui && !strcmp(a, "--log") && more) o->log = argv[++i];
         else if (!gui && !strcmp(a, "-q")) o->quiet = 1;
         else if (gui && !strcmp(a, "--paused")) o->paused = 1;
         else if (gui && !strcmp(a, "--max-speed")) o->max_speed = 1;

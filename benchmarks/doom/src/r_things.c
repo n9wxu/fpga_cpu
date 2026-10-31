@@ -67,6 +67,8 @@ typedef struct
 //
 fixed_t		pspritescale;
 fixed_t		pspriteiscale;
+fixed_t		pspritescaley;
+fixed_t		pspriteiscaley;
 
 lighttable_t**	spritelights;
 
@@ -413,7 +415,7 @@ R_DrawVisSprite
 	    ( (vis->mobjflags & MF_TRANSLATION) >> (MF_TRANSSHIFT-8) );
     }
 	
-    dc_iscale = abs(vis->xiscale)>>detailshift;
+    dc_iscale = vis->yiscale;
     dc_texturemid = vis->texturemid;
     frac = vis->startfrac;
     spryscale = vis->scale;
@@ -453,6 +455,7 @@ void R_ProjectSprite (mobj_t* thing)
     fixed_t		tz;
 
     fixed_t		xscale;
+    fixed_t		yscale;	// fpga_cpu: vertical
     
     int			x1;
     int			x2;
@@ -485,6 +488,11 @@ void R_ProjectSprite (mobj_t* thing)
 	return;
     
     xscale = FixedDiv(projection, tz);
+#if ASPECT_NUM != ASPECT_DEN
+    yscale = FixedDiv(projectiony, tz);  // fpga_cpu
+#else
+    yscale = xscale;
+#endif
 	
     gxt = -FixedMul(tr_x,viewsin); 
     gyt = FixedMul(tr_y,viewcos); 
@@ -541,7 +549,7 @@ void R_ProjectSprite (mobj_t* thing)
     // store information in a vissprite
     vis = R_NewVisSprite ();
     vis->mobjflags = thing->flags;
-    vis->scale = xscale<<detailshift;
+    vis->scale = yscale<<detailshift;
     vis->gx = thing->x;
     vis->gy = thing->y;
     vis->gz = thing->z;
@@ -550,6 +558,11 @@ void R_ProjectSprite (mobj_t* thing)
     vis->x1 = x1 < 0 ? 0 : x1;
     vis->x2 = x2 >= viewwidth ? viewwidth-1 : x2;	
     iscale = FixedDiv (FRACUNIT, xscale);
+#if ASPECT_NUM != ASPECT_DEN
+    vis->yiscale = FixedDiv (FRACUNIT, yscale)>>detailshift;
+#else
+    vis->yiscale = iscale>>detailshift;
+#endif
 
     if (flip)
     {
@@ -586,7 +599,7 @@ void R_ProjectSprite (mobj_t* thing)
     else
     {
 	// diminished light
-	index = xscale>>(LIGHTSCALESHIFT-detailshift);
+	index = yscale>>(LIGHTSCALESHIFT-detailshift);
 
 	if (index >= MAXLIGHTSCALE) 
 	    index = MAXLIGHTSCALE-1;
@@ -687,7 +700,8 @@ void R_DrawPSprite (pspdef_t* psp)
     vis->texturemid = (BASEYCENTER<<FRACBITS)+FRACUNIT/2-(psp->sy-spritetopoffset[lump]);
     vis->x1 = x1 < 0 ? 0 : x1;
     vis->x2 = x2 >= viewwidth ? viewwidth-1 : x2;	
-    vis->scale = pspritescale<<detailshift;
+    vis->scale = pspritescaley<<detailshift;
+    vis->yiscale = pspriteiscaley>>detailshift;
     
     if (flip)
     {

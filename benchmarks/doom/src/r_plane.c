@@ -290,7 +290,7 @@ R_CheckPlane
     }
 
     for (x=intrl ; x<= intrh ; x++)
-	if (pl->top[x] != 0xff)
+	if (pl->top[x] != VISROW_NONE)
 	    break;
 
     if (x > intrh)
@@ -389,7 +389,7 @@ void R_DrawPlanes (void)
 	// sky flat
 	if (pl->picnum == skyflatnum)
 	{
-	    dc_iscale = pspriteiscale>>detailshift;
+	    dc_iscale = pspriteiscaley>>detailshift;  // fpga_cpu: vertical
 	    
 	    // Sky is allways drawn full bright,
 	    //  i.e. colormaps[0] is used.
@@ -428,8 +428,8 @@ void R_DrawPlanes (void)
 
 	planezlight = zlight[light];
 
-	pl->top[pl->maxx+1] = 0xff;
-	pl->top[pl->minx-1] = 0xff;
+	pl->top[pl->maxx+1] = VISROW_NONE;
+	pl->top[pl->minx-1] = VISROW_NONE;
 		
 	stop = pl->maxx + 1;
 

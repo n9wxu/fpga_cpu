@@ -81,6 +81,7 @@ void V_MarkRect(int x, int y, int width, int height)
 
 //
 // V_CopyRect 
+// fpga_cpu: in 320x200 coordinates, scaled to the screen.
 // 
 void V_CopyRect(int srcx, int srcy, byte *source,
                 int width, int height,
@@ -88,16 +89,17 @@ void V_CopyRect(int srcx, int srcy, byte *source,
 { 
     byte *src;
     byte *dest; 
+    int w, h;
  
 #ifdef RANGECHECK 
     if (srcx < 0
-     || srcx + width > SCREENWIDTH
+     || srcx + width > ORIGWIDTH
      || srcy < 0
-     || srcy + height > SCREENHEIGHT 
+     || srcy + height > ORIGHEIGHT 
      || destx < 0
-     || destx + width > SCREENWIDTH
+     || destx + width > ORIGWIDTH
      || desty < 0
-     || desty + height > SCREENHEIGHT)
+     || desty + height > ORIGHEIGHT)
     {
         I_Error ("Bad V_CopyRect");
     }
@@ -105,12 +107,14 @@ void V_CopyRect(int srcx, int srcy, byte *source,
 
     V_MarkRect(destx, desty, width, height); 
  
-    src = source + SCREENWIDTH * srcy + srcx; 
-    dest = dest_screen + SCREENWIDTH * desty + destx; 
+    w = SCALEX(destx + width) - SCALEX(destx);
+    h = SCALEY(desty + height) - SCALEY(desty);
+    src = source + SCREENWIDTH * SCALEY(srcy) + SCALEX(srcx); 
+    dest = dest_screen + SCREENWIDTH * SCALEY(desty) + SCALEX(destx); 
 
-    for ( ; height>0 ; height--) 
+    for ( ; h>0 ; h--) 
     { 
-        memcpy(dest, src, width); 
+        memcpy(dest, src, w); 
         src += SCREENWIDTH; 
         dest += SCREENWIDTH; 
     } 
@@ -132,16 +136,26 @@ void V_SetPatchClipCallback(vpatchclipfunc_t func)
 }
 
 //
-// V_DrawPatch
-// Masks a column based masked pic to the screen. 
+// fpga_cpu: patches are placed in 320x200 coordinates and drawn scaled:
+// each patch pixel becomes the screen block SCALEX(x)..SCALEX(x+1)-1 by
+// SCALEY(y)..SCALEY(y+1)-1. At 320x200 that is one pixel, as before.
 //
 
-void V_DrawPatch(int x, int y, patch_t *patch)
+#if SCREENWIDTH != ORIGWIDTH || SCREENHEIGHT != ORIGHEIGHT
+static short origrow[SCREENHEIGHT];     // screen row -> 320x200 row
+
+static void InitOrigRows(void)
+{
+    int r;
+    for (r = 0; r < SCREENHEIGHT; r++)
+        origrow[r] = r * ORIGHEIGHT / SCREENHEIGHT;
+}
+#endif
+
+static void DrawPatchScaled(int x, int y, patch_t *patch, boolean flip)
 { 
-    int count;
     int col;
     column_t *column;
-    byte *desttop;
     byte *dest;
     byte *source;
     int w;
@@ -158,9 +172,9 @@ void V_DrawPatch(int x, int y, patch_t *patch)
 
 #ifdef RANGECHECK
     if (x < 0
-     || x + SHORT(patch->width) > SCREENWIDTH
+     || x + SHORT(patch->width) > ORIGWIDTH
      || y < 0
-     || y + SHORT(patch->height) > SCREENHEIGHT)
+     || y + SHORT(patch->height) > ORIGHEIGHT)
     {
         I_Error("Bad V_DrawPatch x=%i y=%i patch.width=%i patch.height=%i topoffset=%i leftoffset=%i", x, y, patch->width, patch->height, patch->topoffset, patch->leftoffset);
     }
@@ -168,30 +182,47 @@ void V_DrawPatch(int x, int y, patch_t *patch)
 
     V_MarkRect(x, y, SHORT(patch->width), SHORT(patch->height));
 
-    col = 0;
-    desttop = dest_screen + y * SCREENWIDTH + x;
-
     w = SHORT(patch->width);
 
-    for ( ; col<w ; x++, col++, desttop++)
+    for (col = 0; col < w; col++)
     {
-        column = (column_t *)((byte *)patch + LONG(patch->columnofs[col]));
+        int x0 = SCALEX(x + col), xw = SCALEX(x + col + 1) - x0;
+
+        column = (column_t *)((byte *)patch + LONG(patch->columnofs[flip ? w-1-col : col]));
 
         // step through the posts in a column
         while (column->topdelta != 0xff)
         {
-            source = (byte *)column + 3;
-            dest = desttop + column->topdelta*SCREENWIDTH;
-            count = column->length;
+            int top = y + column->topdelta;
+            int r = SCALEY(top), end = SCALEY(top + column->length);
 
-            while (count--)
+            source = (byte *)column + 3;
+            dest = dest_screen + r * SCREENWIDTH + x0;
+
+            for ( ; r < end; r++, dest += SCREENWIDTH)
             {
+#if SCREENWIDTH == ORIGWIDTH && SCREENHEIGHT == ORIGHEIGHT
                 *dest = *source++;
-                dest += SCREENWIDTH;
+#else
+                byte c = source[origrow[r] - top];
+                int i;
+                for (i = 0; i < xw; i++)
+                    dest[i] = c;
+#endif
             }
             column = (column_t *)((byte *)column + column->length + 4);
         }
     }
+}
+
+//
+// V_DrawPatch
+// Masks a column based masked pic to the screen. 
+//
+
+void V_DrawPatch(int x, int y, patch_t *patch)
+{
+    DrawPatchScaled(x, y, patch, false);
 }
 
 //
@@ -202,52 +233,49 @@ void V_DrawPatch(int x, int y, patch_t *patch)
 
 void V_DrawPatchFlipped(int x, int y, patch_t *patch)
 {
+    DrawPatchScaled(x, y, patch, true);
+}
+
+//
+// V_DrawPatchUnscaled
+// fpga_cpu: a patch at screen coordinates, one pixel per patch pixel
+// (the view border, which is placed around the view in screen pixels).
+//
+
+void V_DrawPatchUnscaled(int x, int y, patch_t *patch)
+{
     int count;
-    int col; 
-    column_t *column; 
+    int col;
+    column_t *column;
     byte *desttop;
     byte *dest;
-    byte *source; 
-    int w; 
- 
-    y -= SHORT(patch->topoffset); 
-    x -= SHORT(patch->leftoffset); 
+    byte *source;
+    int w;
 
-    // haleyjd 08/28/10: Strife needs silent error checking here.
-    if(patchclip_callback)
-    {
-        if(!patchclip_callback(patch, x, y))
-            return;
-    }
+    y -= SHORT(patch->topoffset);
+    x -= SHORT(patch->leftoffset);
 
-#ifdef RANGECHECK 
+#ifdef RANGECHECK
     if (x < 0
      || x + SHORT(patch->width) > SCREENWIDTH
      || y < 0
      || y + SHORT(patch->height) > SCREENHEIGHT)
     {
-        I_Error("Bad V_DrawPatchFlipped");
+        I_Error("Bad V_DrawPatchUnscaled");
     }
 #endif
 
-    V_MarkRect (x, y, SHORT(patch->width), SHORT(patch->height));
-
-    col = 0;
     desttop = dest_screen + y * SCREENWIDTH + x;
-
     w = SHORT(patch->width);
 
-    for ( ; col<w ; x++, col++, desttop++)
+    for (col = 0; col < w; col++, desttop++)
     {
-        column = (column_t *)((byte *)patch + LONG(patch->columnofs[w-1-col]));
-
-        // step through the posts in a column
-        while (column->topdelta != 0xff )
+        column = (column_t *)((byte *)patch + LONG(patch->columnofs[col]));
+        while (column->topdelta != 0xff)
         {
             source = (byte *)column + 3;
             dest = desttop + column->topdelta*SCREENWIDTH;
             count = column->length;
-
             while (count--)
             {
                 *dest = *source++;
@@ -257,8 +285,6 @@ void V_DrawPatchFlipped(int x, int y, patch_t *patch)
         }
     }
 }
-
-
 
 //
 // V_DrawPatchDirect
@@ -595,7 +621,10 @@ void V_DrawRawScreen(byte *raw)
 // V_Init
 // 
 void V_Init (void) 
-{ 
+{
+#if SCREENWIDTH != ORIGWIDTH || SCREENHEIGHT != ORIGHEIGHT
+    InitOrigRows();     // fpga_cpu
+#endif 
     // no-op!
     // There used to be separate screens that could be drawn to; these are
     // now handled in the upper layers.

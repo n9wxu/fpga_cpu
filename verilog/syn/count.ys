@@ -1,0 +1,12 @@
+# Transistor count of t1_core: Yosys + ABC onto t1_nmos.lib / t1_cmos.lib,
+# whose areas are transistors per cell. The register file is a black box,
+# counted separately (count.py).
+read_verilog -lib ../rtl/t1_rf.v
+read_verilog ../rtl/t1_core.v
+hierarchy -top t1_core
+synth -top t1_core -flatten
+dfflegalize -cell $_DFF_P_ 01
+dfflibmap -liberty LIB
+abc -liberty LIB
+opt_clean
+stat -liberty LIB

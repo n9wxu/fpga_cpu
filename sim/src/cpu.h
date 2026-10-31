@@ -90,6 +90,8 @@ typedef struct cpu {
     iodev_t dev;
     int trace;
     uint32_t *prof;        /* --profile: [pc/2] -> {instructions, cycles}, or NULL */
+    FILE *log;             /* --log: every instruction and data access, or NULL */
+    int logging;           /* set while an instruction executes, so only its accesses are logged */
     /* per-instruction scratch */
     int dwords, io_acc, pair_split;
     uint32_t ea;

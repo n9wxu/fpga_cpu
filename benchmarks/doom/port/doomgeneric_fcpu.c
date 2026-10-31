@@ -7,8 +7,9 @@
  *
  * Video: doomgeneric's 8-bit mode (CMAP256) with a 640x360 "frame
  * buffer", which is exactly the hi-color bitmap's layout, so the engine's
- * 320x200 picture is copied straight into video memory, centered, and
- * Doom's palette goes into the hardware palette.
+ * picture is copied straight into video memory, centered, and Doom's
+ * palette goes into the hardware palette. The picture is 320x200, or the
+ * full 640x350 when built with -DDOOM_HIRES (src/i_video.h).
  * Input: the keyboard queue, with key releases switched on (KBD_CTRL bit 0:
  * a release arrives as its code | 0x8000), so held keys stay held. Ctrl,
  * Shift and Alt (fire, run, strafe) come from the live modifier state.
@@ -83,9 +84,12 @@ void DG_Init(void)
     VID_BACKDROP = 0;  /* palette index 0 is transparent: let black show through */
     VID_CTRL = 0x06;   /* hi-color bitmap on, text off */
     KBD_CTRL = 1;      /* queue key releases too */
-    /* Draw straight into video memory, 80 lines down so the 200 lines are
-     * centered. (doomgeneric_Create's own buffer goes unused.) */
-    DG_ScreenBuffer = (pixel_t *)(BMP_ADDR + 80UL * SCREEN_W);
+    /* Draw straight into video memory, centered vertically: 80 lines down
+     * for 320x200, 5 for 640x350. (doomgeneric_Create's own buffer goes
+     * unused.) */
+#if SCREENHEIGHT <= SCREEN_H
+    DG_ScreenBuffer = (pixel_t *)(BMP_ADDR + (unsigned long)((SCREEN_H - SCREENHEIGHT) / 2) * SCREEN_W);
+#endif  /* else (DOOM_640x480) doomgeneric's own buffer, not shown */
 }
 
 void DG_DrawFrame(void)
