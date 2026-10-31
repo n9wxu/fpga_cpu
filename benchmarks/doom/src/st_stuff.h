@@ -22,14 +22,15 @@
 #define __STSTUFF_H__
 
 #include "doomtype.h"
+#include "i_video.h"
 #include "d_event.h"
 #include "m_cheat.h"
 
 // Size of statusbar.
 // Now sensitive for scaling.
 #define ST_HEIGHT	32
-#define ST_WIDTH	SCREENWIDTH
-#define ST_Y		(SCREENHEIGHT - ST_HEIGHT)
+#define ST_WIDTH	ORIGWIDTH	// fpga_cpu: 320x200 coordinates
+#define ST_Y		(ORIGHEIGHT - ST_HEIGHT)
 
 
 //

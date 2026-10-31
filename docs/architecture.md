@@ -167,7 +167,9 @@ goes first.
 
 The CPU scales through a ladder of core configurations (c0–c3), each a
 set of simulator, compiler and later RTL parameters, ordered by speed per
-LUT: see [cores.md](cores.md).
+LUT: see [cores.md](cores.md). The longer plan, one 32-bit ISA at
+transistor budgets from a 6502's up, compared with the CPUs of each
+generation, is [scaling.md](scaling.md).
 
 ## Toolchain
 

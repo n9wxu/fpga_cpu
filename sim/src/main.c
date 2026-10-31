@@ -103,8 +103,16 @@ int main(int argc, char **argv)
         fprintf(stderr, "--profile: out of memory\n");
         return 2;
     }
+    if (o.log && !(c.log = fopen(o.log, "wb"))) {
+        perror(o.log);
+        return 2;
+    }
+    if (c.log)
+        setvbuf(c.log, NULL, _IOFBF, 1 << 20);
     fflush(stdout);
     cpu_run(&c, o.max_cycles);
+    if (c.log)
+        fclose(c.log);
     fflush(stdout);
     if (!o.quiet)
         summary(&c);

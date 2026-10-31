@@ -8,6 +8,11 @@ Status: draft, version 0.1. The authoritative definitions are in
 - 16 general registers `r0`–`r15`, each 16 bits.
 - The even/odd pairs form 8 pointer registers `p0`–`p7`. `pN` is
   `r(2N+1):r(2N)`, with the low 16 bits in the even register.
+- **Pair fields:** instructions that name a pair in a 4-bit register field
+  (`ADDPI`, `ADDP*`, `MULPU`, `FSHR`/`FSHL`, `DSTEP`, and `LDP`/`STP`/`LEA`
+  in the 32-bit memory forms) hold the even register number. An odd number
+  there is a reserved encoding and traps as an illegal instruction; it
+  does not alias the even pair.
 - **Pointer use:** when a pair is used as an address, only bits 23:0
   count; the top byte of the odd register is ignored. Instructions that
   write a pair (`LEA`, `ADDP*`, `[pN]+`, `-[pN]`, `JAL`) produce the full
@@ -36,7 +41,7 @@ N, Z, C, V.
 | Arithmetic: `ADD ADC SUB SBC CMP CPC NEG ADDI CMPI` | Set NZCV. For subtraction, C=1 means no borrow (ARM convention). |
 | `SBC`, `CPC` | Additionally chain Z: Z ends up set only if it was already set and this result is zero. That makes 32-bit compares `CMP lo; CPC hi` and branches on EQ/NE/LO/HS correct. |
 | Logic: `AND OR XOR NOT ANDI ORI XORI` | Set NZ, clear V, leave C alone |
-| Shifts | Set NZ. C = the last bit shifted out (unchanged if the shift count is 0). |
+| Shifts | Set NZ, clear V. C = the last bit shifted out (unchanged if the shift count is 0). |
 | Moves, multiplies, loads/stores, pointer arithmetic | Leave flags alone |
 
 Conditions: `EQ NE CS CC MI PL VS VC HI LS GE LT GT LE AL`. `HS` = CS, `LO` =
@@ -51,6 +56,11 @@ CC, `RA` = AL.
 | pi | `[pN]+` | pN, then pN += access size |
 | pd | `-[pN]` | pN -= access size, then pN |
 | a | `[abs24]` | absolute address. Variant B has direct forms. Variant A uses `LEA` + d mode. |
+
+**Store data and write-back:** a store's data (`rD` or the pair `pD`) is the
+register value before the instruction's own pointer write-back. `stw r4,[p2]+`
+with r4 inside p2 stores the old r4, and `stp p3,-[p3]` stores the old p3.
+(For loads the loaded value wins over the write-back.)
 
 16-bit words and 32-bit pairs must be 2-byte aligned. A pair at an address
 that is 2 mod 4 costs an extra cycle, because it spans two SRAM words.

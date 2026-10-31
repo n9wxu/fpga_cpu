@@ -43,6 +43,7 @@ extern int		centery;
 extern fixed_t		centerxfrac;
 extern fixed_t		centeryfrac;
 extern fixed_t		projection;
+extern fixed_t		projectiony;	// fpga_cpu: vertical (i_video.h ASPECT_*)
 
 extern int		validcount;
 
@@ -61,7 +62,8 @@ extern int		loopcount;
 #define LIGHTLEVELS	        16
 #define LIGHTSEGSHIFT	         4
 
-#define MAXLIGHTSCALE		48
+// fpga_cpu: wall scales grow with SCREENHEIGHT (84 at 350 lines)
+#define MAXLIGHTSCALE		(48*SCREENHEIGHT/ORIGHEIGHT)
 #define LIGHTSCALESHIFT		12
 #define MAXLIGHTZ	       128
 #define LIGHTZSHIFT		20

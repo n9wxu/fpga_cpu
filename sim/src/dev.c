@@ -178,6 +178,8 @@ static int16_t fs_command(cpu_t *c, int cmd)
         if (h >= FS_HANDLES || !d->fh[h])
             return -2;
         uint32_t a = d->fs_buf & 0xFFFFFF, n = d->fs_len;
+        if (n > 32767)
+            n = 32767; /* FS_RESULT is a signed 16-bit count */
         if (a >= c->ram_size || a + n > c->ram_size)
             return -4;
         size_t got;

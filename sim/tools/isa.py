@@ -176,6 +176,8 @@ class Form:
                 raw = (raw << 1) | ((word >> p) & 1)
             if f.spec.sign in ("s",) and raw & (1 << (f.width - 1)):
                 raw -= 1 << f.width
+            if raw % f.spec.div:
+                return None     # odd register number in a pair field: reserved
             v = raw // f.spec.div * f.spec.scale
             if f.spec.pcrel:
                 v += pc
@@ -395,6 +397,14 @@ def selftest(isa, n=200):
                     raise IsaError(f"{v.name}: round trip failed for {f.name()}: {vals} -> {w:#x} -> "
                                    f"{g.name() if g else None} {got}")
                 total += 1
+                # an odd pair number in the same position is reserved, not an alias
+                for fl in f.fields:
+                    if fl.spec.div > 1 and fl.width >= 1:
+                        bad = w ^ sum(1 << p for p in fl.positions[-1:])
+                        win = bad << 16 if f.len == 16 else bad
+                        g2, _ = isa.decode(v.name, win, pc=0x1000)
+                        if g2 is not None:
+                            raise IsaError(f"{v.name}: odd pair number accepted in {f.name()}")
     return total
 
 

@@ -219,12 +219,12 @@ void D_Display (void)
 			break;
 		if (automapactive)
 			AM_Drawer ();
-		if (wipe || (viewheight != 200 && fullscreen) )
+		if (wipe || (viewheight != SCREENHEIGHT && fullscreen) )  // fpga_cpu
 			redrawsbar = true;
 		if (inhelpscreensstate && !inhelpscreens)
 			redrawsbar = true;              // just put away the help screen
-		ST_Drawer (viewheight == 200, redrawsbar );
-		fullscreen = viewheight == 200;
+		ST_Drawer (viewheight == SCREENHEIGHT, redrawsbar );
+		fullscreen = viewheight == SCREENHEIGHT;
 		break;
 
       case GS_INTERMISSION:
@@ -262,7 +262,7 @@ void D_Display (void)
     }
 
     // see if the border needs to be updated to the screen
-    if (gamestate == GS_LEVEL && !automapactive && scaledviewwidth != 320)
+    if (gamestate == GS_LEVEL && !automapactive && scaledviewwidth != SCREENWIDTH)
     {
 		if (menuactive || menuactivestate || !viewactivestate)
 			borderdrawcount = 3;
@@ -1362,6 +1362,16 @@ void D_DoomMain (void)
     M_SetConfigFilenames("default.cfg", PROGRAM_PREFIX "doom.cfg");
     D_BindVariables();
     M_LoadDefaults();
+
+    // fpga_cpu: doomgeneric does not read the configuration file, so the
+    // two settings that change the rendering cost are arguments too:
+    // -lowdetail (half-width columns, like the menu's "detail: low") and
+    // -screenblocks N (3..11, the view size, like the - and + keys).
+    if (M_CheckParm("-lowdetail"))
+        detailLevel = 1;
+    p = M_CheckParmWithArgs("-screenblocks", 1);
+    if (p)
+        screenblocks = atoi(myargv[p + 1]);
 
     // Save configuration at exit.
     I_AtExit(M_SaveDefaults, false);

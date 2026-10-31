@@ -174,7 +174,12 @@ DOOM = dict(name="doom", kind="doom", ints=[32], compare="doom", tics=100,
 # The same with R_DrawColumn and R_DrawSpan hand-written (port/r_draw_fcpu.s)
 DOOM_ASM = dict(DOOM, name="doom-asm", draw_asm=True,
                 about="Doom as above, with the hand-written R_DrawColumn and R_DrawSpan")
-DOOMS = [DOOM, DOOM_ASM]
+# Full screen: the engine renders 640x350 (doom/src/i_video.h DOOM_HIRES)
+DOOM640 = dict(DOOM, name="doom640", res=(640, 350), defs=["DOOM_HIRES"],
+               about="Doom at full screen, 640x350 (-DDOOM_HIRES), otherwise as doom")
+DOOM640_ASM = dict(DOOM640, name="doom640-asm", draw_asm=True,
+                   about="Doom at 640x350 with the hand-written R_DrawColumn and R_DrawSpan")
+DOOMS = [DOOM, DOOM_ASM, DOOM640, DOOM640_ASM]
 
 
 def sh(cmd, **kw):
@@ -371,18 +376,24 @@ def run_doom(b, variants, configs):
     wad = doom_wad()
     srcs = sorted(os.path.join(DOOMDIR, "src", f) for f in os.listdir(os.path.join(DOOMDIR, "src"))
                   if f.endswith(".c"))
-    args = f"-timedemo demo1 -timedemotics {b['tics']}"
+    args = f"-timedemo demo1 -timedemotics {b['tics']}" + "".join(" " + a for a in b.get("args", []))
     # host reference: the same engine and demo; its last frame as palette indices
     hdir = os.path.join(BUILD, b["name"], "host")
     os.makedirs(hdir, exist_ok=True)
     hb = os.path.join(hdir, "doom-host")
-    r = sh(["cc", "-O2", "-w", *[f"-D{d}" for d in DOOM_DEFS], "-DLINUX", "-D_DEFAULT_SOURCE",
+    doom_defs = DOOM_DEFS + b.get("defs", [])
+    r = sh(["cc", "-O2", "-w", *[f"-D{d}" for d in doom_defs], "-DLINUX", "-D_DEFAULT_SOURCE",
             f"-I{DOOMDIR}/src", *srcs, os.path.join(DOOMDIR, "port", "doomgeneric_host.c"), "-o", hb, "-lm"])
     if r.returncode:
         raise RuntimeError(f"Doom host build failed:\n{r.stderr[-3000:]}")
     link = os.path.join(hdir, wad)
     if not os.path.exists(link):
         os.symlink(os.path.join(DOOMDIR, "wad", wad), link)
+    for name, text in b.get("files", {}).items():   # e.g. a -config file
+        for d in (hdir, os.path.join(BUILD, b["name"], "disk")):
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, name), "w") as f:
+                f.write(text)
     r = sh([hb, "-iwad", wad, *args.split()], cwd=hdir, timeout=900)
     want = r.stdout + r.stderr  # the "timed ..." line comes from I_Error, on stderr
     host_frame = open(os.path.join(hdir, "LASTFRAME.IDX"), "rb").read()
@@ -394,13 +405,14 @@ def run_doom(b, variants, configs):
     with open(os.path.join(disk, "DOOMARGS.TXT"), "w") as f:
         f.write(args + "\n")
     port = [os.path.join(DOOMDIR, "port", "doomgeneric_fcpu.c")]
-    defs = DOOM_DEFS
+    defs = doom_defs
     if b.get("draw_asm"):
         port.append(os.path.join(DOOMDIR, "port", "r_draw_fcpu.s"))
-        defs = DOOM_DEFS + ["FCPU_DRAW_ASM"]
+        defs = doom_defs + ["FCPU_DRAW_ASM"]
     b = dict(b, srcs=srcs + port,
              incs=[f"{DOOMDIR}/src", f"{DOOMDIR}/port/include"], defs=defs,
              fcc_extra=["--base", "0x100000", "--stack", "0xF00000"])
+    w, h = b.get("res", (320, 200))
     rows = []
     for v in variants:
         built = {}
@@ -411,10 +423,11 @@ def run_doom(b, variants, configs):
                 built[key] = p, fcc(b, v, 32, p, *key)
             binp, stats = built[key]
             dump = binp[:-4] + f".{cfg}.frame"
-            out, rc, st = fsim_doom(binp, v, cfg, disk, dump)
+            out, rc, st = fsim_doom(binp, v, cfg, disk, dump, w, h)
             ok_text = re.search(r"timed (\d+) gametics", out)
             frame = open(dump, "rb").read() if os.path.exists(dump) else b""
-            sim_frame = b"".join(frame[y * 640 + 160:y * 640 + 480] for y in range(200)) if frame else b""
+            left = (640 - w) // 2
+            sim_frame = b"".join(frame[y * 640 + left:y * 640 + left + w] for y in range(h)) if frame else b""
             row = record(b, v, 32, cfg, out, rc, st, None, stats)
             row["ok"] = bool(ok_text and ok_text.group(1) == str(b["tics"]) and
                              f"timed {b['tics']} gametics" in want and sim_frame == host_frame)
@@ -424,11 +437,12 @@ def run_doom(b, variants, configs):
     return rows
 
 
-def fsim_doom(binp, variant, cfg, disk, dump):
+def fsim_doom(binp, variant, cfg, disk, dump, w, h):
+    """Run Doom; dump its picture's lines (w x h, centered in 640x360)."""
     js = binp[:-4] + f".{cfg}.run.json"
-    addr = DOOM_BMP + 80 * 640
+    addr = DOOM_BMP + (360 - h) // 2 * 640
     cmd = [FSIM, "-q", "-v", variant, "--json", js, "--max-cycles", "0", "--xram", "14",
-           "--load", "0x100000", "--disk", disk, "--dump", f"{addr:#x}:{200 * 640}:{dump}",
+           "--load", "0x100000", "--disk", disk, "--dump", f"{addr:#x}:{h * 640}:{dump}",
            *CONFIGS[cfg][0], binp]
     r = subprocess.run(cmd, capture_output=True, text=True)
     return r.stdout + r.stderr, r.returncode, json.load(open(js))

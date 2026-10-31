@@ -149,13 +149,16 @@ extern uint16_t fnparam[MAXV];
 
 extern val_t vs[VSMAX];
 extern int vsp;
+#define NUMTXT 63 /* longest text VAL / INPUT / READ will convert to a number */
+#define EXPR_DEPTH_MAX 32 /* nested expression() calls: parentheses, function arguments, DEF FN */
+extern int expr_depth; /* reset to 0 wherever vsp is */
 
 const char *var_name(uint16_t id, uint8_t *len);
 uint16_t var_intern(const char *s, uint8_t len);
 const char *kw_name(uint8_t t);
 int tokenize(const char *src, uint8_t *out, int max);
 uint8_t *tok_skip(uint8_t *p);
-int list_line(const uint8_t *l, char *out); /* detokenize; returns length */
+int list_line(const uint8_t *l, char *out, int max); /* detokenize; length, or -1 if cut short */
 
 void prog_new(void);
 void prog_edit(uint16_t num, const uint8_t *tok, uint16_t toklen);

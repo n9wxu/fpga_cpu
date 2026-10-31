@@ -106,6 +106,11 @@ int hal_readline(char *buf, int max)
     if (!fgets(buf, max, stdin))
         return HAL_EOF;
     n = (int)strlen(buf);
+    if (n && buf[n - 1] != '\n') {      /* full: drop the rest of the line, as the target does */
+        int c;
+        while ((c = getchar()) != EOF && c != '\n')
+            ;
+    }
     while (n && (buf[n - 1] == '\n' || buf[n - 1] == '\r'))
         buf[--n] = 0;
     if (echo_input) {
