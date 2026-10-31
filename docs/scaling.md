@@ -28,6 +28,13 @@ where it lists the chip; console CPUs are listed by the core inside them.
 | 5, early 90s | 1–1.4 M | 80486 (1.18 M), 68040 (1.2 M), R4000 (1.35 M) | 486 PCs, Quadra, Amiga 4000, SGI Indigo | **T6** | 1.5× / 1.5× (486, 68040) |
 | 6, mid 90s | ~3 M | PowerPC 601 (2.8 M), Pentium (3.1 M) | Power Macintosh, Pentium PCs | T7, later | |
 
+T1 is in generation 1's row because that is the budget it was designed to
+(~7 K). The RTL built so far (docs/t1.md) synthesizes to 13.5-13.9 K
+transistors in nMOS and 19.9-20.5 K in static CMOS, register file
+included, so as built it belongs to generation 2a's budget; getting it
+back under 10 K would be a redesign (fewer speedups, a narrower decode),
+not tuning.
+
 The last column is the tier's speed over the geometric mean of the CPUs
 named, on the 10 integer benchmarks of the Speed section (all but
 Dhrystone, which SDCC cannot compile). The 6502 and 65C02 are measured
@@ -139,7 +146,7 @@ What each physical width saves, estimated:
 
 | Bits | Physical reach | Saves against 32 bits | Where it pays |
 |---|---|---|---|
-| 20 | 1 MB, shared by RAM, ROM and I/O as the board decides | 12 bits of PC, incrementer, address latch and pins: ~0.7 K transistors | T1: ~10% of the chip. A part with 20 address pins and 8 data pins fits a 40-pin DIP, like the 8088 |
+| 20 | 1 MB, shared by RAM, ROM and I/O as the board decides | 12 bits of PC, incrementer, address latch and pins: ~0.7 K transistors | T1: ~4% of the chip as built (it was 10% of the 7 K estimate). A part with 20 address pins and 8 data pins fits a 40-pin DIP, like the 8088 |
 | 24 | 16 MB | 8 bits: ~0.5 K, and 8 bits off every cache tag | T2 to T4 (the 68000 and 65816 had 24 address bits). Needs a 64-pin package |
 | 32 | 4 GB | — | T5 and up. On T5's 4 KB cache with 16-byte lines, the 8 extra tag bits per line are 2 K bits, ~12 K transistors (4% of T5), small next to the gain |
 
@@ -156,7 +163,7 @@ the same tiers.
 
 | Tier | Adds | Est. transistors | FPGA core |
 |---|---|---|---|
-| **T1** | 8-bit ALU and bus; the 16 × 32-bit registers on chip (one read and one write a cycle); hardwired control; shifts, multiply and divide as 1-bit-per-step loops; MMU M0 (fold); 20 physical address bits | ~7 K | — |
+| **T1** | 8-bit ALU and bus; the 16 × 32-bit registers on chip (two byte reads and one byte write a cycle); hardwired control; shifts and multiply in byte passes, divide in software or with extension X's `DSTEP`; MMU M0 (fold); 20 physical address bits | ~7 K was the target. **As built (RTL, synthesized): 13.9 K nMOS / 20.5 K static CMOS** with extension X, 13.5 K / 19.9 K without ([t1.md](t1.md)) | RTL in `verilog/` |
 | **T2** | 16-bit ALU and bus; a second register read port; a 4-byte prefetch queue overlapping fetch with register-only work; 24 physical address bits | ~12–14 K | — |
 | **T3** | 32-bit ALU and bus; barrel shifter; 3-stage pipeline; Booth multiply 2 bits a cycle (ARM2's cheap multiplier; ARM1 had none) | ~25 K | — |
 | **T4** | 5-stage pipeline with forwarding; 1-cycle taken branch and CMP/ALU+Bcc fusion; 16-byte prefetch buffer; 16 × 16 multiplier array; a divider running beside the pipe; MMU M1 (region attributes: execute, write, cacheable; supervisor mode; one user region) | ~55–75 K | c1 |
@@ -165,11 +172,24 @@ the same tiers.
 
 Where the transistors go:
 
-- **T1:** registers 512 bits ≈ 3.5 K (cells and decoders), ALU ≈ 0.5 K,
-  PC and address ≈ 0.6 K, instruction register and decode ≈ 1.5 K,
-  sequencer and bus ≈ 1 K. The registers are half the chip, and the
-  biggest single speedup: with registers in memory (TMS9900 style) every
-  instruction would make three extra memory trips.
+- **T1:** the ~7 K estimate was registers 3.5 K, ALU 0.5 K, PC and address
+  0.6 K, instruction register and decode 1.5 K, sequencer and bus 1 K.
+  The RTL does not fit it. Synthesized (docs/t1.md has the method and the
+  breakdown), the core logic alone is 11.1 K nMOS / 17.5 K CMOS, of which
+  the 133 flip-flops (the PC and address register at 21 bits each, the
+  instruction register and its second parcel, the prefetch buffer, the
+  sequencer) are 1.1 K / 2.7 K, and the register file macro (36 bytes: 16
+  registers and the multiplier's accumulator) adds 2.8 K / 3.0 K. The
+  misses against the estimate are decode of the whole ISA (every field
+  checked for reserved values, as the simulator does), the sequencing of
+  byte-at-a-time multi-cycle instructions, and the speedups that give the
+  core 3-6 clocks per instruction instead of 13. Registers in the core are
+  still the biggest single speedup: with registers in memory (TMS9900
+  style) every instruction would make three extra memory trips. T1 as built
+  is 13.9 K in nMOS and 20.5 K in the static CMOS this table uses, which is
+  generation 2a's budget (10-20 K), at its top, not generation 1's. The
+  "T1 beats the 6502" claim above is a cycle-count claim from a model (see
+  Speed), not a transistor-matched one.
 - **T3:** 32-bit ALU ≈ 2 K, barrel shifter ≈ 2.5 K, two-read-port
   register file ≈ 5.5 K, pipeline ≈ 2 K, decode ≈ 4 K. The same class as
   ARM1/ARM2, which is the check on these numbers.
@@ -204,6 +224,11 @@ cycles:
 | Stanford Towers | 58.6 | 49.5 | 16.4 | 8.2 | 6.3 | 5.7 |
 | **Faster than the 6502, per clock (geomean)** | 1 | **1.8×** | **6.1×** | **12×** | **16×** | **18×** |
 | Cycles per instruction (model) | | 13.2 | 4.0 | 2.0 | 1.5 | 1.35 |
+
+Measured on T1's RTL (Icarus, `verilog/tb/t1bench.py`), Sieve takes 6.1 M
+cycles, against the model's 12.2 M and the 6502's 24.2 M, so the model is
+pessimistic for T1 on that program; the others are too long to simulate in
+the RTL.
 
 T6 adds about 1.25× to T5 (measured, c2 to c3): about 23× the 6502. All 11
 programs printed the same output on the 6502 as on fpga_cpu. Left out:

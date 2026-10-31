@@ -42,9 +42,13 @@ interpreter built with the LLVM backend. Click the screen, then type
 - **Web build** (`web/`). The simulator in a browser running BASIC, with
   a disk kept in the browser's storage, or Doom
   ([play it](https://n9wxu.github.io/fpga_cpu/?prog=doom)).
+- **T1 core** (`verilog/`). The smallest core of the ladder
+  ([docs/t1.md](docs/t1.md)): the whole ISA on an 8-bit datapath, in
+  Verilog-2001, checked instruction by instruction against the simulator.
+  It is simulated in Icarus; it has not been through the ISE build yet.
 
-Not started yet: the Verilog RTL (`verilog/`), the ISE build (`fpga/`) and
-the expansion board (`pcb/`). The open design questions are in the
+Not started yet: the ISE build (`fpga/`) and the expansion board
+(`pcb/`). The open design questions are in the
 [issues](https://github.com/n9wxu/fpga_cpu/issues).
 
 ## Quick start
@@ -100,7 +104,7 @@ make -C web serve                # http://localhost:8000
 | `benchmarks/` | Classic benchmarks (Dhrystone, Whetstone, Stanford, CoreMark, ...), BASIC benchmarks and Doom, for ISA work |
 | `web/`     | The simulator compiled to WebAssembly |
 | `docs/`    | Architecture, I/O map, measurements |
-| `verilog/` | RTL and testbenches (to come) |
+| `verilog/` | T1 core RTL, testbenches with lockstep comparison against the simulator, transistor count ([verilog/README.md](verilog/README.md)) |
 | `fpga/`    | ISE 14.7 build scripts and board constraints (to come) |
 | `pcb/`     | Expansion board: RP2350, SD, sound, I/O (to come) |
 
