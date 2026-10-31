@@ -199,28 +199,35 @@ static void hline(int16_t x0, int16_t x1, int16_t y)
         nib_span(bmp + (uint32_t)y * (SCR_W / 2), x0, x1, pen);
 }
 
+/* Ctrl-C check for the long loops: cheap enough every few hundred steps. */
+#define BRK_EVERY(n) (((n) & 255) == 0 && hal_break())
+
+/* 32-bit arithmetic: a span can be 65535 wide, which does not fit an int16. */
 void gfx_line(int16_t x0, int16_t y0, int16_t x1, int16_t y1)
 {
-    int16_t dx = (int16_t)(x1 > x0 ? x1 - x0 : x0 - x1);
-    int16_t dy = (int16_t)(y1 > y0 ? y0 - y1 : y1 - y0);
-    int16_t sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
-    int16_t err = (int16_t)(dx + dy);
+    int32_t dx = x1 > x0 ? (int32_t)x1 - x0 : (int32_t)x0 - x1;
+    int32_t dy = y1 > y0 ? (int32_t)y0 - y1 : (int32_t)y1 - y0;
+    int32_t sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+    int32_t err = dx + dy, x = x0, y = y0;
+    uint16_t steps = 0;
     if (y0 == y1) {
         hline(x0, x1, y0);
     } else {
         for (;;) {
-            int16_t e2;
-            pset(x0, y0);
-            if (x0 == x1 && y0 == y1)
+            int32_t e2;
+            pset((int16_t)x, (int16_t)y);
+            if (x == x1 && y == y1)
                 break;
-            e2 = (int16_t)(2 * err);
+            if (BRK_EVERY(++steps))
+                brk();
+            e2 = 2 * err;
             if (e2 >= dy) {
-                err = (int16_t)(err + dy);
-                x0 = (int16_t)(x0 + sx);
+                err += dy;
+                x += sx;
             }
             if (e2 <= dx) {
-                err = (int16_t)(err + dx);
-                y0 = (int16_t)(y0 + sy);
+                err += dx;
+                y += sy;
             }
         }
     }
@@ -245,6 +252,8 @@ void gfx_box(int16_t x0, int16_t y0, int16_t x1, int16_t y1, int fill)
         hline(x0, x1, y0);
         hline(x0, x1, y1);
         for (y = (int16_t)(y0 + 1); y < y1; y++) {
+            if (BRK_EVERY(y))
+                brk();
             pset(x0, y);
             pset(x1, y);
         }
@@ -253,33 +262,50 @@ void gfx_box(int16_t x0, int16_t y0, int16_t x1, int16_t y1, int fill)
     lasty = y1;
 }
 
+/* Out-of-range coordinates are clipped, not wrapped to 16 bits. */
+static void pset32(int32_t x, int32_t y)
+{
+    if (x >= 0 && x < SCR_W && y >= 0 && y < SCR_H)
+        pset((int16_t)x, (int16_t)y);
+}
+
+static void hline32(int32_t x0, int32_t x1, int32_t y)
+{
+    if (y < 0 || y >= SCR_H || x1 < 0 || x0 >= SCR_W)
+        return;
+    hline((int16_t)(x0 < 0 ? 0 : x0), (int16_t)(x1 >= SCR_W ? SCR_W - 1 : x1), (int16_t)y);
+}
+
 void gfx_circle(int16_t cx, int16_t cy, int16_t r, int fill)
 {
-    int16_t x = r, y = 0, err = (int16_t)(1 - r);
+    int32_t x = r, y = 0, err = 1 - (int32_t)r; /* 32-bit: 2*y overflows int16 */
+    int32_t X = cx, Y = cy;
     if (r < 0)
         error(E_FC);
     while (x >= y) {
+        if (BRK_EVERY(y))
+            brk();
         if (fill) {
-            hline((int16_t)(cx - x), (int16_t)(cx + x), (int16_t)(cy + y));
-            hline((int16_t)(cx - x), (int16_t)(cx + x), (int16_t)(cy - y));
-            hline((int16_t)(cx - y), (int16_t)(cx + y), (int16_t)(cy + x));
-            hline((int16_t)(cx - y), (int16_t)(cx + y), (int16_t)(cy - x));
+            hline32(X - x, X + x, Y + y);
+            hline32(X - x, X + x, Y - y);
+            hline32(X - y, X + y, Y + x);
+            hline32(X - y, X + y, Y - x);
         } else {
-            pset((int16_t)(cx + x), (int16_t)(cy + y));
-            pset((int16_t)(cx - x), (int16_t)(cy + y));
-            pset((int16_t)(cx + x), (int16_t)(cy - y));
-            pset((int16_t)(cx - x), (int16_t)(cy - y));
-            pset((int16_t)(cx + y), (int16_t)(cy + x));
-            pset((int16_t)(cx - y), (int16_t)(cy + x));
-            pset((int16_t)(cx + y), (int16_t)(cy - x));
-            pset((int16_t)(cx - y), (int16_t)(cy - x));
+            pset32(X + x, Y + y);
+            pset32(X - x, Y + y);
+            pset32(X + x, Y - y);
+            pset32(X - x, Y - y);
+            pset32(X + y, Y + x);
+            pset32(X - y, Y + x);
+            pset32(X + y, Y - x);
+            pset32(X - y, Y - x);
         }
         y++;
         if (err < 0)
-            err = (int16_t)(err + 2 * y + 1);
+            err += 2 * y + 1;
         else {
             x--;
-            err = (int16_t)(err + 2 * (y - x) + 1);
+            err += 2 * (y - x) + 1;
         }
     }
     lastx = cx;
@@ -596,6 +622,8 @@ void gfx_stamp(int s, int f, int16_t x, int16_t y, int flip)
     for (j = 0; j < (int16_t)fr.h; j++) {
         int16_t ty = (int16_t)(y + j);
         const uint8_t *src = fr.pix + (uint32_t)(flip & 2 ? fr.h - 1 - j : j) * fr.stride;
+        if (BRK_EVERY(j))
+            brk();
         if (ty < 0 || ty >= SCR_H)
             continue;
         for (i = 0; i < (int16_t)fr.w; i++) {

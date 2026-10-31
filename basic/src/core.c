@@ -79,10 +79,13 @@ static int is_func_kw(uint8_t t) { return t >= KW_ABS && t <= KW_FN; }
 
 /* ---- tokenizer ---- */
 
-static uint8_t *emit_raw(uint8_t *o, const char *s, int n)
+/* REM / DATA text: a run is at most 255 bytes (one length byte), and must
+ * fit before lim. Typed lines (LINEMAX 162) always do; a longer line that
+ * was LOADed is rejected rather than cut short. */
+static uint8_t *emit_raw(uint8_t *o, const char *s, int n, const uint8_t *lim)
 {
-    if (n > 255)
-        n = 255;
+    if (n > 255 || o + n + 2 > lim)
+        error(E_LL);
     *o++ = TK_RAW;
     *o++ = (uint8_t)n;
     memcpy(o, s, (size_t)n);
@@ -132,6 +135,8 @@ int tokenize(const char *s, uint8_t *out, int max)
             n = (int)(s - q);
             if (n > 255)
                 error(E_LS);
+            if (o + n + 2 > out + max)
+                error(E_LL);
             if (*s)
                 s++;
             *o++ = TK_STR;
@@ -198,7 +203,7 @@ int tokenize(const char *s, uint8_t *out, int max)
             if (kw) {
                 *o++ = kw;
                 if (kw == KW_REM) {
-                    o = emit_raw(o, s, (int)strlen(s));
+                    o = emit_raw(o, s, (int)strlen(s), out + max);
                     break;
                 }
                 if (kw == KW_DATA) {
@@ -209,7 +214,7 @@ int tokenize(const char *s, uint8_t *out, int max)
                             quoted = !quoted;
                         s++;
                     }
-                    o = emit_raw(o, q, (int)(s - q));
+                    o = emit_raw(o, q, (int)(s - q), out + max);
                 }
                 continue;
             }
@@ -235,7 +240,7 @@ int tokenize(const char *s, uint8_t *out, int max)
         }
         if (c == '\'') {
             *o++ = KW_REM;
-            o = emit_raw(o, s + 1, (int)strlen(s + 1));
+            o = emit_raw(o, s + 1, (int)strlen(s + 1), out + max);
             break;
         }
         if (c == '<') {
@@ -284,9 +289,11 @@ uint8_t *tok_skip(uint8_t *p)
 
 /* ---- detokenizer ---- */
 
-int list_line(const uint8_t *l, char *out)
+/* Detokenize into out[max]. Returns the length, or -1 if the line did not
+ * fit (out then holds a truncated, NUL-terminated prefix). */
+int list_line(const uint8_t *l, char *out, int max)
 {
-    char *o = out;
+    char *o = out, *end = out + max - 1;
     const uint8_t *p = l + 4;
     int sp_after = 0, prev_opnd = 0;
     char nb[16];
@@ -295,6 +302,15 @@ int list_line(const uint8_t *l, char *out)
     *o++ = ' ';
     while (*p) {
         uint8_t t = *p;
+        int need = 48; /* longest single item apart from the data below */
+        if (t == TK_STR)
+            need += p[1];
+        else if ((t == KW_REM || t == KW_DATA) && p[1] == TK_RAW)
+            need += p[2];
+        if (o + need > end) {
+            *o = 0;
+            return -1;
+        }
         if (t >= 0x80) {
             const char *k = kw_name(t);
             if ((sp_after || prev_opnd) && o[-1] != ' ')

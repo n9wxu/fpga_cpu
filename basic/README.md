@@ -99,7 +99,8 @@ Operators, from highest precedence to lowest:
 | 7 | `AND` |
 | 8 (lowest) | `OR` |
 
-- `/` always gives a float. `\` is integer division.
+- `/` always gives a float. `\` is integer division: float operands are
+  truncated toward zero first, so `-7.5\2` and `-7\2` are both `-3`.
 - Integer operands stay integers through `+ - * \ MOD` while the result
   fits in 16 bits.
 - `+` joins strings, and the comparisons work on strings.
@@ -127,7 +128,7 @@ Operators, from highest precedence to lowest:
 | `DATA 1, "two", three` | values for `READ`; an unquoted item is trimmed |
 | `READ v[, v...]` | read the next `DATA` values |
 | `RESTORE [line]` | make `READ` start again, optionally at a line |
-| `DEF FNname(x) = expr` | define a function of one numeric argument; call it as `FNname(3)` |
+| `DEF FNname(x) = expr` | define a function of one numeric argument; call it as `FNname(3)`. A function that (indirectly) calls itself, or expressions nested more than 32 deep, give `?FORMULA TOO COMPLEX`. |
 
 ### Control
 
@@ -137,7 +138,7 @@ Operators, from highest precedence to lowest:
 | `GOSUB n` … `RETURN` | call a subroutine and come back |
 | `ON x GOTO a,b,c` / `ON x GOSUB a,b,c` | jump to the x-th line in the list |
 | `IF c THEN stmts [ELSE stmts]` | conditional. `THEN n` and `ELSE n` jump to a line, and `IF c GOTO n` also works. A nested `IF` takes the nearest `ELSE`. |
-| `FOR v = a TO b [STEP s]` … `NEXT [v[, w...]]` | loop. A loop whose start is already past its end runs zero times. Integer loop variables use integer math. |
+| `FOR v = a TO b [STEP s]` … `NEXT [v[, w...]]` | loop. A loop whose start is already past its end runs zero times. Integer loop variables (`I%`) use integer math, so their `STEP` must be a whole number (else `?ILLEGAL QUANTITY`). |
 
 ### Input and output
 
@@ -278,8 +279,13 @@ A short example, `examples/WALKER.BAS` in full:
 
 ### Files
 
-Names are 8.3. A name without a dot gets `.BAS`. Programs are saved as
-plain text listings, so they can be edited on the host.
+Names are 8.3. A name without a dot gets `.BAS`, so it can be at most 8
+characters (longer is `?ILLEGAL QUANTITY`). Programs are saved as
+plain text listings, so they can be edited on the host. A saved line may
+be longer than you can type (`?` lists as `PRINT `); a line `SAVE` cannot
+write back (over about 1200 characters) is `?LINE TOO LONG`. `LOAD` reports
+`?SYNTAX ERROR` for a line without a line number and `?LINE TOO LONG` for
+one it cannot store, and closes the file either way.
 
 | Statement | Effect |
 |---|---|
