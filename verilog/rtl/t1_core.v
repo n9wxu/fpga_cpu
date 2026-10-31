@@ -15,7 +15,9 @@
 //
 // Speedups, each chosen for its cost (docs/t1.md has the numbers):
 //   - the next instruction's first parcel is prefetched in idle bus cycles,
-//     so most register instructions cost only their ALU passes
+//     so most register instructions cost only their ALU passes. A store
+//     prefetches only one byte and drops it if the store writes it, so
+//     self-modifying code needs no SYNC
 //   - AR remembers which pair its upper 16 bits came from ("AR tag"): a later
 //     access through that pair with a small displacement computes only the
 //     low byte, and so does one through a pair just written by LEA or ADDPI
@@ -24,18 +26,30 @@
 //   - multiply skips the multiplier's leading zeros, and for MUL picks the
 //     operand whose high byte is zero as the multiplier
 //
+// Extension X (parameter EXT_X): MULPU, FSHR, FSHL, CLZ and DSTEP run on the
+// same byte ALU, funnel shifter and multiply sequencer. With EXT_X = 0 they
+// trap as illegal instructions, as fsim does without --ext.
+//
+// Faults: halted with halt_code FD for an odd address in a word or pair
+// access, an access or fetch at 0x100000 (stepping over the end of RAM, or
+// an address in 0x100000-0xEFFFFF), and a reset_pc that is odd or in that
+// range. Reserved encodings, including odd pair numbers, halt with FE.
+//
 // Bus: one access per cycle. addr, mem_rd, mem_wr and dout are combinational
 // from the current state; din is sampled at the clock edge.
 
+`timescale 1ns / 1ns
 `default_nettype none
 
-module t1_core (
+module t1_core #(
+    parameter EXT_X = 1               // extension X: MULPU, FSHR, FSHL, CLZ, DSTEP (else they trap as illegal)
+) (
     input  wire        clk,
     input  wire        rst,          // synchronous, active high
     input  wire [23:0] reset_pc,
     output wire [23:0] addr,
-    output reg         mem_rd,
-    output reg         mem_wr,
+    output wire        mem_rd,
+    output wire        mem_wr,
     output wire [7:0]  dout,
     input  wire [7:0]  din,
     output wire [1:0]  sr_sel,       // which of SR1-SR3 MFSR is reading
@@ -67,13 +81,14 @@ module t1_core (
     reg [2:0]  tag;            // the pair whose bytes 1-2 AR[20:8] holds
     reg        tagv;
     reg        accz;           // multiply accumulator still zero
-    reg        swp;            // multiply operands swapped
+    reg        swp;            // multiply operands swapped; in a store, its data is in the temporaries
+    reg        pcx;            // the fetch pointer has run past 0x0FFFFF (reads as 0x100000: no memory there)
 
     // ---------------------------------------------------------------- decode
 
     localparam C_ALU = 4'd0, C_SHF = 4'd1, C_MUL = 4'd2, C_MEM = 4'd3, C_PAIR = 4'd4,
                C_BR = 4'd5, C_JAL = 4'd6, C_JR = 4'd7, C_JALR = 4'd8, C_MFSR = 4'd9,
-               C_MTSR = 4'd10, C_NOP = 4'd11, C_TRAP = 4'd12;
+               C_MTSR = 4'd10, C_NOP = 4'd11, C_TRAP = 4'd12, C_CLZ = 4'd13, C_DST = 4'd14;
 
     // ALUFN, isa.yaml tables.ALUFN
     localparam F_ADD = 4'd0, F_ADC = 4'd1, F_SUB = 4'd2, F_SBC = 4'd3, F_AND = 4'd4,
@@ -90,19 +105,23 @@ module t1_core (
     wire [8:0] boff = {ir[7], ir[7:0]} - 9'd1;
 
     reg [3:0]  cls, fn, ra_r, rb_r, rd_r, xr, sh_n, cc;
+    reg        ill, fsh, mp;
     reg        b_imm, mld, sfill, zx, sh_reg, pstop, mw, msig, narrow, ifill, corr;
     reg [23:0] imm;            // byte 3 of the immediate is {8{ifill}}
     reg [2:0]  pn, sr;
     reg [1:0]  msz, mmode, sc, shk, pa_src, pb_src;
     reg [7:0]  tcode;
+    wire       illegal = (cls == C_TRAP) && (tcode == 8'hFE);
 
     always @* begin
-        cls = C_TRAP; tcode = 8'hFE;
+        cls = C_TRAP; tcode = 8'hFE; ill = 1'b0; fsh = 1'b0; mp = 1'b0;
         fn = F_ADD; ra_r = 4'd0; rb_r = 4'd0; rd_r = 4'd0; xr = 4'd0; sh_n = 4'd0; cc = 4'd14;
         b_imm = 1'b0; mld = 1'b0; sfill = 1'b0; zx = 1'b0; sh_reg = 1'b0; pstop = 1'b0;
         mw = 1'b0; msig = 1'b0; narrow = 1'b0; ifill = 1'b0; corr = 1'b0;
         imm = 24'd0; pn = 3'd0; sr = 3'd0;
         msz = 2'd0; mmode = M_D; sc = 2'd0; shk = 2'd0; pa_src = 2'd0; pb_src = 2'd0;
+        // ill: a reserved bit or field value is set. Every form checks all of
+        // its fixed bits, and pair fields (2*N) must be even.
         case (ir[15:12])
         4'h0: begin                                        // ALU2: rd = rd op rs
             fn = ir[3:0]; ra_r = ir[11:8]; rb_r = ir[7:4]; rd_r = ir[11:8];
@@ -129,26 +148,26 @@ module t1_core (
             cls = C_MEM; mld = ~ir[7]; msz = 2'd1; rd_r = ir[11:8]; pn = 3'd7;
             imm = {16'd0, ir[6:0], 1'b0}; narrow = 1'b1;
         end
-        4'h9: begin                                        // Bcc off8
+        4'h9: begin                                        // Bcc off8 (cc 15 is reserved)
             cls = (ir[11:8] == 4'd15) ? C_TRAP : C_BR; cc = ir[11:8];
             imm = {{8{boff[8]}}, {7{boff[8]}}, boff[7], boff[6:0], 1'b0};
             ifill = boff[8]; narrow = (boff[8] == boff[7]);
         end
         4'hA: case (ir[11:8])                              // MISC
-            4'h0: begin cls = C_JR; pn = ir[2:0]; end
-            4'h1: begin cls = C_JALR; pn = ir[2:0]; end
+            4'h0: begin cls = C_JR; pn = ir[2:0]; ill = |ir[7:3]; end
+            4'h1: begin cls = C_JALR; pn = ir[2:0]; ill = |ir[7:3]; end
             4'h2: tcode = ir[7:0];                         // SYS
             4'h3: if (ir[7:0] == 8'h00) tcode = 8'hFF;     // RETI: no interrupts yet
                   else if (ir[7:0] == 8'h01 || ir[7:0] == 8'h02) cls = C_NOP;   // SYNC, NOP
-            4'h5: begin cls = C_PAIR; rd_r = {ir[6:4], 1'b0}; ra_r = {ir[2:0], 1'b0}; pb_src = 2'd3; end  // MOVP
-            4'h6: begin cls = C_PAIR; rd_r = {ir[6:4], 1'b0}; ra_r = {ir[6:4], 1'b0}; pb_src = 2'd2; xr = ir[3:0]; end  // ADDP
+            4'h5: begin cls = C_PAIR; rd_r = {ir[6:4], 1'b0}; ra_r = {ir[2:0], 1'b0}; pb_src = 2'd3; ill = ir[7] | ir[3]; end  // MOVP
+            4'h6: begin cls = C_PAIR; rd_r = {ir[6:4], 1'b0}; ra_r = {ir[6:4], 1'b0}; pb_src = 2'd2; xr = ir[3:0]; ill = ir[7]; end  // ADDP
             4'h7, 4'h8, 4'h9: begin                        // SHLI / SHRI / SARI imm4
                 cls = C_SHF; shk = ir[9:8] + 2'd1; sh_n = ir[3:0]; ra_r = ir[7:4]; rd_r = ir[7:4];
             end
             4'hB, 4'hC, 4'hD, 4'hE: begin                  // LDW [pN]+, STW -[pN], LDBU [pN]+, STB [pN]+
                 cls = C_MEM; mld = ir[8]; mmode = (ir[11:8] == 4'hC) ? M_PD : M_PI;
                 msz = {1'b0, ir[11:8] == 4'hB || ir[11:8] == 4'hC}; imm = msz[0] ? 24'd2 : 24'd1;
-                rd_r = ir[7:4]; pn = ir[2:0];
+                rd_r = ir[7:4]; pn = ir[2:0]; ill = ir[3];
             end
             4'hF: begin cls = ir[3] ? C_MTSR : C_MFSR; rd_r = ir[7:4]; sr = ir[2:0]; end
             default: ;
@@ -168,9 +187,13 @@ module t1_core (
         4'hE: if (!ir[11]) begin                           // MEM, 32-bit
             rd_r = ir[7:4]; pn = ir[3:1]; ra_r = {ir[3:1], 1'b0};
             imm = {{8{p2[15]}}, p2}; ifill = p2[15];
+            ill = ir[4] && (ir[10:8] == 3'd3 || ir[10:8] >= 3'd6);        // LDP, STP, LEA name a pair
             if (ir[10:8] == 3'd7) begin                    // LEA pD, [pN + disp16] / [pN + rX*s]
                 cls = C_PAIR;
-                if (ir[0]) begin pb_src = 2'd2; xr = p2[15:12]; sc = p2[9:8]; zx = p2[10]; end
+                if (ir[0]) begin
+                    pb_src = 2'd2; xr = p2[15:12]; sc = p2[9:8]; zx = p2[10];
+                    ill = ill | p2[11] | (p2[9:8] == 2'd3) | (|p2[7:0]);  // no pi/pd, scale code 3 reserved
+                end
             end else begin
                 cls = C_MEM; mld = ~ir[10]; sfill = (ir[10:8] == 3'd1);
                 msz = ir[10] ? ir[9:8] : (ir[9:8] == 2'd3) ? 2'd2 : {1'b0, ir[9]};
@@ -178,7 +201,11 @@ module t1_core (
                     if (p2[11:8] == 4'h8 || p2[11:8] == 4'h9) begin
                         mmode = p2[8] ? M_PD : M_PI;
                         imm = (msz == 2'd0) ? 24'd1 : (msz == 2'd1) ? 24'd2 : 24'd4; ifill = 1'b0;
-                    end else begin mmode = M_X; xr = p2[15:12]; sc = p2[9:8]; zx = p2[10]; end
+                        ill = ill | (|p2[15:12]) | (|p2[7:0]);
+                    end else begin
+                        mmode = M_X; xr = p2[15:12]; sc = p2[9:8]; zx = p2[10];
+                        ill = ill | p2[11] | (p2[9:8] == 2'd3) | (|p2[7:0]);
+                    end
                 end
             end
         end else begin                                     // ALUI: rd = rs op imm16
@@ -188,9 +215,9 @@ module t1_core (
             3'd1: begin cls = C_ALU; fn = F_AND; end
             3'd2: begin cls = C_ALU; fn = F_OR;  end
             3'd3: begin cls = C_ALU; fn = F_XOR; end
-            3'd4: begin cls = C_ALU; fn = F_CMP; end
-            3'd5: begin cls = C_ALU; fn = F_MOV; end
-            3'd6: begin cls = C_PAIR; imm = {{8{p2[15]}}, p2}; ifill = p2[15]; end   // ADDPI pD, pS, imm16
+            3'd4: begin cls = C_ALU; fn = F_CMP; ill = |ir[7:4]; end
+            3'd5: begin cls = C_ALU; fn = F_MOV; ill = |ir[3:0]; end
+            3'd6: begin cls = C_PAIR; imm = {{8{p2[15]}}, p2}; ifill = p2[15]; ill = ir[4] | ir[0]; end   // ADDPI pD, pS, imm16
             default: ;
             endcase
         end
@@ -201,26 +228,38 @@ module t1_core (
             rd_r = ir[7:4]; ra_r = ir[3:0]; rb_r = p2[15:12];
             case (ir[10:8])
             3'd0: begin
-                fn = p2[11:8];
+                fn = p2[11:8]; ill = |p2[7:0];
                 if (p2[11:8] >= 4'd10 && p2[11:8] <= 4'd12) begin cls = C_SHF; shk = p2[9:8] - 2'd2; sh_reg = 1'b1; end
                 else if (p2[11:8] == 4'd13) cls = C_MUL;
                 else begin
                     cls = C_ALU;
-                    if (p2[11:8] == F_MOV || p2[11:8] == F_NEG || p2[11:8] == F_NOT) rb_r = ir[3:0];
+                    if (p2[11:8] == F_MOV || p2[11:8] == F_NEG || p2[11:8] == F_NOT) begin rb_r = ir[3:0]; ill = ill | (|p2[15:12]); end
+                    if (p2[11:8] == F_CMP || p2[11:8] == F_CPC) ill = ill | (|ir[7:4]);
                 end
             end
-            3'd1: if (p2[11:8] <= 4'd2) begin cls = C_SHF; shk = p2[9:8]; sh_n = p2[3:0]; end
+            3'd1: if (p2[11:8] <= 4'd2) begin cls = C_SHF; shk = p2[9:8]; sh_n = p2[3:0]; ill = (|p2[15:12]) | (|p2[7:4]); end
             3'd2: if (p2[11:8] <= 4'd2) begin              // ADDP / ADDPU / ADDPP
-                cls = C_PAIR;
-                if (p2[9]) pb_src = 2'd1;
+                cls = C_PAIR; ill = ir[4] | ir[0] | (|p2[7:0]);
+                if (p2[9]) begin pb_src = 2'd1; ill = ill | p2[12]; end
                 else begin pb_src = 2'd2; xr = p2[15:12]; zx = p2[8]; end
             end
-            3'd3: if (p2[11:9] == 3'd0) begin cls = C_MUL; mw = 1'b1; msig = ~p2[8]; sfill = ~p2[8]; end  // MULH, MULHU
+            3'd3: if (p2[11:10] == 2'd0 && p2[9:8] != 2'd3) begin    // MULH, MULHU, MULPU
+                cls = C_MUL; mw = 1'b1; msig = ~p2[9] & ~p2[8]; sfill = ~p2[9] & ~p2[8]; ill = |p2[7:0];
+                if (p2[9]) begin mp = 1'b1; ill = ill | ir[4]; if (!EXT_X) cls = C_TRAP; end
+            end
+            3'd4: if (EXT_X && p2[11:9] == 3'd0) begin     // FSHR, FSHL
+                cls = C_SHF; fsh = 1'b1; sh_reg = 1'b1; shk = {1'b0, ~p2[8]}; ill = (|p2[7:0]) | ir[0];
+            end
+            3'd5: if (EXT_X && p2[11:9] == 3'd0) begin     // CLZ, DSTEP
+                if (p2[8]) begin cls = C_DST; ill = (|p2[15:12]) | (|p2[7:0]) | ir[4] | ir[0]; end
+                else begin cls = C_CLZ; ill = (|p2[15:12]) | (|p2[7:0]); end
+            end
             default: ;
             endcase
         end
         default: ;
         endcase
+        if (ill) begin cls = C_TRAP; tcode = 8'hFE; end
     end
 
     // ---------------------------------------------------------------- datapath
@@ -228,6 +267,7 @@ module t1_core (
     // controls, set by the sequencer
     reg  [5:0] ra, rb, wa;
     reg        we, wd_a;
+    reg        mem_rd_c, mem_wr_c;         // before the reset gate
     reg  [1:0] asel;                   // register, PC byte, zero
     reg  [2:0] bsel;                   // register, bus, immediate, zero, scaled index, SR, sign fill, -4
     reg  [2:0] aop;                    // add, and, or, xor, pass A, pass B, shifter
@@ -244,10 +284,10 @@ module t1_core (
     wire [7:0] rfa, rfb;
     reg  [7:0] wd;
 
-    t1_rf rf (.clk(clk), .ra(ra), .rb(rb), .qa(rfa), .qb(rfb), .we(we), .wa(wa), .wd(wd));
+    t1_rf rf (.clk(clk), .ra(ra), .rb(rb), .qa(rfa), .qb(rfb), .we(we & ~rst), .wa(wa), .wd(wd));
 
     wire [7:0] pc_byte = (bk == 2'd0) ? pcf[7:0] : (bk == 2'd1) ? pcf[15:8] :
-                         (bk == 2'd2) ? {{4{pcf[20]}}, pcf[19:16]} : 8'h00;
+                         (bk == 2'd2) ? (pcx ? 8'h10 : {{4{pcf[20]}}, pcf[19:16]}) : 8'h00;
     wire [7:0] imm_byte = (bk == 2'd0) ? imm[7:0] : (bk == 2'd1) ? imm[15:8] :
                           (bk == 2'd2) ? imm[23:16] : {8{ifill}};
     wire [15:0] srv = (sr == 3'd0) ? {12'd0, fN, fZ, fC, fV} : (sr <= 3'd3) ? sr_in : 16'd0;
@@ -345,6 +385,8 @@ module t1_core (
     wire [20:0] binc = baddr + 21'd1;
     assign addr = {{4{baddr[20]}}, baddr[19:0]};
     assign dout = rfb;
+    assign mem_rd = mem_rd_c & ~rst;     // nothing leaves the core while in reset
+    assign mem_wr = mem_wr_c & ~rst;
 
     // ---------------------------------------------------------------- sequencer
 
@@ -353,7 +395,7 @@ module t1_core (
     reg [20:0] pcf_n, ar_n;
     reg [15:0] ir_n, p2_n, nb_n;
     reg [1:0]  nbn_n, l2_n;
-    reg        fN_n, fZ_n, fC_n, fV_n, cy_n, zacc_n, l1_n, sgn_n, cst_n, accz_n, swp_n;
+    reg        fN_n, fZ_n, fC_n, fV_n, cy_n, zacc_n, l1_n, sgn_n, cst_n, accz_n, swp_n, pcx_n, pinc;
     reg [4:0]  cnt_n;
     reg [2:0]  tag_n;
     reg        tagv_n, tag_set, halted_n;
@@ -363,11 +405,16 @@ module t1_core (
 
     wire       take = cond(cc, fN, fZ, fC, fV);
     wire       tag_hit = tagv && (tag == pn);
+    wire       st_alias = !mld && mmode[1] && (rd_r[3:1] == pn);
     wire [3:0] mlast = (msz == 2'd0) ? 4'd0 : (msz == 2'd1) ? 4'd1 : 4'd3;
     wire [3:0] mreg = swp ? rb_r : ra_r;                   // multiplicand
     wire [3:0] qreg = swp ? ra_r : rb_r;                   // multiplier
     wire [3:0] n = sh_reg ? cnt[3:0] : sh_n;               // shift count
     wire       nbig = n[3] && (n[2:0] != 3'd0);            // n > 8
+    wire       hf = rd_r[0] && (rd_r[3:1] == ra_r[3:1]);   // FSHx: rd is the upper register of the source pair
+    wire       ph = (k == 4'd1) ? hf : ~hf;                // FSHx: result byte of this pass
+    wire [1:0] fxr = 2'd1 + {1'b0, nbig}, fyr = {1'b0, nbig}, fxl = 2'd2 - {1'b0, nbig}, fyl = 2'd1 - {1'b0, nbig};
+    wire [3:0] kk = corr ? {k[3], ~k[2], k[1:0]} : k;      // branch stage order
     wire [1:0] j = k[1:0] - 2'd2;                          // multiply: byte of this pass
     wire       fold_ok = (arb[7:4] == 4'h0) || (arb[7:4] == 4'hF);
     wire [4:0] fold = {arb[7:4] == 4'hF, arb[3:0]};
@@ -376,16 +423,17 @@ module t1_core (
         ra = 6'd0; rb = 6'd0; wa = 6'd0; we = 1'b0; wd_a = 1'b0;
         asel = A_RF; bsel = B_RF; aop = OP_ADD; a_shl = 1'b0; shl_in = 1'b0; b_inv = 1'b0; cin = 1'b0;
         bk = k[1:0]; sxs = 2'd0; sys = 2'd0; shamt = 4'd0; f_bit = 1'b0; sbase_fill = 1'b0;
-        mem_rd = 1'b0; mem_wr = 1'b0; bus_ar = 1'b0;
+        mem_rd_c = 1'b0; mem_wr_c = 1'b0; bus_ar = 1'b0;
         state_n = state; k_n = k; pcf_n = pcf; ar_n = ar; ir_n = ir; p2_n = p2; nb_n = nb; nbn_n = nbn;
         fN_n = fN; fZ_n = fZ; fC_n = fC; fV_n = fV; cy_n = cy; zacc_n = zacc; l1_n = l1; l2_n = l2;
         sgn_n = sgn; cst_n = cst; cnt_n = cnt; tag_n = tag; tagv_n = tagv; tag_set = 1'b0;
         accz_n = accz; swp_n = swp; halted_n = halted; halt_code_n = halt_code;
-        pf_ok = 1'b0; done = 1'b0; jump = 1'b0; bad = 1'b0; arb = 8'h00;
+        pf_ok = 1'b0; done = 1'b0; jump = 1'b0; bad = 1'b0; arb = 8'h00; pcx_n = pcx; pinc = 1'b0;
 
         case (state)
-        S_FETCH: begin                                     // fetch a parcel into IR
-            mem_rd = 1'b1; pcf_n = binc;
+        S_FETCH: if (pcx) bad = 1'b1;                      // fetch a parcel into IR (nothing at 0x100000)
+        else begin
+            mem_rd_c = 1'b1; pcf_n = binc; pinc = 1'b1;
             if (nbn == 2'd0) begin
                 nb_n[7:0] = din; nbn_n = 2'd1;
             end else begin
@@ -394,8 +442,9 @@ module t1_core (
             end
         end
 
-        S_P2: begin                                        // second parcel
-            mem_rd = 1'b1; pcf_n = binc;
+        S_P2: if (pcx) bad = 1'b1;                         // second parcel
+        else begin
+            mem_rd_c = 1'b1; pcf_n = binc; pinc = 1'b1;
             if (k == 4'd0) begin p2_n[7:0] = din; k_n = 4'd1; end
             else begin p2_n[15:8] = din; k_n = 4'd0; state_n = S_EX; end
         end
@@ -437,10 +486,23 @@ module t1_core (
         //   left  lo: {b0,0} at 8-n (n < 8), else zero
         //   right lo: {b1,b0} at n (n <= 8), {F,b1} at n-8       carry below
         //   right hi: {F,b1} at n (n <= 8), else F
+        //
+        // FSHR/FSHL (extension X) are the same two passes over a pair, taking
+        // result byte ph from bytes (X, Y) of the pair and writing rd, no flags:
+        //   FSHR  X = byte ph+1+q, Y = byte ph+q,   shift n - 8q
+        //   FSHL  X = byte ph+2-q, Y = byte ph+1-q, shift 8 - n + 8q  (16 - n if q)
+        // with q = n > 8. The byte that overlaps the source goes second:
+        // high first when rd is the upper register of the pair.
         C_SHF: begin
             pf_ok = 1'b1; aop = OP_SH; we = 1'b1;
             if (sh_reg && k == 4'd0) begin                 // load the count
                 we = 1'b0; ra = rbyte(rb_r, 2'd0); cnt_n = {1'b0, rfa[3:0]}; k_n = 4'd1;
+            end else if (fsh) begin
+                ra = rbyte(ra_r, (shk[0] ? fxr : fxl) + {1'b0, ph});
+                rb = rbyte(ra_r, (shk[0] ? fyr : fyl) + {1'b0, ph});
+                shamt = shk[0] ? (nbig ? n - 4'd8 : n) : (nbig ? 4'd0 - n : 4'd8 - n);
+                wa = rbyte(rd_r, ph);
+                if (k == 4'd1) k_n = 4'd2; else done = 1'b1;
             end else if (k == {3'd0, sh_reg}) begin        // first pass
                 if (shk == 2'd0) begin                     // left, high byte
                     ra = rbyte(ra_r, nbig ? 2'd0 : 2'd1); rb = rbyte(ra_r, 2'd0);
@@ -471,9 +533,10 @@ module t1_core (
         end
 
         // Multiply, multiplier MSB first: acc = acc*2 + (bit ? M : 0), over
-        // 2 bytes (MUL) or 4 (MULH, MULHU). The last step writes rd instead
-        // of the accumulator. MULH: M is sign-extended and the first step,
-        // the sign bit of the multiplier, subtracts.
+        // 2 bytes (MUL) or 4 (MULH, MULHU, MULPU). The last step writes rd
+        // instead of the accumulator (MULPU: all four bytes, into the pair).
+        // MULH: M is sign-extended and the first step, the sign bit of the
+        // multiplier, subtracts.
         C_MUL: begin
             pf_ok = 1'b1;
             if (k == 4'd0) begin                           // MUL: pick a multiplier with a zero high byte
@@ -489,8 +552,8 @@ module t1_core (
                 else begin ar_n[7:0] = rfa; cnt_n = 5'd16; end
                 accz_n = 1'b1; k_n = 4'd2;
             end else if (k >= 4'd6) begin                  // product is zero
-                asel = A_ZERO; bsel = B_ZERO; we = 1'b1; wa = rbyte(rd_r, {1'b0, k[0]});
-                if (k == 4'd6) k_n = 4'd7; else done = 1'b1;
+                asel = A_ZERO; bsel = B_ZERO; we = 1'b1; wa = rbyte(rd_r, mp ? k[1:0] - 2'd2 : {1'b0, k[0]});
+                if (k == (mp ? 4'd9 : 4'd7)) done = 1'b1; else k_n = k + 4'd1;
             end else if (k == 4'd2 && accz && !ar[15]) begin   // leading zero: just shift
                 ar_n[15:0] = {ar[14:0], 1'b0}; cnt_n = cnt - 5'd1;
                 if (cnt == 5'd1) k_n = 4'd6;
@@ -501,7 +564,7 @@ module t1_core (
                 b_inv = msig && (cnt == 5'd16) && ar[15];
                 cin = (j == 2'd0) ? b_inv : cy;
                 l1_n = a_in[7]; cy_n = cout; we = 1'b1;
-                wa = (cnt == 5'd1 && (mw ? j[1] : !j[1])) ? rbyte(rd_r, {1'b0, j[0]}) : tbyte(j);
+                wa = (cnt == 5'd1 && (mp || (mw ? j[1] : !j[1]))) ? rbyte(rd_r, mp ? j : {1'b0, j[0]}) : tbyte(j);
                 if (j == (mw ? 2'd3 : 2'd1)) begin         // end of the step
                     ar_n[15:0] = {ar[14:0], 1'b0}; cnt_n = cnt - 5'd1; accz_n = 1'b0;
                     if (cnt == 5'd1) done = 1'b1; else k_n = 4'd2;
@@ -509,8 +572,19 @@ module t1_core (
             end
         end
 
-        C_MEM: begin                                       // effective address into AR, then S_DATA
-            pf_ok = 1'b1;
+        // A store prefetches at most one byte (one byte of the next parcel,
+        // at an even address), and drops it if the store writes that address
+        // (S_DATA): backing up is just clearing PC bit 0. So the next
+        // instruction always sees the store, as in the simulator, with no
+        // SYNC.
+        // A store through [pN]+ / -[pN] whose data register lies in pN first
+        // copies the data to the temporaries, since the pointer write-back
+        // comes before the data cycles but the data is the old value.
+        C_MEM: if (st_alias && !swp) begin
+            ra = rbyte(rd_r, k[1:0]); aop = OP_PA; we = 1'b1; wa = tbyte(k[1:0]);
+            if (k == mlast) begin swp_n = 1'b1; k_n = 4'd0; end else k_n = k + 4'd1;
+        end else begin                                     // effective address into AR, then S_DATA
+            pf_ok = mld || nbn == 2'd0;
             ra = pbyte(pn, k[1:0]);
             cin = (k == 4'd0) ? (mmode == M_PD) : cy; cy_n = cout;
             case (mmode)
@@ -522,6 +596,7 @@ module t1_core (
             case (k)
             4'd0: begin
                 ar_n[7:0] = arb; cst_n = (mmode == M_D) ? cstop : (mmode == M_PI) ? !cout : 1'b1;
+                if (msz != 2'd0 && arb[0]) bad = 1'b1;     // odd address for a word or pair
                 if (mmode == M_D && cstop && tag_hit) begin state_n = S_DATA; k_n = 4'd0; end
                 else k_n = 4'd1;
             end
@@ -562,22 +637,27 @@ module t1_core (
             endcase
         end
 
-        // Branches and JAL: PC += offset over three bytes; B/32 and JAL then
-        // take 4 off (their offset is from this instruction, the PC is past it)
+        // Branches and JAL: PC += offset over three bytes. B/32 and JAL offsets
+        // are from the instruction, the PC is past it, so they first take 4
+        // off the PC (stage A, k = 0-2; JAL also saves the old PC as lr, with
+        // byte 3 zero, in k = 3), then add the offset (stage B). Stage A cannot
+        // leave the folded range, so the range check is on the final target.
+        // kk is k with the stage bit swapped for corr: A is kk 4-7, B is 0-2.
         C_BR, C_JAL: begin
-            asel = A_PC; cin = (k[1:0] == 2'd0) ? 1'b0 : cy; cy_n = cout;
-            bsel = k[2] ? B_M4 : B_IMM; arb = res;
-            if (cls == C_JAL && !k[2]) begin we = 1'b1; wa = 6'd24 + {4'd0, k[1:0]}; wd_a = 1'b1; end
+            asel = A_PC; cin = (kk[1:0] == 2'd0) ? 1'b0 : cy; cy_n = cout;
+            bsel = kk[2] ? B_M4 : B_IMM; arb = res;
+            if (cls == C_JAL && kk[2]) begin we = 1'b1; wa = 6'd24 + {4'd0, kk[1:0]}; wd_a = 1'b1; end
             if (k == 4'd0 && cls == C_BR && !take) begin
                 pf_ok = 1'b1; done = 1'b1;
-            end else case (k[1:0])
-            2'd0: begin pcf_n[7:0] = res; if (!corr && cstop) jump = 1'b1; else if (k[2] && cout) jump = 1'b1; else k_n = k + 4'd1; end
-            2'd1: begin pcf_n[15:8] = res; if (k[2] && cout) jump = 1'b1; else k_n = k + 4'd1; end
-            2'd2: begin
-                pcf_n[20:16] = fold; bad = !fold_ok;
-                if (k[2] || !corr) jump = 1'b1; else k_n = (cls == C_JAL) ? 4'd3 : 4'd4;
-            end
+            end else if (kk[2]) case (kk[1:0])
+            2'd0: begin pcf_n[7:0] = res; if (cout && cls != C_JAL) k_n = 4'd4; else k_n = k + 4'd1; end
+            2'd1: begin pcf_n[15:8] = res; if (cout && cls != C_JAL) k_n = 4'd4; else k_n = k + 4'd1; end
+            2'd2: begin pcf_n[20:16] = fold; pcx_n = 1'b0; k_n = (cls == C_JAL) ? 4'd3 : 4'd4; end
             default: begin asel = A_ZERO; k_n = 4'd4; end  // JAL: lr bits 31:24 = 0
+            endcase else case (kk[1:0])
+            2'd0: begin pcf_n[7:0] = res; if (!corr && cstop) jump = 1'b1; else k_n = k + 4'd1; end
+            2'd1: begin pcf_n[15:8] = res; k_n = k + 4'd1; end
+            default: begin pcf_n[20:16] = fold; bad = !fold_ok; jump = 1'b1; end
             endcase
         end
 
@@ -606,6 +686,47 @@ module t1_core (
 
         C_NOP: begin pf_ok = 1'b1; done = 1'b1; end
 
+        // CLZ rd, rs (extension X): rs into AR, rd = 0, then one cycle per
+        // leading zero shifts AR and counts up in rd.lo (rd.lo = 16 stops it).
+        C_CLZ: begin
+            pf_ok = 1'b1; asel = A_ZERO; bsel = B_ZERO;
+            case (k)
+            4'd0: begin
+                ra = rbyte(ra_r, 2'd0); rb = rbyte(ra_r, 2'd1); ar_n[7:0] = rfa; ar_n[15:8] = rfb;
+                tagv_n = 1'b0; tag_set = 1'b1; we = 1'b1; wa = rbyte(rd_r, 2'd0); k_n = 4'd1;
+            end
+            4'd1: begin we = 1'b1; wa = rbyte(rd_r, 2'd1); k_n = 4'd2; end
+            default: begin
+                ra = rbyte(rd_r, 2'd0);
+                if (ar[15] || rfa[4]) done = 1'b1;
+                else begin
+                    asel = A_RF; cin = 1'b1; we = 1'b1; wa = rbyte(rd_r, 2'd0);
+                    ar_n[15:0] = {ar[14:0], 1'b0};
+                end
+            end
+            endcase
+        end
+
+        // DSTEP pd, ps (extension X). Pass 1 (k 0-3): pd*2 + C minus ps, byte
+        // by byte into the temporaries; the carry out, or the bit shifted out
+        // of pd, says r >= ps. Pass 2 (k 4-7): pd = that result (temporaries)
+        // or pd*2 + C again; C = the decision.
+        C_DST: begin
+            pf_ok = 1'b1; a_shl = 1'b1; shl_in = (k[1:0] == 2'd0) ? fC : l1;
+            if (!k[2]) begin
+                ra = rbyte(rd_r, k[1:0]); rb = rbyte(ra_r, k[1:0]); b_inv = 1'b1;
+                cin = (k[1:0] == 2'd0) ? 1'b1 : cy; cy_n = cout; l1_n = a_in[7];
+                we = 1'b1; wa = tbyte(k[1:0]);
+                if (k[1:0] == 2'd3) cst_n = a_in[7] | cout;
+                k_n = k + 4'd1;
+            end else begin
+                ra = cst ? tbyte(k[1:0]) : rbyte(rd_r, k[1:0]); a_shl = !cst; aop = OP_PA; l1_n = a_in[7];
+                we = 1'b1; wa = rbyte(rd_r, k[1:0]);
+                if (k[1:0] == 2'd3) begin fC_n = cst; done = 1'b1; end
+                else k_n = k + 4'd1;
+            end
+        end
+
         default: begin halted_n = 1'b1; halt_code_n = tcode; state_n = S_HALT; end   // SYS, RETI, illegal
         endcase
 
@@ -616,14 +737,16 @@ module t1_core (
                 bsel = B_FILL; aop = OP_PB; we = 1'b1; wa = rbyte(rd_r, 2'd1); done = 1'b1;
             end else begin
                 if (mld) begin
-                    mem_rd = 1'b1; bsel = B_DIN; aop = OP_PB; we = 1'b1; wa = rbyte(rd_r, k[1:0]); sgn_n = din[7];
+                    mem_rd_c = 1'b1; bsel = B_DIN; aop = OP_PB; we = 1'b1; wa = rbyte(rd_r, k[1:0]); sgn_n = din[7];
                 end else begin
-                    mem_wr = 1'b1; rb = rbyte(rd_r, k[1:0]);
+                    mem_wr_c = 1'b1; rb = swp ? tbyte(k[1:0]) : rbyte(rd_r, k[1:0]);
+                    if (nbn == 2'd1 && ar[7:1] == pcf[7:1]) begin nbn_n = 2'd0; pcf_n[0] = 1'b0; end   // wrote the prefetched byte (low bits only: may drop a good one)
                 end
                 if (k == mlast) begin
                     if (mld && msz == 2'd0) k_n = 4'd4; else done = 1'b1;
                 end else begin
                     ar_n = binc; k_n = k + 4'd1;
+                    if (!ar[20] && binc[20]) bad = 1'b1;   // 0x0FFFFF + 1: no memory at 0x100000
                     if (ar[7:0] == 8'hFF) begin tagv_n = 1'b0; tag_set = 1'b1; end
                 end
             end
@@ -633,8 +756,8 @@ module t1_core (
         endcase
 
         // prefetch the next parcel when the bus is free
-        if (pf_ok && !mem_rd && !mem_wr && nbn != 2'd2) begin
-            mem_rd = 1'b1; bus_ar = 1'b0; pcf_n = binc;
+        if (pf_ok && !pcx && !mem_rd_c && !mem_wr_c && nbn != 2'd2) begin
+            mem_rd_c = 1'b1; bus_ar = 1'b0; pcf_n = binc; pinc = 1'b1;
             if (nbn == 2'd0) nb_n[7:0] = din; else nb_n[15:8] = din;
             nbn_n = nbn + 2'd1;
         end
@@ -647,7 +770,9 @@ module t1_core (
             end else
                 state_n = S_FETCH;
         end
-        if (jump) begin k_n = 4'd0; nbn_n = 2'd0; state_n = S_FETCH; end
+        if (jump) begin k_n = 4'd0; nbn_n = 2'd0; state_n = S_FETCH; pcx_n = 1'b0; end
+        else if (pinc && !pcf[20] && binc[20]) pcx_n = 1'b1;   // 0x0FFFFF + 1: no wrap into I/O
+        if (done | jump) swp_n = 1'b0;
         if (bad) begin halted_n = 1'b1; halt_code_n = 8'hFD; state_n = S_HALT; end
 
         // a write to bytes 1-2 of the tagged pair makes AR stale
@@ -655,21 +780,25 @@ module t1_core (
             tagv_n = 1'b0;
     end
 
+    // reset_pc must be an even address in RAM (0-0x0FFFFF) or I/O and ROM (0xF00000 up): the core
+    // cannot represent 0x100000-0xEFFFFF, so it halts with FD rather than fold it
+    wire rbad = reset_pc[0] || (reset_pc[23:20] != 4'h0 && reset_pc[23:20] != 4'hF);
+
     always @(posedge clk) begin
         if (rst) begin
-            state <= S_FETCH; k <= 4'd0;
+            state <= rbad ? S_HALT : S_FETCH; k <= 4'd0; pcx <= 1'b0;
             pcf <= {reset_pc[23:20] == 4'hF, reset_pc[19:0]}; ar <= 21'd0;
             ir <= 16'd0; p2 <= 16'd0; nb <= 16'd0; nbn <= 2'd0;
             fN <= 1'b0; fZ <= 1'b0; fC <= 1'b0; fV <= 1'b0;
             cy <= 1'b0; zacc <= 1'b0; l1 <= 1'b0; l2 <= 2'd0; sgn <= 1'b0; cst <= 1'b0; cnt <= 5'd0;
             tag <= 3'd0; tagv <= 1'b0; accz <= 1'b0; swp <= 1'b0;
-            halted <= 1'b0; halt_code <= 8'd0; retire <= 1'b0;
+            halted <= rbad; halt_code <= rbad ? 8'hFD : 8'd0; retire <= 1'b0;
         end else begin
             state <= state_n; k <= k_n; pcf <= pcf_n; ar <= ar_n;
             ir <= ir_n; p2 <= p2_n; nb <= nb_n; nbn <= nbn_n;
             fN <= fN_n; fZ <= fZ_n; fC <= fC_n; fV <= fV_n;
             cy <= cy_n; zacc <= zacc_n; l1 <= l1_n; l2 <= l2_n; sgn <= sgn_n; cst <= cst_n; cnt <= cnt_n;
-            tag <= tag_n; tagv <= tagv_n; accz <= accz_n; swp <= swp_n;
+            tag <= tag_n; tagv <= tagv_n; accz <= accz_n; swp <= swp_n; pcx <= pcx_n;
             halted <= halted_n; halt_code <= halt_code_n;
             retire <= done | jump;
         end

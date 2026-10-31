@@ -8,6 +8,7 @@
 // a byte column select (docs/t1.md counts it as a macro); here it is
 // behavioural, and the transistor count script treats it as a black box.
 
+`timescale 1ns / 1ns
 `default_nettype none
 
 module t1_rf (
