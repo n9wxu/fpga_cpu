@@ -20,12 +20,20 @@ import sys
 
 
 def records(path):
+    """Yield (word0, word1) per 8-byte record. A partial record at the end
+    (a log cut short by a crash or a full disk) is dropped with a warning."""
+    rest = b""
     with open(path, "rb") as f:
         while True:
             buf = f.read(8 << 20)
             if not buf:
-                return
-            yield from struct.iter_unpack("<II", buf)
+                break
+            buf = rest + buf
+            n = len(buf) & ~7
+            rest = buf[n:]
+            yield from struct.iter_unpack("<II", buf[:n])
+    if rest:
+        print(f"memlog: {path}: dropped a partial trailing record ({len(rest)} bytes)", file=sys.stderr)
 
 
 def symbol(path, name):
@@ -56,14 +64,23 @@ def main():
     # segments end at marker writes: the value written names what ended
     # (0 = start-up, n = frame n - 1); the last segment runs to the exit
     segs = []
-    new = lambda: dict(insts=0, ibytes=0, rbytes=0, wbytes=0, vbytes=0, start=None, last=0)
+    new = lambda: dict(insts=0, ibytes=0, rbytes=0, wbytes=0, vbytes=0, cycles=0)
     cur = new()
+    # The log holds the low 32 bits of the cycle count, so unwrap it (cycles
+    # never go backwards). An instruction's cycles are counted up to the start
+    # of the next one, which charges the last instruction of a segment to it.
+    wrap, last_raw = 0, 0
+    pend, pend_cyc = None, 0
     for w0, w1 in records(a.log):
         kind = w0 >> 28
         if kind == 0:
-            cur["last"] = w1
-            if cur["start"] is None:
-                cur["start"] = w1
+            if w1 < last_raw:
+                wrap += 1 << 32
+            last_raw = w1
+            cyc = w1 + wrap
+            if pend is not None:
+                pend["cycles"] += cyc - pend_cyc
+            pend, pend_cyc = cur, cyc
             cur["insts"] += 1
             cur["ibytes"] += (w0 >> 24) & 15
             continue
@@ -82,9 +99,10 @@ def main():
             v = w1 & 0xFF
             if v == 0 and segs and segs[-1]["name"] == "init":
                 prev = segs[-1]         # start-up code that clears memory writes 0 too
-                for k in ("insts", "ibytes", "rbytes", "wbytes", "vbytes"):
+                for k in ("insts", "ibytes", "rbytes", "wbytes", "vbytes", "cycles"):
                     prev[k] += cur[k]
-                prev["last"] = cur["last"]
+                if pend is cur:
+                    pend = prev
                 cur = new()
                 continue
             cur["name"] = "init" if v == 0 else str(v - 1)
@@ -102,7 +120,6 @@ def main():
           f"{'VRAM B':>7} {'bus B':>9}  frame")
     tot, n = dict(cycles=0, insts=0, ibytes=0, rbytes=0, wbytes=0, vbytes=0), 0
     for sg in segs:
-        sg["cycles"] = sg["last"] - sg["start"] if sg["start"] is not None else 0
         check = ""
         if "frame" in sg:
             k, px = sg["frame"]
