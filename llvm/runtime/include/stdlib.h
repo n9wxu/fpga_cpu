@@ -9,8 +9,13 @@
 
 void exit(int code) __attribute__((noreturn));
 void abort(void) __attribute__((noreturn));
+typedef struct { int quot, rem; } div_t;
+typedef struct { long quot, rem; } ldiv_t;
+
 int abs(int x);
 long labs(long x);
+div_t div(int num, int den);
+ldiv_t ldiv(long num, long den);
 int atoi(const char *s);
 long atol(const char *s);
 long strtol(const char *s, char **end, int base);
