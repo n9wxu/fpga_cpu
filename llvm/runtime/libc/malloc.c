@@ -18,11 +18,11 @@ typedef struct blk {
 static blk_t *free_list;
 static char *brk_ptr;
 
-static size_t round_up(size_t n) { return (n + sizeof(blk_t) + 3) & ~(size_t)3; }
-
 void *malloc(size_t n)
 {
-    size_t need = round_up(n);
+    if (n > (size_t)-1 - sizeof(blk_t) - 3)
+        return NULL;
+    size_t need = (n + sizeof(blk_t) + 3) & ~(size_t)3;
     blk_t **pp = &free_list;
     for (blk_t *b = free_list; b; pp = &b->next_free, b = b->next_free) {
         if (b->size >= need) {
@@ -41,7 +41,7 @@ void *malloc(size_t n)
     }
     if (!brk_ptr)
         brk_ptr = (char *)(((uintptr_t)_end + 3) & ~(uintptr_t)3);
-    if (brk_ptr + need > HEAP_TOP)
+    if (need > (size_t)(HEAP_TOP - brk_ptr))
         return NULL;
     blk_t *b = (blk_t *)brk_ptr;
     brk_ptr += need;
@@ -55,12 +55,33 @@ void free(void *p)
         return;
     blk_t *b = (blk_t *)p - 1;
     b->size &= ~(size_t)1;
-    b->next_free = free_list;
-    free_list = b;
+    /* the free list is address ordered: insert, then merge with the
+     * neighbours that touch this block */
+    blk_t **pp = &free_list;
+    while (*pp && *pp < b)
+        pp = &(*pp)->next_free;
+    blk_t *next = *pp;
+    if (next && (char *)b + b->size == (char *)next) {
+        b->size += next->size;
+        next = next->next_free;
+    }
+    b->next_free = next;
+    *pp = b;
+    if (pp != &free_list) {
+        blk_t *prev = (blk_t *)((char *)pp - offsetof(blk_t, next_free));
+        if ((char *)prev + prev->size == (char *)b) {
+            prev->size += b->size;
+            prev->next_free = b->next_free;
+        }
+    }
 }
 
 void *calloc(size_t n, size_t size)
 {
+    if (size && n > (size_t)-1 / size)
+        return NULL;
+    if (size && n > (size_t)-1 / size)
+        return NULL;
     void *p = malloc(n * size);
     if (p)
         memset(p, 0, n * size);
