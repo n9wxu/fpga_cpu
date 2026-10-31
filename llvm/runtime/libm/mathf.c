@@ -255,7 +255,8 @@ static int reduce_big(float x, float *r)
         n++;
         f -= (int64_t)1 << 62;
     }
-    *r = (float)f * 3.4061215800865545e-19f;    /* pi/2 * 2^-62 */
+    /* f (pi/2) 2^-62, from the two halves (no 64-bit to float helper) */
+    *r = ((float)(int32_t)(f >> 32) * 4294967296.0f + (float)(uint32_t)f) * 3.4061215800865545e-19f;
     if (u >> 31) {
         *r = -*r;
         n = -n;
