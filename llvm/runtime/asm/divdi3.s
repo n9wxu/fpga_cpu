@@ -19,6 +19,8 @@ udivmod64:
         PUSHP   lr
         OR      r8, r0, r1
         BNE     .Lwide
+        OR      r8, r6, r7
+        BEQ     .Ldiv0
         ; 32-bit divisor (__fcpu_udiv32 in divsi3.s wants it in p2). If N's
         ; high half is >= D the quotient needs more than 32 bits: divide
         ; the high half first.
@@ -44,6 +46,16 @@ udivmod64:
         MOVP    p3, p0
         MOVI    r0, 0
         MOVI    r1, 0
+        BRA     .Ldone
+.Ldiv0:
+        ; division by zero: quotient all ones, remainder N, like the 16 and
+        ; 32-bit routines
+        MOVP    p3, p1
+        MOVP    p0, p2
+        MOVI    r2, -1
+        MOVI    r3, -1
+        MOVI    r4, -1
+        MOVI    r5, -1
         BRA     .Ldone
 .Lwide:
         ; __udivmoddi4(N, D, &rem): D's high half and &rem go on the stack

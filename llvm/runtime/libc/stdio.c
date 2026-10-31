@@ -1,6 +1,7 @@
 /* fpga_cpu C runtime: console stdio and a small printf.
- * Conversions: d i u x X o c s p %, flags - 0 + space, width, precision,
- * length l (32 bits) and ll (64 bits); f e g for floats. */
+ * Conversions: d i u x X o c s p %, flags - 0 + space #, width, precision,
+ * length hh h l ll z t j; f e g (and capitals) with the exact digits of the
+ * float (double is a float here). */
 #include <fcpu.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -74,58 +75,165 @@ static int fmt_u32(char *tmp, uint32_t v, unsigned base, int upper)
     return n;
 }
 
-/* Fixed-point float formatting, enough for printf("%f") debugging. */
-static int fmt_float(char *out, float v, int prec, char conv)
+/* Floating point. A float is m 2^e, so its exact decimal expansion is m 2^e
+ * (e >= 0) or m 5^-e / 10^-e: a decimal digit array that is multiplied by
+ * 2 or 5 until e is used up. Rounding then works on exact digits, round half
+ * to even like glibc, and any precision is right (the digits past the
+ * float's own are the exact tail of the binary value). */
+typedef struct {
+    unsigned char d[120]; /* decimal digits, least significant first */
+    int n;                /* digits in use (0 for zero) */
+    int dp;               /* digits after the decimal point */
+} dec_t;
+
+#define F_LEFT 1
+#define F_ZERO 2
+#define F_PLUS 4
+#define F_SPACE 8
+#define F_ALT 16
+
+static int dig(const dec_t *x, int i) { return i >= 0 && i < x->n ? x->d[i] : 0; }
+
+static void dmul(dec_t *x, unsigned k)
 {
-    int n = 0;
-    if (v != v)
-        return (int)(strcpy(out, "nan"), 3);
-    if (v < 0) {
-        out[n++] = '-';
-        v = -v;
+    unsigned c = 0;
+    for (int i = 0; i < x->n; i++) {
+        unsigned v = x->d[i] * k + c;
+        c = (v * 205) >> 11; /* v / 10, exact for v < 320 */
+        x->d[i] = (unsigned char)(v - c * 10);
     }
-    if (v > 3.4e38f)
-        return (int)(strcpy(out + n, "inf"), n + 3);
-    int exp10 = 0;
-    if (conv == 'e' || (conv == 'g' && (v >= 1e7f || (v < 1e-4f && v != 0)))) {
-        while (v >= 10.0f) { v /= 10.0f; exp10++; }
-        while (v < 1.0f && v != 0) { v *= 10.0f; exp10--; }
-        conv = 'e';
+    while (c) {
+        unsigned q = (c * 205) >> 11;
+        x->d[x->n++] = (unsigned char)(c - q * 10);
+        c = q;
     }
-    if (prec > 7)
-        prec = 7;
-    float r = 0.5f;
-    for (int i = 0; i < prec; i++)
-        r /= 10.0f;
-    v += r;
-    if (conv == 'e' && v >= 10.0f) { v /= 10.0f; exp10++; }
-    uint32_t ip = (uint32_t)v;
-    float frac = v - (float)ip;
-    char tmp[12];
-    int k = fmt_u32(tmp, ip, 10, 0);
-    while (k)
-        out[n++] = tmp[--k];
-    if (prec) {
-        out[n++] = '.';
-        for (int i = 0; i < prec; i++) {
-            frac *= 10.0f;
-            int d = (int)frac;
-            out[n++] = (char)('0' + d);
-            frac -= (float)d;
-        }
-    }
-    if (conv == 'e') {
-        out[n++] = 'e';
-        out[n++] = exp10 < 0 ? '-' : '+';
-        if (exp10 < 0)
-            exp10 = -exp10;
-        out[n++] = (char)('0' + exp10 / 10);
-        out[n++] = (char)('0' + exp10 % 10);
-    }
-    return n;
 }
 
-int vsnprintf(char *buf, size_t cap, const char *fmt, va_list ap)
+/* x = f (finite, >= 0) */
+static void dec_from(dec_t *x, uint32_t bits)
+{
+    int e = (int)(bits >> 23);
+    uint32_t m = bits & 0x7FFFFF;
+    if (e)
+        m |= 0x800000;
+    else
+        e = 1;
+    e -= 150;
+    while (m && !(m & 1) && e < 0) {
+        m >>= 1;
+        e++;
+    }
+    x->n = 0;
+    x->dp = 0;
+    for (; m; m /= 10)
+        x->d[x->n++] = (unsigned char)(m % 10);
+    if (e < 0) {
+        x->dp = -e;
+        for (; e <= -2; e += 2)
+            dmul(x, 25);
+        if (e)
+            dmul(x, 5);
+    } else {
+        for (; e >= 4; e -= 4)
+            dmul(x, 16);
+        for (; e; e--)
+            dmul(x, 2);
+    }
+}
+
+/* round to a multiple of 10^(cut - dp), half to even; digits below cut
+ * become zero */
+static void round_at(dec_t *x, int cut)
+{
+    if (cut <= 0)
+        return;
+    int half = dig(x, cut - 1), sticky = 0;
+    for (int i = 0; i < cut - 1 && i < x->n; i++)
+        sticky |= x->d[i];
+    for (int i = 0; i < cut && i < x->n; i++)
+        x->d[i] = 0;
+    if (half > 5 || (half == 5 && (sticky || (dig(x, cut) & 1))))
+        for (int i = cut;; i++) {
+            if (i >= x->n)
+                x->d[x->n++] = 0;
+            if (++x->d[i] <= 9)
+                break;
+            x->d[i] = 0;
+        }
+}
+
+static void fmt_float(out_t *o, uint32_t bits, int conv, int prec, int fl, int width)
+{
+    dec_t x;
+    int upper = conv < 'a';
+    conv |= 32;
+    char sign = bits >> 31 ? '-' : (fl & F_PLUS) ? '+' : (fl & F_SPACE) ? ' ' : 0;
+    bits &= 0x7FFFFFFF;
+    int style_e = 0, frac = 0, X = 0, t = 0, intd = 0, len;
+    const char *special = NULL;
+    if (bits >= 0x7F800000) {
+        special = bits > 0x7F800000 ? (upper ? "NAN" : "nan") : upper ? "INF" : "inf";
+        len = 3;
+    } else {
+        dec_from(&x, bits);
+        if (prec < 0)
+            prec = 6;
+        if (conv == 'f') {
+            frac = prec;
+            round_at(&x, x.dp - prec);
+        } else {
+            int P = conv == 'g' ? (prec ? prec : 1) : prec + 1; /* significant digits */
+            if (x.n) {
+                round_at(&x, x.n - P);
+                X = x.n - 1 - x.dp;
+            }
+            if (conv == 'e' || X >= P || X < -4) {
+                style_e = 1;
+                frac = P - 1;
+            } else {
+                frac = P - 1 - X;
+            }
+            if (conv == 'g' && !(fl & F_ALT))
+                while (frac > 0 && dig(&x, style_e ? x.n - 1 - frac : x.dp - frac) == 0)
+                    frac--;
+        }
+        t = x.n - 1;
+        intd = style_e ? 1 : x.n > x.dp ? x.n - x.dp : 1;
+        len = intd + ((frac || (fl & F_ALT)) ? 1 : 0) + frac + (style_e ? 4 : 0);
+    }
+    int pad = width - len - (sign != 0);
+    if (!(fl & F_LEFT) && !(fl & F_ZERO && !special))
+        emit_pad(o, ' ', pad);
+    if (sign)
+        emit(o, sign);
+    if (!(fl & F_LEFT) && (fl & F_ZERO) && !special)
+        emit_pad(o, '0', pad);
+    if (special) {
+        for (; *special; special++)
+            emit(o, *special);
+    } else {
+        int hi = style_e ? t : (x.n > x.dp ? x.n - 1 : x.dp), lo = style_e ? t : x.dp;
+        for (int i = hi; i >= lo; i--)
+            emit(o, (char)('0' + dig(&x, i)));
+        if (frac || (fl & F_ALT))
+            emit(o, '.');
+        for (int k = 1; k <= frac; k++)
+            emit(o, (char)('0' + dig(&x, lo - k)));
+        if (style_e) {
+            emit(o, upper ? 'E' : 'e');
+            emit(o, X < 0 ? '-' : '+');
+            if (X < 0)
+                X = -X;
+            emit(o, (char)('0' + X / 10));
+            emit(o, (char)('0' + X % 10));
+        }
+    }
+    if (fl & F_LEFT)
+        emit_pad(o, ' ', pad);
+}
+
+/* buf NULL: the console */
+static int vfmt(char *buf, size_t cap, const char *fmt, va_list ap)
 {
     out_t o = {buf, cap, 0};
     for (; *fmt; fmt++) {
@@ -134,18 +242,23 @@ int vsnprintf(char *buf, size_t cap, const char *fmt, va_list ap)
             continue;
         }
         fmt++;
-        int left = 0, zero = 0, plus = 0, space = 0;
+        int fl = 0;
         for (;; fmt++) {
-            if (*fmt == '-') left = 1;
-            else if (*fmt == '0') zero = 1;
-            else if (*fmt == '+') plus = 1;
-            else if (*fmt == ' ') space = 1;
+            if (*fmt == '-') fl |= F_LEFT;
+            else if (*fmt == '0') fl |= F_ZERO;
+            else if (*fmt == '+') fl |= F_PLUS;
+            else if (*fmt == ' ') fl |= F_SPACE;
+            else if (*fmt == '#') fl |= F_ALT;
             else break;
         }
         int width = 0, prec = -1;
         if (*fmt == '*') {
             width = va_arg(ap, int);
             fmt++;
+            if (width < 0) {
+                fl |= F_LEFT;
+                width = -width;
+            }
         } else {
             while (*fmt >= '0' && *fmt <= '9')
                 width = width * 10 + (*fmt++ - '0');
@@ -161,60 +274,68 @@ int vsnprintf(char *buf, size_t cap, const char *fmt, va_list ap)
                     prec = prec * 10 + (*fmt++ - '0');
             }
         }
-        int lng = 0;
-        while (*fmt == 'l') {
-            lng++;
-            fmt++;
+        int lng = 0, sh = 0; /* l count (z and t are long, j is long long); h count */
+        for (;; fmt++) {
+            if (*fmt == 'l') lng++;
+            else if (*fmt == 'h') sh++;
+            else if (*fmt == 'z' || *fmt == 't') lng = 1;
+            else if (*fmt == 'j') lng = 2;
+            else break;
         }
-        if (*fmt == 'h')
-            fmt++;
-        char tmp[40];
+        char tmp[24];
         const char *s = tmp;
-        int len = 0, neg = 0;
+        int len = 0;
         char conv = *fmt;
         switch (conv) {
-        case 'd': case 'i': {
-            int64_t v = lng >= 2 ? va_arg(ap, int64_t) : lng ? va_arg(ap, long) : va_arg(ap, int);
-            neg = v < 0;
-            uint64_t u = neg ? (uint64_t)-v : (uint64_t)v;
-            len = lng >= 2 ? fmt_u64(tmp, u, 10, 0) : fmt_u32(tmp, (uint32_t)u, 10, 0);
-            goto number;
-        }
-        case 'u': case 'x': case 'X': case 'o': case 'p': {
-            unsigned base = conv == 'u' ? 10 : conv == 'o' ? 8 : 16;
-            if (conv == 'p') {
+        case 'd': case 'i': case 'u': case 'x': case 'X': case 'o': case 'p': {
+            unsigned base = conv == 'u' || conv == 'd' || conv == 'i' ? 10 : conv == 'o' ? 8 : 16;
+            char sign = 0;
+            uint64_t u;
+            if (conv == 'p')
                 lng = 1;
-                emit(&o, '0');
-                emit(&o, 'x');
+            if (conv == 'd' || conv == 'i') {
+                int64_t v = lng >= 2 ? va_arg(ap, int64_t) : lng ? va_arg(ap, long) : va_arg(ap, int);
+                if (sh)
+                    v = sh >= 2 ? (signed char)v : (short)v;
+                sign = v < 0 ? '-' : (fl & F_PLUS) ? '+' : (fl & F_SPACE) ? ' ' : 0;
+                u = v < 0 ? (uint64_t)-v : (uint64_t)v;
+            } else {
+                u = lng >= 2 ? va_arg(ap, uint64_t) : lng ? va_arg(ap, unsigned long) : va_arg(ap, unsigned);
+                if (sh)
+                    u = sh >= 2 ? (unsigned char)u : (unsigned short)u;
             }
-            if (lng >= 2)
-                len = fmt_u64(tmp, va_arg(ap, uint64_t), base, conv == 'X');
-            else
-                len = fmt_u32(tmp, lng ? va_arg(ap, unsigned long) : va_arg(ap, unsigned), base, conv == 'X');
-        number: {
-            int digits = len;
-            int sign = neg || plus || space;
-            int zeros = prec > digits ? prec - digits : 0;
-            int pad = width - digits - zeros - sign;
-            if (zero && prec < 0 && !left) {
+            len = prec == 0 && u == 0 ? 0
+                : lng >= 2 ? fmt_u64(tmp, u, base, conv == 'X') : fmt_u32(tmp, (uint32_t)u, base, conv == 'X');
+            int zeros = prec > len ? prec - len : 0;
+            int pre = ((fl & F_ALT) && base == 16 && u) || conv == 'p' ? 2 : 0;
+            if ((fl & F_ALT) && base == 8 && !zeros && (!len || tmp[len - 1] != '0'))
+                zeros = 1;
+            int pad = width - len - zeros - pre - (sign != 0);
+            if ((fl & F_ZERO) && prec < 0 && !(fl & F_LEFT)) {
                 zeros += pad > 0 ? pad : 0;
                 pad = 0;
             }
-            if (!left)
+            if (!(fl & F_LEFT))
                 emit_pad(&o, ' ', pad);
             if (sign)
-                emit(&o, neg ? '-' : plus ? '+' : ' ');
+                emit(&o, sign);
+            if (pre) {
+                emit(&o, '0');
+                emit(&o, conv == 'X' ? 'X' : 'x');
+            }
             emit_pad(&o, '0', zeros);
             while (len)
                 emit(&o, tmp[--len]);
-            if (left)
+            if (fl & F_LEFT)
                 emit_pad(&o, ' ', pad);
             continue;
         }
+        case 'f': case 'e': case 'g': case 'F': case 'E': case 'G': {
+            union { float f; uint32_t u; } b;
+            b.f = (float)va_arg(ap, double);
+            fmt_float(&o, b.u, conv, prec, fl, width);
+            continue;
         }
-        case 'f': case 'e': case 'g': case 'F': case 'E': case 'G':
-            len = fmt_float(tmp, (float)va_arg(ap, double), prec < 0 ? 6 : prec, (char)(conv | 32));
-            break;
         case 'c':
             tmp[0] = (char)va_arg(ap, int);
             len = 1;
@@ -234,11 +355,11 @@ int vsnprintf(char *buf, size_t cap, const char *fmt, va_list ap)
         default:
             continue;
         }
-        if (!left)
+        if (!(fl & F_LEFT))
             emit_pad(&o, ' ', width - len);
         for (int i = 0; i < len; i++)
             emit(&o, s[i]);
-        if (left)
+        if (fl & F_LEFT)
             emit_pad(&o, ' ', width - len);
     }
     if (buf && cap)
@@ -246,13 +367,19 @@ int vsnprintf(char *buf, size_t cap, const char *fmt, va_list ap)
     return (int)o.len;
 }
 
-int vprintf(const char *fmt, va_list ap) { return vsnprintf(NULL, 0, fmt, ap); }
+int vsnprintf(char *buf, size_t cap, const char *fmt, va_list ap)
+{
+    char none; /* snprintf(NULL, 0, ...) only counts */
+    return buf ? vfmt(buf, cap, fmt, ap) : vfmt(&none, 0, fmt, ap);
+}
+
+int vprintf(const char *fmt, va_list ap) { return vfmt(NULL, 0, fmt, ap); }
 
 int printf(const char *fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
-    int n = vsnprintf(NULL, 0, fmt, ap);
+    int n = vfmt(NULL, 0, fmt, ap);
     va_end(ap);
     return n;
 }
