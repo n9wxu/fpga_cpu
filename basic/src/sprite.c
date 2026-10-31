@@ -221,7 +221,7 @@ static void spr_geom(spr_t *s)
 static uint8_t spr_src(const spr_t *s, int16_t x, int16_t y)
 {
     int32_t u, v;
-    int16_t dx = (int16_t)(x - (int16_t)(s->px >> 8)), dy = (int16_t)(y - (int16_t)(s->py >> 8));
+    int32_t dx = (int32_t)x - (s->px >> 8), dy = (int32_t)y - (s->py >> 8);
     if (s->affine) {
         int32_t dx2 = 2 * dx + 1, dy2 = 2 * dy + 1;
         u = (s->ia * dx2 + s->ib * dy2 + ((int32_t)s->hx << 17)) >> 17;
@@ -378,6 +378,10 @@ void spr_off(int n)
 void spr_move(int n, float dx, float dy)
 {
     spr_check(n);
+    /* Velocities are bounded so px + vx cannot overflow an int32 before it
+     * is clamped in spr_step: under 32768 pixels per frame. */
+    if (!(dx > -32768.0f && dx < 32768.0f && dy > -32768.0f && dy < 32768.0f))
+        error(E_FC);
     spr[n].vx = to_i32(dx * FIX);
     spr[n].vy = to_i32(dy * FIX);
 }
@@ -425,25 +429,31 @@ void spr_animate(int n, int first, int last, int rate)
 int spr_pos(int n, int y)
 {
     spr_check(n);
-    return (int)((y ? spr[n].py : spr[n].px) >> 8);
+    /* positions are kept within int16 pixels: the value fits a 16-bit int */
+    return (int16_t)((y ? spr[n].py : spr[n].px) >> 8);
 }
 
 /* Do two visible sprites touch? Pixel-exact, after rotation, scaling and
  * flips, at their current positions. */
 static int hit_pair(const spr_t *a, const spr_t *b)
 {
-    int16_t ax = (int16_t)(a->px >> 8), ay = (int16_t)(a->py >> 8), bx = (int16_t)(b->px >> 8), by = (int16_t)(b->py >> 8);
-    int16_t x0 = (int16_t)(ax + a->bx0), y0 = (int16_t)(ay + a->by0), x1 = (int16_t)(ax + a->bx1), y1 = (int16_t)(ay + a->by1);
-    int16_t x, y;
+    /* 32-bit: position plus box offset can pass 32767 */
+    int32_t ax = a->px >> 8, ay = a->py >> 8, bx = b->px >> 8, by = b->py >> 8;
+    int32_t x0 = ax + a->bx0, y0 = ay + a->by0, x1 = ax + a->bx1, y1 = ay + a->by1;
+    int32_t x, y;
     if (!a->vis || !b->vis || !a->pix || !b->pix)
         return 0;
-    if (bx + b->bx0 > x0) x0 = (int16_t)(bx + b->bx0);
-    if (by + b->by0 > y0) y0 = (int16_t)(by + b->by0);
-    if (bx + b->bx1 < x1) x1 = (int16_t)(bx + b->bx1);
-    if (by + b->by1 < y1) y1 = (int16_t)(by + b->by1);
+    if (bx + b->bx0 > x0) x0 = bx + b->bx0;
+    if (by + b->by0 > y0) y0 = by + b->by0;
+    if (bx + b->bx1 < x1) x1 = bx + b->bx1;
+    if (by + b->by1 < y1) y1 = by + b->by1;
+    if (x1 > 32767) x1 = 32767;
+    if (y1 > 32767) y1 = 32767;
+    if (x0 < -32768) x0 = -32768;
+    if (y0 < -32768) y0 = -32768;
     for (y = y0; y < y1; y++)
         for (x = x0; x < x1; x++)
-            if (spr_src(a, x, y) && spr_src(b, x, y))
+            if (spr_src(a, (int16_t)x, (int16_t)y) && spr_src(b, (int16_t)x, (int16_t)y))
                 return 1;
     return 0;
 }
