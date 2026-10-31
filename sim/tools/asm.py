@@ -326,6 +326,13 @@ class Assembler:
         """Each part of an instruction, as a list of equivalent (op, vals) choices."""
         if vals.get("mode") == "a" and not any(f.mode == "a" for f in self.forms.get(mn, [])):
             # no direct form in this variant: LEA p0, [abs] ; op [p0]
+            # p0 is the assembler's scratch, so a store of r0, r1 or p0 would
+            # store the address, not the data.
+            cls = self.isa.ops[mn].get("cls")
+            if (cls == "st" and vals.get("rd") in (0, 1)) or (cls == "stp" and vals.get("pd") == 0):
+                what = "p0" if cls == "stp" else f"r{vals['rd']}"
+                raise AsmError(f"{mn} {what}, [abs] has no direct form in this variant and the expansion "
+                               f"uses p0 (r0/r1) as scratch: store from another register, or LA a pointer first")
             return [[("LEA", {"pd": 0, "mode": "a", "abs": vals["abs"]})],
                     [(mn, dict({k: x for k, x in vals.items() if k != "abs"}, mode="d", pn=0, disp=0))]], "abs"
         if mn == "LEA" and vals.get("mode") == "d":
