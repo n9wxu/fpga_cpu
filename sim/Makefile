@@ -63,6 +63,7 @@ test: $(BUILD)/fsim
 	$(PY) tools/isa.py --selftest
 	$(PY) tools/measure.py --quick
 	$(PY) tools/devtest.py
+	$(PY) tools/regress.py
 
 measure: $(BUILD)/fsim
 	$(PY) tools/measure.py

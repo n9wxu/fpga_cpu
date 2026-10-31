@@ -12,8 +12,8 @@ CPU and SRAM share one 50 MHz clock. Every run was checked against the Python re
 
 | variant | 16-bit share | 16-bit used | 32-bit share | 32-bit used | encodings |
 |---|---|---|---|---|---|
-| A | 81.2% | 96.1% | 18.8% | 85.7% | 153 |
-| B | 50.0% | 94.8% | 50.0% | 69.6% | 151 |
+| A | 81.2% | 96.1% | 18.8% | 89.8% | 158 |
+| B | 50.0% | 94.8% | 50.0% | 71.2% | 156 |
 
 ## Static code size
 
@@ -107,9 +107,9 @@ Share of all cycles. Video is the fixed scan-out reservation (4 of every 56 cycl
 | dual+br | 0.0% | 16.8% | 7.1% | 76.1% | 1.82 | 0.805 |
 | ic64 | 2.3% | 13.3% | 7.1% | 77.3% | 1.44 | 1.008 |
 | ic64+dual+br | 2.8% | 16.5% | 7.1% | 73.6% | 1.78 | 0.814 |
-| nocache | 62.0% | 12.2% | 7.1% | 18.7% | 1.32 | 1.063 |
-| nocache+br | 72.5% | 14.3% | 7.1% | 6.1% | 1.54 | 0.935 |
-| nocache+dual | 68.0% | 13.4% | 7.1% | 11.5% | 1.45 | 0.969 |
+| nocache | 55.0% | 10.8% | 7.1% | 27.1% | 1.17 | 1.188 |
+| nocache+br | 62.7% | 12.3% | 7.1% | 17.8% | 1.34 | 1.066 |
+| nocache+dual | 59.3% | 11.7% | 7.1% | 21.9% | 1.26 | 1.093 |
 
 The benchmarks fit in a 64 B cache except `tokenize` and `hello`, so the miss path is only really exercised by the no-cache rows until compiled BASIC is measured.
 
@@ -132,7 +132,7 @@ LUT figures are design estimates in `sim/tools/measure.py`, not synthesis result
 |---|---|---|---|
 | fuse | base + macro-op fusion | 0.859 | 0.859 |
 | noprefetch | base without the stream buffer | 1.000 | 1.000 |
-| nocache | no I-cache: every fetch from SRAM | 1.063 | 1.075 |
+| nocache | no I-cache: every fetch from SRAM | 1.188 | 1.197 |
 | ic512 | 512 B I-cache | 1.000 | 1.000 |
 | ic1k | 1 KB I-cache | 1.000 | 1.000 |
 | ic4k | 4 KB I-cache | 1.000 | 1.000 |
@@ -147,8 +147,8 @@ LUT figures are design estimates in `sim/tools/measure.py`, not synthesis result
 | dual+br | dual issue (banked) + branch fusion | 0.805 | 0.805 |
 | bp1+br | 1-cycle branch + branch fusion | 0.745 | 0.744 |
 | bp1+dual+br | 1-cycle branch + dual (banked) + branch fusion | 0.677 | 0.676 |
-| nocache+br | no I-cache + branch fusion | 0.935 | 0.945 |
-| nocache+dual | no I-cache + dual issue | 0.969 | 0.978 |
+| nocache+br | no I-cache + branch fusion | 1.066 | 1.078 |
+| nocache+dual | no I-cache + dual issue | 1.093 | 1.101 |
 | ic64 | 64 B I-cache (miss-path stress) | 1.008 | 1.009 |
 | ic64+br | 64 B I-cache + branch fusion | 0.886 | 0.886 |
 | ic64+dual+br | 64 B I-cache + dual + branch fusion | 0.814 | 0.814 |
