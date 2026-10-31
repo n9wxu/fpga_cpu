@@ -222,6 +222,7 @@ void sr_write(cpu_t *c, int n, uint16_t v);
 
 /* ---- API ---- */
 void exec_inst(cpu_t *c, const dinst_t *d);
+int decode_is_long(const variant_t *v, uint16_t p0);
 int decode(const variant_t *v, uint16_t p0, uint16_t p1, dinst_t *d);
 void disasm(const dinst_t *d, uint32_t pc, char *buf, size_t n);
 void cpu_init(cpu_t *c, const variant_t *v, const tcfg_t *cfg);

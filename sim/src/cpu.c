@@ -31,18 +31,35 @@ static void set_opnd(dinst_t *d, int o, int32_t v)
     }
 }
 
-int decode(const variant_t *v, uint16_t p0, uint16_t p1, dinst_t *d)
+int decode_is_long(const variant_t *v, uint16_t p0)
 {
-    int lng = 0;
     for (int i = 0; i < v->nlong; i++)
         if ((p0 & v->lmask[i]) == v->lval[i])
-            lng = 1;
+            return 1;
+    return 0;
+}
+
+int decode(const variant_t *v, uint16_t p0, uint16_t p1, dinst_t *d)
+{
+    int lng = decode_is_long(v, p0);
     uint32_t w = lng ? ((uint32_t)p0 << 16) | p1 : p0;
     int lo = lng ? v->n16 : 0, hi = lng ? v->nforms : v->n16;
     for (int i = lo; i < hi; i++) {
         const form_t *f = &v->forms[i];
         if ((w & f->mask) != f->value)
             continue;
+        int odd = 0;
+        for (int k = 0; k < f->nf && !odd; k++) {
+            const fld_t *fl = &f->f[k];
+            if (fl->div <= 1)
+                continue;
+            uint32_t raw = 0;
+            for (int r = 0; r < fl->nruns; r++)
+                raw = (raw << fl->wd[r]) | ((w >> fl->sh[r]) & ((1u << fl->wd[r]) - 1));
+            odd = raw % fl->div != 0; /* odd register number in a pair field: reserved */
+        }
+        if (odd)
+            return 0;
         memset(d, 0, sizeof *d);
         d->op = f->op;
         d->form = (uint16_t)i;
@@ -133,7 +150,7 @@ static void log_rec(cpu_t *c, uint32_t w0, uint32_t w1)
     fwrite(b, 1, 8, c->log);
 }
 #define LOG_DATA(kind, size, a, v) \
-    do { if (c->logging) log_rec(c, (kind) << 28 | (size) << 24 | (a), (v)); } while (0)
+    do { if (c->logging && !c->halted) log_rec(c, (kind) << 28 | (size) << 24 | (a), (v)); } while (0)
 
 #define IN_SRAM(a) ((a) < c->ram_size) /* SRAM or expansion RAM */
 #define IN_ROM(a)  ((a) >= ROM_BASE)
@@ -187,25 +204,29 @@ uint32_t mem_rd32(cpu_t *c, uint32_t a)
 
 void mem_wr8(cpu_t *c, uint32_t a, uint32_t v)
 {
-    LOG_DATA(2u, 1u, a, v & 0xFF);
-    if (IN_SRAM(a)) { c->dwords++; c->sram[a] = (uint8_t)v; pdc_inval(a, 1); return; }
-    if (IN_IO(a)) { io_write(c, a, v); return; }
-    fault(c, IN_ROM(a) ? "write to boot ROM" : "write to unmapped", a);
+    v &= 0xFF;
+    if (IN_SRAM(a)) { c->dwords++; c->sram[a] = (uint8_t)v; pdc_inval(a, 1); }
+    else if (IN_IO(a)) io_write(c, a, v);
+    else { fault(c, IN_ROM(a) ? "write to boot ROM" : "write to unmapped", a); return; }
+    LOG_DATA(2u, 1u, a, v);
 }
 
 void mem_wr16(cpu_t *c, uint32_t a, uint32_t v)
 {
     if (a & 1) { fault(c, "unaligned 16-bit write", a); return; }
-    LOG_DATA(2u, 2u, a, v & 0xFFFF);
+    v &= 0xFFFF;
     if (IN_SRAM(a)) {
         c->dwords++;
         c->sram[a] = (uint8_t)v;
         c->sram[a + 1] = (uint8_t)(v >> 8);
         pdc_inval(a, 2);
+    } else if (IN_IO(a)) {
+        io_write(c, a, v);
+    } else {
+        fault(c, IN_ROM(a) ? "write to boot ROM" : "write to unmapped", a);
         return;
     }
-    if (IN_IO(a)) { io_write(c, a, v); return; }
-    fault(c, IN_ROM(a) ? "write to boot ROM" : "write to unmapped", a);
+    LOG_DATA(2u, 2u, a, v);
 }
 
 void mem_wr32(cpu_t *c, uint32_t a, uint32_t v)
@@ -613,10 +634,20 @@ static void timing_exec(cpu_t *c, const dinst_t *d, uint32_t pc)
         s->st_loaduse += c->cfg.loaduse_pen;
     }
     if (c->dwords) {
-        uint64_t t = port_time(c, s->cycles, c->dwords) - s->cycles;
+        /* Without an I-cache the instruction itself came through the one
+         * SRAM port, so each data access needs a cycle of its own after
+         * the fetch cycle (executing from the boot ROM does not use the
+         * port). With a cache the fetch was a cache read. */
+        int shared = !c->ic_lines && !IN_ROM(pc);
+        uint64_t t0 = s->cycles + (shared ? 1 : 0);
+        uint64_t t = port_time(c, t0, c->dwords) - t0;
         uint64_t wait = t - (uint64_t)c->dwords;
         s->st_video += wait;
         cyc += wait;
+        if (shared) {
+            cyc += (uint64_t)c->dwords;
+            s->st_ifetch += (uint64_t)c->dwords;
+        }
         if (c->pair_split) {
             cyc += 1;
             s->st_pair++;
@@ -688,7 +719,9 @@ static const dinst_t *predecode(cpu_t *c, uint32_t pc)
     uint32_t i = (pc >> 1) & (PDC_SIZE - 1);
     if (pdc_tag[i] == pc)
         return &pdc[i];
-    uint16_t p0 = fetch16(c, pc), p1 = fetch16(c, (pc + 2) & 0xFFFFFF);
+    uint16_t p0 = fetch16(c, pc), p1 = 0;
+    if (!c->halted && decode_is_long(c->var, p0))
+        p1 = fetch16(c, (pc + 2) & 0xFFFFFF); /* only a 32-bit instruction has a second parcel */
     if (c->halted)
         return NULL;
     if (!decode(c->var, p0, p1, &pdc[i])) {

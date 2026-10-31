@@ -2,6 +2,7 @@
 #define _POSIX_C_SOURCE 200809L /* strdup under -std=c11 on glibc */
 #include "front.h"
 
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -81,7 +82,23 @@ int apply_core(tcfg_t *cfg, const char *name)
     return k;
 }
 
-static uint32_t num(const char *s) { return (uint32_t)strtoul(s, NULL, 0); }
+/* Number option parsing: a bad value sets num_err (reported by opts_parse). */
+static int num_err;
+
+static uint32_t num(const char *s)
+{
+    char *end;
+    errno = 0;
+    while (*s == ' ' || *s == '\t')
+        s++;
+    unsigned long v = strtoul(s, &end, 0);
+    if (end == s || *end || errno || *s == '-' || v > 0xFFFFFFFFul) {
+        fprintf(stderr, "bad number '%s'\n", s);
+        num_err = 1;
+        return 0;
+    }
+    return (uint32_t)v;
+}
 
 /* "cmpbr,alubr" -> FU_* bit mask */
 static int parse_fuse(const char *s, int *mask)
@@ -150,11 +167,34 @@ int opts_parse(opts_t *o, int argc, char **argv, int gui)
                 fprintf(stderr, "--core: unknown core %s\n", argv[i]);
                 return -1;
             }
-        } else if (!strcmp(a, "--branch-pen") && more) o->cfg.branch_pen = (int)num(argv[++i]);
+        } else if (!strcmp(a, "--branch-pen") && more) {
+            uint32_t n = num(argv[++i]);
+            if (n > 1000) {
+                fprintf(stderr, "--branch-pen: bad penalty %s\n", argv[i]);
+                return -1;
+            }
+            o->cfg.branch_pen = (int)n;
+        }
         else if (!strcmp(a, "--video") && more) {
-            char *colon;
-            o->cfg.vperiod = (uint32_t)strtoul(argv[++i], &colon, 0);
-            o->cfg.vburst = *colon == ':' ? (uint32_t)strtoul(colon + 1, NULL, 0) : 0;
+            char *colon, *end;
+            const char *arg = argv[++i];
+            errno = 0;
+            unsigned long per = strtoul(arg, &colon, 0), burst = 0;
+            int ok = colon != arg && !errno && *arg != '-';
+            if (ok && *colon == ':') {
+                burst = strtoul(colon + 1, &end, 0);
+                ok = end != colon + 1 && !*end && !errno && colon[1] != '-';
+            } else if (ok) {
+                ok = !*colon;
+            }
+            if (!ok || per > 0xFFFFFFu || burst >= (per ? per : 1)) {
+                if (!ok || per || burst) {
+                    fprintf(stderr, "--video: want PERIOD:BURST with BURST < PERIOD (got '%s')\n", arg);
+                    return -1;
+                }
+            }
+            o->cfg.vperiod = (uint32_t)per;
+            o->cfg.vburst = (uint32_t)burst;
         } else if (!strcmp(a, "--max-cycles") && more) o->max_cycles = strtoull(argv[++i], NULL, 0);
         else if (!strcmp(a, "--disk") && more) o->disk = argv[++i];
         else if (!strcmp(a, "--sym") && more) o->sym = argv[++i];
@@ -174,6 +214,8 @@ int opts_parse(opts_t *o, int argc, char **argv, int gui)
         else if (a[0] == '-') return -1;
         else o->image = a;
     }
+    if (num_err)
+        return -1;
     if (!o->image)
         return -1;
     if (o->cfg.icache_bytes && (o->cfg.line_bytes < 4 || o->cfg.icache_bytes % o->cfg.line_bytes)) {
