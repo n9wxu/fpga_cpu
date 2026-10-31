@@ -22,7 +22,7 @@ TOL = 2e-5
 
 
 def sh(cmd, **kw):
-    return subprocess.run(cmd, capture_output=True, text=True, **kw)
+    return subprocess.run(cmd, capture_output=True, text=True, errors="replace", **kw)
 
 
 def close(a, b):
