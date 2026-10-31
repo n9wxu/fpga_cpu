@@ -13,7 +13,14 @@
 #define FLT_BIG 3.4028235e38f
 
 static void e_or(void);
-void expr(void) { e_or(); }
+int expr_depth;
+void expr(void)
+{
+    if (++expr_depth > EXPR_DEPTH_MAX)
+        error(E_ST); /* runaway recursion (DEF FN calling itself, ((((...) */
+    e_or();
+    expr_depth--;
+}
 
 void need(uint8_t t)
 {
@@ -301,7 +308,7 @@ static void binop(uint8_t op)
             break;
         case '^': r = fpow(x, y); break;
         case '\\': {
-            int32_t ix = to_i32(x), iy = to_i32(y);
+            int32_t ix = to_i32(truncf(x)), iy = to_i32(truncf(y)); /* toward zero, like the integer path */
             if (!iy)
                 error(E_DZ);
             push_int(ix / iy);
@@ -607,13 +614,15 @@ static void e_primary(void)
     }
     case KW_VAL: {
         str_t s;
-        char buf[40];
+        char buf[NUMTXT + 1];
         uint16_t n, i = 0;
         float f = 0;
         int isint, neg = 0;
         paren_expr();
         s = sval(&vs[vsp - 1]);
-        n = s.len < 39 ? s.len : 39;
+        if (s.len > NUMTXT)
+            error(E_LS); /* too long to be a number: don't convert a prefix */
+        n = s.len;
         if (n)
             memcpy(buf, s.p, n);
         buf[n] = 0;

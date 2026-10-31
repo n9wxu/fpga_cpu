@@ -2,13 +2,20 @@
 #include "basic.h"
 
 #define LINEMAX 162
+/* A detokenized line can be several times longer than what was typed
+ * (? becomes PRINT), so SAVE/LOAD/LIST use a larger buffer. 161 typed
+ * characters expand to under 1200. */
+#define LISTMAX 1280
 #define TOKMAX  320
+/* a typed REM / DATA must fit in one TK_RAW run (length byte) */
+typedef char linemax_fits_raw[LINEMAX <= 255 ? 1 : -1];
 #define CTLMAX  48
 
 static jmp_buf top;
 static uint8_t imm[TOKMAX]; /* the tokenized immediate line */
 static uint8_t zero_tok;    /* ip = &zero_tok ends the run */
-static char linebuf[LINEMAX];
+static char linebuf[LISTMAX];
+static int load_h = -1; /* open LOAD file, closed if an error unwinds */
 static uint8_t *stmt_ip;    /* start of the current statement */
 static uint8_t *cont_ip, *cont_lp;
 static int cont_ok, autorun_mode;
@@ -294,11 +301,13 @@ static int store_text(const lval_t *lv, const char *f, uint16_t fl)
         store(lv);
         return 1;
     } else {
-        char b[40];
+        char b[NUMTXT + 1];
         float v = 0;
         int isint, neg = 0;
         const char *e;
-        uint16_t i = 0, n = fl < 39 ? fl : 39;
+        uint16_t i = 0, n = fl;
+        if (n > NUMTXT) /* not a number: don't read a prefix of it */
+            return 0;
         memcpy(b, f, n);
         b[n] = 0;
         if (b[i] == '-' || b[i] == '+')
@@ -549,6 +558,9 @@ static void do_for(void)
         ip++;
         step = arg_num();
     }
+    /* An integer loop variable can only move in whole steps. */
+    if (lv.type == VT_INT && (step > 32767.0f || step < -32768.0f || step != (float)(int32_t)step))
+        error(E_FC);
     for (i = csp - 1; i >= 0; i--) /* reusing a loop variable drops the old loop */
         if (ctl[i].kind == C_FOR && ctl[i].var == lv.id) {
             csp = i;
@@ -762,8 +774,11 @@ static void get_fname_ext(int add_bas)
         fname[i] = c;
     }
     fname[n] = 0;
-    if (add_bas && !dot && n <= 8)
+    if (add_bas && !dot) {
+        if (n > 8) /* 8.3 names: no room for the extension */
+            error(E_FC);
         memcpy(fname + n, ".BAS", 5);
+    }
 }
 
 static void get_fname(void) { get_fname_ext(1); }
@@ -886,7 +901,12 @@ static void do_save(void)
     if (h < 0)
         error(E_FIO);
     for (l = arena; LLEN(l); l += LLEN(l)) {
-        int n = list_line(l, linebuf);
+        int n = list_line(l, linebuf, LISTMAX - 1);
+        if (n < 0) { /* too long to write back as one loadable line */
+            hal_fclose(h);
+            lp = l;
+            error(E_LL);
+        }
         linebuf[n++] = '\n';
         if (hal_fwrite(h, linebuf, n) != n) {
             hal_fclose(h);
@@ -913,9 +933,22 @@ static int enter_line(const char *s)
             error(E_SN);
     }
     n = tokenize(s, tokbuf, TOKMAX);
+    reset_run(); /* the edit moves the program: drop stale pointers into it */
     prog_edit((uint16_t)num, tokbuf, (uint16_t)n);
-    cont_ok = 0;
+    reset_run();
     return 1;
+}
+
+static void load_line(int len)
+{
+    const char *q;
+    linebuf[len] = 0;
+    if (enter_line(linebuf))
+        return;
+    for (q = linebuf; *q == ' ' || *q == '\t'; q++)
+        ;
+    if (*q)
+        error(E_SN); /* a line without a number */
 }
 
 static void do_load(void)
@@ -926,6 +959,7 @@ static void do_load(void)
     h = hal_fopen(fname, 0);
     if (h < 0)
         error(E_FNF);
+    load_h = h; /* the error handler closes it if a line is rejected */
     prog_new();
     reset_run();
     while ((n = hal_fread(h, rb, (int)sizeof rb)) > 0) {
@@ -934,18 +968,16 @@ static void do_load(void)
             if (c == '\r')
                 continue;
             if (c == '\n') {
-                linebuf[len] = 0;
-                if (len)
-                    enter_line(linebuf);
+                load_line(len);
                 len = 0;
-            } else if (len < LINEMAX - 1)
+            } else if (len < LISTMAX - 1)
                 linebuf[len++] = c;
+            else
+                error(E_LL);
         }
     }
-    if (len) {
-        linebuf[len] = 0;
-        enter_line(linebuf);
-    }
+    load_line(len);
+    load_h = -1;
     hal_fclose(h);
 }
 
@@ -1012,7 +1044,7 @@ static void do_list(void)
             continue;
         if (LNUM(l) > b)
             break;
-        list_line(l, linebuf);
+        list_line(l, linebuf, LISTMAX);
         con_puts(linebuf);
         con_putc('\n');
         if (hal_break())
@@ -1429,7 +1461,12 @@ void basic_main(const char *autorun, int quiet)
         banner();
 
     if (setjmp(top)) {
+        if (load_h >= 0) {
+            hal_fclose(load_h);
+            load_h = -1;
+        }
         vsp = 0;
+        expr_depth = 0;
         lp = NULL;
         ready = 1;
         if (autorun_mode)
