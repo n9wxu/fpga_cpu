@@ -206,9 +206,17 @@ float powf(float x, float y)
 
 /* ---- trigonometry ---- */
 
-#define PIO2_HI 1.5707963705062866f     /* pi/2 split for range reduction */
-#define PIO2_LO -4.37113900018624283e-8f
+/* pi/2 in three pieces for the medium-range reduction: the first two have
+ * 12 significant bits, so q*piece is exact for |q| < 4096 and the
+ * subtractions lose nothing */
+#define PIO2_1 1.5703125f
+#define PIO2_2 4.837512969970703e-4f
+#define PIO2_3 7.549789954891882e-8f
 #define TWO_OVER_PI 0.636619772367581343f
+
+/* 2/pi = 0.A2F9836E 4E441529 ... as 32-bit words, for large arguments */
+static const uint32_t twoopi[8] = {
+    0xA2F9836E, 0x4E441529, 0xFC2757D1, 0xF534DDC0, 0xDB629599, 0x3C439041, 0xFE5163AB, 0xDEBBC561};
 
 /* sin and cos on [-pi/4, pi/4] */
 static float ksin(float x)
@@ -223,18 +231,51 @@ static float kcos(float x)
     return 1.0f + x2 * (-0.5f + x2 * (1.0f / 24 + x2 * (-1.0f / 720 + x2 * (1.0f / 40320))));
 }
 
-/* x = q (pi/2) + r, |r| <= pi/4; returns q mod 4 */
+/* Payne-Hanek: x = m 2^ex, so x (2/pi) is the sum of m 2^ex 2^(-32(i+1))
+ * times the table words. Only the bits that land in 2^-62 .. 2^1 matter
+ * (the sum mod 4), and unsigned 64-bit wraparound is that mod. */
+static int reduce_big(float x, float *r)
+{
+    uint32_t u = to_bits(x);
+    int ex = (int)((u >> 23) & 0xFF) - 150;
+    uint32_t m = (u & 0x7FFFFF) | 0x800000;
+    uint64_t acc = 0;
+    for (int i = 0; i < 8; i++) {
+        int sh = ex - 32 * (i + 1) + 62;
+        if (sh >= 64)
+            continue;
+        if (sh <= -56)
+            break;
+        uint64_t a = (uint64_t)m * twoopi[i];
+        acc += sh >= 0 ? a << sh : a >> -sh;
+    }
+    int n = (int)(acc >> 62);
+    int64_t f = (int64_t)(acc & (((uint64_t)1 << 62) - 1));
+    if (f >= (int64_t)1 << 61) {            /* nearest multiple of pi/2 */
+        n++;
+        f -= (int64_t)1 << 62;
+    }
+    *r = (float)f * 3.4061215800865545e-19f;    /* pi/2 * 2^-62 */
+    if (u >> 31) {
+        *r = -*r;
+        n = -n;
+    }
+    return n & 3;
+}
+
+/* x = q (pi/2) + r, |r| <= pi/4; returns q mod 4. x is finite. */
 static int reduce(float x, float *r)
 {
+    if (fabsf(x) >= 4096.0f)
+        return reduce_big(x, r);
     float qf = floorf(x * TWO_OVER_PI + 0.5f);
-    *r = (x - qf * PIO2_HI) - qf * PIO2_LO;
-    long q = (long)qf;
-    return (int)(q & 3);
+    *r = ((x - qf * PIO2_1) - qf * PIO2_2) - qf * PIO2_3;
+    return (int)qf & 3;
 }
 
 float sinf(float x)
 {
-    if (x != x || fabsf(x) > 3.4e38f)
+    if (to_bits(x) << 1 >= 0xFF000000u)
         return NAN;
     float r;
     switch (reduce(x, &r)) {
@@ -247,7 +288,7 @@ float sinf(float x)
 
 float cosf(float x)
 {
-    if (x != x || fabsf(x) > 3.4e38f)
+    if (to_bits(x) << 1 >= 0xFF000000u)
         return NAN;
     float r;
     switch (reduce(x, &r)) {
@@ -260,7 +301,7 @@ float cosf(float x)
 
 float tanf(float x)
 {
-    if (x != x || fabsf(x) > 3.4e38f)
+    if (to_bits(x) << 1 >= 0xFF000000u)
         return NAN;
     float r;
     int q = reduce(x, &r);

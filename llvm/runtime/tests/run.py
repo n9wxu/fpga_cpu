@@ -1,6 +1,8 @@
 """Compiler tests: build each test for the host and for fpga_cpu (both
 encoding variants), run them, and compare the output. Lines starting with
-'~' hold approximate values and are compared with a relative tolerance.
+'~' hold approximate values and are compared with a relative tolerance;
+lines "@N name hexbits" hold the bits of a float, which may differ by up to
+N ulp.
 
 usage: run.py [-v] [test.c ...]
 """
@@ -31,6 +33,17 @@ def close(a, b):
     return abs(x - y) <= TOL * max(abs(x), abs(y), 1e-30) or abs(x - y) < 1e-6
 
 
+def ulp_key(h):
+    i = int(h, 16)
+    return i if i < 0x80000000 else 0x80000000 - i
+
+
+def close_ulp(a, b):
+    ta, tb = a.split(), b.split()
+    return (len(ta) == len(tb) == 3 and ta[:2] == tb[:2]
+            and abs(ulp_key(ta[2]) - ulp_key(tb[2])) <= int(ta[0][1:]))
+
+
 def compare(want, got):
     wl, gl = want.splitlines(), got.splitlines()
     if len(wl) != len(gl):
@@ -40,6 +53,8 @@ def compare(want, got):
         if w == g:
             continue
         if w.startswith("~") and close(w, g):
+            continue
+        if w.startswith("@") and close_ulp(w, g):
             continue
         bad.append(f"want {w!r}\n           got  {g!r}")
     return bad
