@@ -73,8 +73,10 @@ classes:
 # sim/src/cpu.h. Operand names (rd, rs, imm, ...) are the decoded fields.
 #
 # Flags: arithmetic sets NZCV, where C = carry out (for SUB, C=1 means no
-# borrow). Logic ops set NZ, clear V and leave C alone. Shifts set NZ and
-# C = the last bit shifted out. SBC and CPC chain Z (Z stays set only if it
+# borrow). Logic ops set NZ, clear V and leave C alone. Shifts set NZ, clear
+# V and set C = the last bit shifted out (unchanged for a count of 0).
+# A store's data is read before the instruction's pointer write-back, so
+# STW r4,[p2]+ with r4 in p2 stores the old r4. SBC and CPC chain Z (Z stays set only if it
 # was already set), so multi-word compares work. MOV, MOVI, loads and
 # pointer ops leave the flags alone.
 ops:
@@ -111,9 +113,9 @@ ops:
   LDBS:  {cls: ld,  size: 1, sem: "W(rd, LDS8(EA(1)));"}
   LDW:   {cls: ld,  size: 2, sem: "W(rd, LD16(EA(2)));"}
   LDP:   {cls: ldp, size: 4, sem: "WP32(pd, LD32(EA(4)));"}
-  STB:   {cls: st,  size: 1, sem: "ST8(EA(1), R(rd));"}
-  STW:   {cls: st,  size: 2, sem: "ST16(EA(2), R(rd));"}
-  STP:   {cls: stp, size: 4, sem: "ST32(EA(4), P32(pd));"}
+  STB:   {cls: st,  size: 1, sem: "uint16_t v_ = R(rd); ST8(EA(1), v_);"}
+  STW:   {cls: st,  size: 2, sem: "uint16_t v_ = R(rd); ST16(EA(2), v_);"}
+  STP:   {cls: stp, size: 4, sem: "uint32_t v_ = P32(pd); ST32(EA(4), v_);"}
   LEA:   {cls: lea, modes: [d, x, a], sem: "WP32(pd, LEA32());"}
   LEAPC: {cls: leapc, sem: "WP32(pd, PC + imm);"}
 
