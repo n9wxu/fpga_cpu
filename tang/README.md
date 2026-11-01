@@ -41,6 +41,8 @@ true colour; the I/O registers are `../fpga/rtl/iosys.v`. Programs link with
 `--stack 0x10000` (the Makefile does) so the stack is in block RAM.
 
 - `../fpga/demo/demo.c` built with `-DTANG` (`make run`, the default): the demo
+  (measured: 60 fps, CPU busy 20%, 3.32 MIPS, 5.06 T1 clocks per instruction,
+  SDRAM waits included; the Spartan-3 runs it at 37% busy, 1.81 MIPS, CPI 5.51)
 - `progs/sdtest.c`: SDRAM tests, then a scrolling hi-color bitmap
 - `progs/vidtest.c`: the text layer: attributes, CP437, live counters
 
