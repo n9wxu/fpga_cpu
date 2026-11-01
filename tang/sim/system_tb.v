@@ -7,13 +7,23 @@
 // fpga/tools/cmpshot.py, and stop.
 module system_tb;
     reg clk = 0;
-    always #74 clk = ~clk;                  // 6.75 MHz
+    always #7.407 clk = ~clk;               // fclk, 67.5 MHz
     reg rx = 1'b1;
     wire tx;
     wire [5:0] led;
-    system dut (.clk(clk), .s1(1'b0), .s2(1'b0), .uart_rx(rx), .uart_tx(tx), .led(led), .tmds_p(), .tmds_n());
+    wire        sd_clk, sd_cke, sd_cs_n, sd_ras_n, sd_cas_n, sd_we_n;
+    wire [10:0] sd_a;
+    wire [1:0]  sd_ba;
+    wire [3:0]  sd_dqm;
+    wire [31:0] sd_dq;
+    system dut (.clk(clk), .s1(1'b0), .s2(1'b0), .uart_rx(rx), .uart_tx(tx), .led(led), .tmds_p(), .tmds_n(),
+                .O_sdram_clk(sd_clk), .O_sdram_cke(sd_cke), .O_sdram_cs_n(sd_cs_n),
+                .O_sdram_ras_n(sd_ras_n), .O_sdram_cas_n(sd_cas_n), .O_sdram_wen_n(sd_we_n),
+                .O_sdram_addr(sd_a), .O_sdram_ba(sd_ba), .O_sdram_dqm(sd_dqm), .IO_sdram_dq(sd_dq));
+    sdram_model sdm (.clk(sd_clk), .cke(sd_cke), .cs_n(sd_cs_n), .ras_n(sd_ras_n), .cas_n(sd_cas_n),
+                     .we_n(sd_we_n), .a(sd_a), .ba(sd_ba), .dqm(sd_dqm), .dq(sd_dq));
 
-    localparam BIT = 4 * 148;               // the simulation baud rate
+    localparam real BIT = 4 * 14.815;      // the simulation baud rate: 4 fclk cycles
     task send(input [7:0] b);
         integer i;
         begin
@@ -48,7 +58,7 @@ module system_tb;
         for (i = 0; i < 8; i = i + 1) begin #BIT; c[i] = tx; end
         #BIT;
         if (got_eot) begin
-            $display("\n[system_tb] exit code %0d, T1 cycles %0d", c, dut.cycles);
+            $display("\n[system_tb] exit code %0d, T1 periods %0d, SDRAM errors %0d", c, dut.cycles, sdm.errors);
             $finish;
         end else if (c == 8'h04) got_eot = 1;
         else begin $write("%c", c); $fflush; end

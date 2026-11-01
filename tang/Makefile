@@ -24,7 +24,8 @@ FAMILY := GW2A-18C
 T1 := ../verilog/rtl/t1_core.v ../verilog/rtl/t1_rf.v
 SRC_blinky   :=
 SRC_hdmitest := rtl/dvi_tx.v
-SRC_system   := $(T1) rtl/dvi_tx.v ../fpga/rtl/video.v ../fpga/rtl/iosys.v
+SRC_system   := $(T1) rtl/dvi_tx.v ../fpga/rtl/video.v ../fpga/rtl/iosys.v rtl/sdram.v
+SIM_system   := sim/sdram_model.v
 CST_hdmitest := constraints/hdmi.cst
 CST_system   := constraints/hdmi.cst
 DATA_system  := build/font8x14.mem
@@ -55,7 +56,7 @@ build/$(TOP).json: $(SRC) $(DATA_$(TOP))
 build/$(TOP)_pnr.json: build/$(TOP).json build/$(TOP).cst $(wildcard constraints/$(TOP).sdc)
 	$(OSS)/nextpnr-himbaechel -q -l build/$(TOP)-pnr.log --json $< --write $@ --device $(DEVICE) \
 	  --vopt family=$(FAMILY) --vopt cst=build/$(TOP).cst --freq $(FREQ_$(TOP)) \
-	  $(if $(wildcard constraints/$(TOP).sdc),--sdc constraints/$(TOP).sdc)
+	  $(if $(wildcard constraints/$(TOP).sdc),--sdc constraints/$(TOP).sdc) $(PNR_$(TOP))
 	@grep "Max frequency" build/$(TOP)-pnr.log | tail -4
 
 build/$(TOP).fs: build/$(TOP)_pnr.json
@@ -66,14 +67,14 @@ prog: build/$(TOP).fs
 
 sim: $(DATA_$(TOP))
 	@mkdir -p build
-	$(OSS)/iverilog -g2005 -Wall -DSIM -o build/$(TOP)_tb.vvp sim/$(TOP)_tb.v $(SRC)
+	$(OSS)/iverilog -g2005 -Wall -DSIM -o build/$(TOP)_tb.vvp sim/$(TOP)_tb.v $(SIM_$(TOP)) $(SRC)
 	cd build && $(OSS)/vvp -n $(TOP)_tb.vvp $(SIMARGS)
 
 PROG ?= build/vidtest.bin
-# memory repeats every 64 KB: the stack goes below the text buffer (0FC000 = C000)
+# the stack at the top of the block RAM (fast); the rest of the default layout is in SDRAM
 build/%.bin: progs/%.c
 	@mkdir -p build
-	cd .. && llvm/fcc -O2 --stack 0xC000 -o tang/$@ tang/$<
+	cd .. && llvm/fcc -O2 --stack 0x10000 -o tang/$@ tang/$<
 
 run: $(PROG)
 	python3 tools/run.py $(PROG)

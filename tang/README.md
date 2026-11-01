@@ -32,13 +32,22 @@ must be pushed fully into the connector. If the TV crops the edges
 
 ## system
 
-The video is `../fpga/rtl/video.v`, shared with the Spartan-3, in true
-colour; the I/O registers are `../fpga/rtl/iosys.v`. Memory is four
-dual-port block RAM byte lanes, so video DMA reads 32-bit words without
-holding up T1. It repeats every 64 KB, so the text buffer at 0FC000 is at
-C000: link with `--stack 0xC000`. The bitmap needs the SDRAM (next).
-`progs/vidtest.c` is the text-layer check. In simulation its frame equals
-fsim's but for the live counters.
+T1 runs on a 67.5 MHz clock gated by a DQCE: a T1 cycle is 4 clocks
+(16.875 MHz) for block RAM (000000-00FFFF) and I/O, and longer while the
+SDRAM answers (everything else in the 1 MB; reads take 7 clocks). The SDRAM
+controller (`rtl/sdram.v`) also feeds video DMA, so video buffers must be in
+the SDRAM. The video is `../fpga/rtl/video.v`, shared with the Spartan-3, in
+true colour; the I/O registers are `../fpga/rtl/iosys.v`. Programs link with
+`--stack 0x10000` (the Makefile does) so the stack is in block RAM.
+
+- `progs/sdtest.c`: SDRAM tests, then a scrolling hi-color bitmap
+- `progs/vidtest.c`: the text layer: attributes, CP437, live counters
+
+SDRAM timing, found on the board: its clock is fclk at 180 degrees and read
+data is taken at the third rising edge after the READ. Back-to-back reads
+sometimes gave the next word, so the controller leaves a cycle between
+reads; capture at the falling edge, an earlier SDRAM clock, or the input
+register in the I/O block (nextpnr `ioreg_in_iob`) all failed.
 
 T1 (`../verilog/rtl/t1_core.v`) runs on a 16.875 MHz PLL clock; memory, I/O and
 the UART run on the same clock shifted 180 degrees, so they see T1's bus half
