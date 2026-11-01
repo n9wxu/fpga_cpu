@@ -20,8 +20,9 @@ module sdram_model #(
     reg [10:0] row [0:3];
     reg [3:0]  open = 4'b0;
     integer    t_act [0:3], t_pre [0:3];
-    integer    cyc = 0, cl = 2, errors = 0, i;
+    integer    cyc = 0, cl = 2, errors = 0, i, j;
     initial for (i = 0; i < 4; i = i + 1) begin t_act[i] = -100; t_pre[i] = -100; row[i] = 0; end
+    initial for (j = 0; j < 2097152; j = j + 1) mem[j] = 32'd0;   // zeroed, as fsim's memory
 
     reg [31:0] dq_out = 32'd0;
     reg        dq_en = 1'b0;

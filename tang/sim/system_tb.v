@@ -4,7 +4,7 @@
 // 0x04 and a code byte end the run, as tang/tools/run.py expects.
 // +shot=FILE +frame=N: write video frame N (counted from the start) as one
 // '0'-'7' character per pixel (each channel's top bit), for
-// fpga/tools/cmpshot.py, and stop.
+// fpga/tools/cmpshot.py, and stop; with +rgb24 as six hex digits a pixel.
 module system_tb;
     reg clk = 0;
     always #7.407 clk = ~clk;               // fclk, 67.5 MHz
@@ -68,6 +68,8 @@ module system_tb;
     reg [1023:0] shot;
     integer want = -1, fno = 0, fx = 0, fy = 0, ff = 0;
     reg de_d = 1'b0;
+    reg rgb24 = 1'b0;
+    initial rgb24 = $test$plusargs("rgb24");
     initial if ($value$plusargs("shot=%s", shot)) begin
         if (!$value$plusargs("frame=%d", want)) want = 3;
     end
@@ -76,7 +78,8 @@ module system_tb;
         if (dut.de) begin
             if (fno == want) begin
                 if (fx == 0 && fy == 0) ff = $fopen(shot, "w");
-                $fwrite(ff, "%0d", {dut.rgb24[23], dut.rgb24[15], dut.rgb24[7]});
+                if (rgb24) $fwrite(ff, "%06x", dut.rgb24);
+                else $fwrite(ff, "%0d", {dut.rgb24[23], dut.rgb24[15], dut.rgb24[7]});
                 if (fx == 1279) $fwrite(ff, "\n");
                 if (fx == 1279 && fy == 719) begin
                     $fclose(ff);

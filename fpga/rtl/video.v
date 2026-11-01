@@ -6,9 +6,11 @@
 // The sprite layer is not here yet.
 //
 // Two outputs: rgb, the 3-bit VGA colour, and rgb24 with de for a digital
-// display (HDMI). In rgb24 the 3-bit colours are full scale; hi-color is
-// the palette's true colour with TRUE_COLOR = 1 (fsim --true-color), the
-// same dither as rgb with TRUE_COLOR = 0. Unused outputs are trimmed away.
+// display (HDMI). In rgb24 the 3-bit colours are full scale; with
+// TRUE_COLOR = 1 (fsim --true-color) hi-color is the palette's true colour
+// and a stippled text background is a 50% blend over what is beneath it,
+// with TRUE_COLOR = 0 both are as in rgb (dither, checkerboard). Unused
+// outputs are trimmed away.
 //
 // Two clock domains:
 //
@@ -338,6 +340,7 @@ module video #(
     reg [2:0]  bmp3, fg3, bg3;
     reg [23:0] bmp24;
     reg        bmp_op3, on3, bg_op3, txt3, vis3, hs3, vs3;
+    reg        bg24_op3, blend3;
     always @(posedge pclk) begin
         bmp3    <= p_hicol ? dith : nib2[2:0];
         bmp24   <= (p_hicol && TRUE_COLOR) ? {r5, r5[4:2], g6, g6[5:4], b5, b5[4:2]}
@@ -345,6 +348,8 @@ module video #(
         bmp_op3 <= p_bmp && (p_hicol ? idx2 != 0 : !nib2[3]);
         on3     <= glyph[3'd7 - gx2] | cur2;
         bg_op3  <= !cell2[14] && !(cell2[15] && (x02 ^ y02));
+        bg24_op3 <= TRUE_COLOR ? !cell2[14] && !cell2[15] : !cell2[14] && !(cell2[15] && (x02 ^ y02));
+        blend3  <= TRUE_COLOR && !cell2[14] && cell2[15];
         fg3     <= cell2[10:8];
         bg3     <= cell2[13:11];
         txt3    <= p_text && txt2;
@@ -353,14 +358,22 @@ module video #(
 
     // ---- stage 3: compose, back to front ------------------------------------------
     reg [2:0]  c;
-    reg [23:0] c24;
+    reg [23:0] c24, under;
+    wire [23:0] bgf = full(bg3);
+    wire [8:0]  sr = under[23:16] + bgf[23:16], sg = under[15:8] + bgf[15:8], sb = under[7:0] + bgf[7:0];
     always @* begin
         c = bd_p;
-        c24 = full(bd_p);
-        if (bmp_op3) begin c = bmp3; c24 = bmp24; end
+        if (bmp_op3) c = bmp3;
         if (txt3) begin
-            if (on3)          begin c = fg3; c24 = full(fg3); end
-            else if (bg_op3)  begin c = bg3; c24 = full(bg3); end
+            if (on3)          c = fg3;
+            else if (bg_op3)  c = bg3;
+        end
+        under = bmp_op3 ? bmp24 : full(bd_p);
+        c24 = under;
+        if (txt3) begin
+            if (on3)            c24 = full(fg3);
+            else if (bg24_op3)  c24 = bgf;
+            else if (blend3)    c24 = {sr[8:1], sg[8:1], sb[8:1]};
         end
     end
 
