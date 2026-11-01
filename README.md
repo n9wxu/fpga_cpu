@@ -47,7 +47,8 @@ interpreter built with the LLVM backend. Click the screen, then type
   Verilog-2001, checked instruction by instruction against the simulator.
   It is simulated in Icarus; it has not been through the ISE build yet.
 
-Not started yet: the ISE build (`fpga/`) and the expansion board
+The ISE build (`fpga/`) runs end to end with a board bring-up test; the
+CPU has not been through it yet. Not started yet: the expansion board
 (`pcb/`). The open design questions are in the
 [issues](https://github.com/n9wxu/fpga_cpu/issues).
 
@@ -105,7 +106,7 @@ make -C web serve                # http://localhost:8000
 | `web/`     | The simulator compiled to WebAssembly |
 | `docs/`    | Architecture, I/O map, measurements |
 | `verilog/` | T1 core RTL, testbenches with lockstep comparison against the simulator, transistor count ([verilog/README.md](verilog/README.md)) |
-| `fpga/`    | ISE 14.7 build scripts and board constraints (to come) |
+| `fpga/`    | ISE 14.7 build, board constraints, JTAG programming through an Opella-LD ([fpga/README.md](fpga/README.md)) |
 | `pcb/`     | Expansion board: RP2350, SD, sound, I/O (to come) |
 
 Start with [docs/architecture.md](docs/architecture.md) for the design and
@@ -120,7 +121,7 @@ Start with [docs/architecture.md](docs/architecture.md) for the design and
 3. Keep the LLVM backend and BASIC building and passing their tests.
 4. Write RTL and run it in lockstep against the simulator under Verilator.
 5. Build with ISE 14.7 on a Linux host and program the board with
-   openFPGALoader.
+   OpenOCD (`make -C fpga bit prog`).
 
 CI (`.github/workflows/ci.yml`) builds and tests all of this on every push
 and pull request, and publishes the web build to GitHub Pages from `main`.

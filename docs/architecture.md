@@ -97,8 +97,11 @@ heap and stack. Video takes the other 691 KB.
 
 ## Video
 
-- Output: 1280×720 @ 60 Hz on the VGA connector, with a 75 MHz pixel
-  clock from the DCM.
+- Output: 1280×720 @ 60 Hz on the VGA connector, with the standard
+  74.25 MHz pixel clock from two DCMs in series (50 × 27/20 × 11/10).
+  One DCM's 75 MHz (×3/2) is 1% fast, and a monitor tested with it
+  (Samsung 2343BWX) placed the picture badly; `fpga/rtl/video720.v` has
+  the timing and the text layer.
 - Logical screen: 640×360, shown at 2× (each pixel and line doubled).
 - Layers, back to front:
   1. Backdrop: a solid color. This is the default.
@@ -186,4 +189,4 @@ generation, is [scaling.md](scaling.md).
 - **Measurement:** `make -C sim measure` runs every benchmark × variant × timing configuration and checks each output. Results are in [measurements.md](measurements.md).
 - **Not built yet:**
   - RTL simulation (Icarus/Verilator in lockstep against the simulator's trace)
-  - The FPGA build: ISE 14.7 on the Linux host, programmed from the Mac with openFPGALoader
+  - The CPU's FPGA build (the flow itself works: ISE 14.7 on the Linux host, programmed from the Mac with OpenOCD; see `fpga/README.md`)
