@@ -36,7 +36,7 @@ module board_test_tb;
     // are registered, so compare one clock after the select).
     reg [1:0] sel_q;
     reg [15:0] bcd_q;
-    always @(posedge clk) begin
+    always @(posedge dut.clk50) begin
         sel_q <= dut.sel;
         bcd_q <= bcd;
         if (!btn0 && $time > 20) begin
@@ -47,7 +47,7 @@ module board_test_tb;
 
     // Scanner position sequence: 0 1 .. 7 6 .. 0 1 ..
     integer steps = 0, expect_pos = 0, expect_dir = 1;
-    always @(posedge clk)
+    always @(posedge dut.clk50)
         if (!btn0 && dut.step) begin
             #0.1;
             if (expect_pos == 7) expect_dir = -1;
@@ -60,13 +60,13 @@ module board_test_tb;
 
     integer n;
     initial begin
-        repeat (5) @(posedge clk);
+        repeat (5) @(posedge dut.clk50);
         btn0 = 0;
         // sample mid-second, clear of the reset synchronizer's latency
         @(negedge dut.rst);
-        repeat (CLK_HZ / 2) @(posedge clk);
+        repeat (CLK_HZ / 2) @(posedge dut.clk50);
         for (n = 1; n <= 10002; n = n + 1) begin
-            repeat (CLK_HZ) @(posedge clk);
+            repeat (CLK_HZ) @(posedge dut.clk50);
             #0.1;
             if (n == 1)     check(bcd == 16'h0001, "1 s");
             if (n == 59)    check(bcd == 16'h0059, "59 s");
@@ -76,7 +76,7 @@ module board_test_tb;
             if (n == 10002) check(bcd == 16'h0002, "2 s after wrap");
         end
         btn0 = 1;
-        repeat (4) @(posedge clk);
+        repeat (4) @(posedge dut.clk50);
         check(bcd == 0 && dut.pos == 0, "reset");
         if (steps < 100) begin errors = errors + 1; $display("FAIL: only %0d scanner steps", steps); end
         if (errors) $display("board_test: %0d error(s)", errors);
