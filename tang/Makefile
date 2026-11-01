@@ -70,8 +70,12 @@ sim: $(DATA_$(TOP))
 	$(OSS)/iverilog -g2005 -Wall -DSIM -o build/$(TOP)_tb.vvp sim/$(TOP)_tb.v $(SIM_$(TOP)) $(SRC)
 	cd build && $(OSS)/vvp -n $(TOP)_tb.vvp $(SIMARGS)
 
-PROG ?= build/vidtest.bin
+PROG ?= build/demo.bin
 # the stack at the top of the block RAM (fast); the rest of the default layout is in SDRAM
+build/demo.bin: ../fpga/demo/demo.c
+	@mkdir -p build
+	cd .. && llvm/fcc -O2 -DTANG --stack 0x10000 -o tang/$@ fpga/demo/demo.c
+
 build/%.bin: progs/%.c
 	@mkdir -p build
 	cd .. && llvm/fcc -O2 --stack 0x10000 -o tang/$@ tang/$<

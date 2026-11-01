@@ -40,6 +40,7 @@ the SDRAM. The video is `../fpga/rtl/video.v`, shared with the Spartan-3, in
 true colour; the I/O registers are `../fpga/rtl/iosys.v`. Programs link with
 `--stack 0x10000` (the Makefile does) so the stack is in block RAM.
 
+- `../fpga/demo/demo.c` built with `-DTANG` (`make run`, the default): the demo
 - `progs/sdtest.c`: SDRAM tests, then a scrolling hi-color bitmap
 - `progs/vidtest.c`: the text layer: attributes, CP437, live counters
 

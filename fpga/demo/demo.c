@@ -3,7 +3,8 @@
  * layer for a title, a scroller and live CPU statistics.
  *
  * Runs on the T1 core in fpga/rtl/system.v (10 MHz, ~2 MIPS after video
- * DMA) and in the simulator. The plasma is computed once, pixel by pixel;
+ * DMA), on the Tang Nano 20K (tang/rtl/system.v, build with -DTANG: T1 at
+ * 16.875 MHz, the screen in SDRAM) and in the simulator. The plasma is computed once, pixel by pixel;
  * everything that moves afterwards is what an old demo would do: rotate
  * the palette, wobble the scroll registers, redraw 96 stars, and keep the
  * text up to date, all inside one 60 Hz frame.
@@ -23,6 +24,12 @@
 #define SEG7        REG(0xF00606)
 #define LEDS        REG(0xF00600)
 #define SWITCHES    REG(0xF00602)
+
+#ifdef TANG
+#define T1_KHZ 16875                    /* CYCLE's rate: T1 periods */
+#else
+#define T1_KHZ 10000
+#endif
 
 #define BMP  ((volatile uint8_t *)0x0C3C00)
 #define TEXT ((volatile uint16_t *)0x0FC000)
@@ -212,9 +219,15 @@ static void stars(uint16_t scx, uint16_t scy)
 /* ---- the scroller ---------------------------------------------------------- */
 static const char msg[] =
     "                                                                                "
+#ifdef TANG
+    "*** fpga_cpu on a Tang Nano 20K ***   "
+    "The T1 core runs these 60 frames a second at 16.875 MHz, the screen in the SDRAM "
+    "inside the FPGA's package, shown on HDMI in true color ...   "
+#else
     "*** fpga_cpu on a Spartan-3 Starter Board ***   "
     "The T1 core runs these 60 frames a second at 10 MHz, from the board's SRAM, "
     "sharing it with the video DMA ...   "
+#endif
     "Every pixel of the 640x360 plasma was computed by T1 at start-up; what moves now is "
     "palette cycling, hardware scroll, 96 real-time 3D stars and this text layer ...   "
     "Greetings to the demoscene ...   ";
@@ -297,10 +310,11 @@ int main(void)
         if (sec_frames >= 60) {
             putnum(22, 6, sec_frames, 2, A_VALUE);
             putnum(22, 21, (uint16_t)(sec_busy * 100 / sec_total), 3, A_VALUE);
-            /* MIPS while working: instructions per busy T1 clock, at 10 MHz
-             * (CYCLE counts T1 clocks; fsim counts 50 MHz cycles, so there
-             * this reads 5 times low) */
-            uint32_t mips100 = sec_insts * 1000 / (sec_busy ? sec_busy : 1);
+            /* MIPS while working: instructions per busy CYCLE tick, at
+             * T1_KHZ (CYCLE counts T1 clocks, on the Tang T1 periods of
+             * 4 x 67.5 MHz; fsim counts 50 MHz cycles, so there this reads
+             * low) */
+            uint32_t mips100 = sec_insts * (T1_KHZ / 10) / (sec_busy ? sec_busy : 1);
             putnum(22, 35, (uint16_t)(mips100 / 100), 1, A_VALUE);
             put(22, 36, ".", A_VALUE);
             putnum(22, 37, (uint16_t)(mips100 % 100), 2, A_VALUE);
