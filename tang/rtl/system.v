@@ -1,15 +1,20 @@
 `timescale 1ns/1ps
-// fpga_cpu on the Tang Nano 20K, first stage: the T1 core
-// (verilog/rtl/t1_core.v) with 64 KB of block RAM, the console and program
-// loading on the USB serial port (the onboard BL616's second channel), the
-// LEDs and buttons, and the timers of docs/io.md.
+// fpga_cpu on the Tang Nano 20K: the T1 core (verilog/rtl/t1_core.v), 64 KB
+// of block RAM, the video of docs/io.md on HDMI (fpga/rtl/video.v, as on the
+// Spartan-3, in true colour), the I/O registers (fpga/rtl/iosys.v), and the
+// console and program loading on the USB serial port (the onboard BL616's
+// second channel). Not yet: the SDRAM, so the bitmap has only the 64 KB.
 //
-// The PLL makes 16.875 MHz from the 27 MHz crystal, twice: cpu_clk for T1,
-// and mem_clk, the same clock shifted 180 degrees, for memory, I/O and the
-// UART. So those run half a period (29.6 ns) after T1's edge, by when T1's
-// bus has settled (~21 ns on this part), and read data is back long before
-// T1's next edge. (A falling-edge memory needs an inverted clock, and the
-// LUT that inverts it made the block RAM's clock late: hold violations.)
+// Clocks. One PLL makes 16.875 MHz from the 27 MHz crystal, twice: cpu_clk
+// for T1, and mem_clk, the same clock shifted 180 degrees, for memory, I/O,
+// the UART and video DMA. So those run half a period (29.6 ns) after T1's
+// edge, by when T1's bus has settled, and read data is back long before
+// T1's next edge. Another PLL makes the 720p pixel clock (dvi_tx.v).
+//
+// Memory is four byte lanes of 16 KB, each a dual-port block RAM: T1 (or
+// the loader) on one port, video DMA reading 32-bit words on the other, so
+// the two never wait for each other. It repeats through the 1 MB below the
+// I/O, for T1 and for video addresses alike.
 //
 // Serial (115200 8N1). While T1 is held in reset:
 //   'L' a2 a1 a0 n2 n1 n0 <n bytes>   write n bytes from address a
@@ -17,16 +22,23 @@
 // At any time the four bytes DE AD BE EF hold T1 in reset again. While T1
 // runs, bytes received are CON_IN, CON_OUT bytes are sent, and an EXIT
 // write sends 0x04 and the low byte of the code (tools: tang/tools/run.py).
-// Memory is 64 KB at 0x000000, repeated through the 1 MB below the I/O.
-module t1tang (
+module system #(
+`ifdef SIM
+    parameter FONT_FILE = "font8x14.mem"    // the simulation runs in build/
+`else
+    parameter FONT_FILE = "build/font8x14.mem"
+`endif
+) (
     input  wire       clk,                  // 27 MHz
     input  wire       s1,                   // buttons, high when pressed
     input  wire       s2,
     input  wire       uart_rx,
     output wire       uart_tx,
-    output wire [5:0] led                   // active low
+    output wire [5:0] led,                  // active low
+    output wire [3:0] tmds_p,               // HDMI: {clock, red, green, blue}
+    output wire [3:0] tmds_n
 );
-    // ---- clock ---------------------------------------------------------------
+    // ---- clocks ------------------------------------------------------------------
     wire cpu_clk, mem_clk;
 `ifdef SIM
     assign cpu_clk = clk;                   // the testbench drives the clock
@@ -48,6 +60,9 @@ module t1tang (
     );
 `endif
     localparam CLK_HZ = 16875000;
+
+    wire sclk, pclk, plocked;
+    dvi_clocks vclk (.clk27(clk), .sclk(sclk), .pclk(pclk), .locked(plocked));
 
     // ---- T1 -------------------------------------------------------------------
     wire [23:0] addr;
@@ -83,7 +98,85 @@ module t1tang (
             default: sr_in = insts;
         endcase
 
-    // ---- UART (on the falling edge, with everything below) ---------------------
+    // ---- memory -------------------------------------------------------------------
+    wire        io = addr[23:16] == 8'hF0;
+    reg         ld_we = 1'b0;               // the loader writes when T1 is held
+    reg  [15:0] ld_a = 16'd0;
+    reg  [7:0]  ld_d = 8'd0;
+    wire        m_we = run ? (wr && !io) : ld_we;
+    wire [15:0] m_a  = run ? addr[15:0] : ld_a;
+    wire [7:0]  m_d  = run ? dout : ld_d;
+
+    wire        dma_req;
+    wire [17:0] dma_addr;
+    wire [8:0]  dma_left;
+    reg         dma_valid = 1'b0;
+    wire [31:0] dma_data;
+    wire [7:0]  lane_q [0:3];
+    reg  [1:0]  m_lane = 2'd0;
+
+    genvar l;
+    generate
+        for (l = 0; l < 4; l = l + 1) begin : lane
+            wire [7:0] qa, qb;
+            ram16k8 ram (
+                .clk(mem_clk),
+                .a_addr(m_a[15:2]), .a_we(m_we && m_a[1:0] == l), .a_d(m_d), .a_q(qa),
+                .b_addr(dma_addr[13:0]), .b_q(qb)
+            );
+            assign lane_q[l] = qa;
+            assign dma_data[8*l +: 8] = qb;
+        end
+    endgenerate
+    always @(posedge mem_clk) begin
+        m_lane    <= m_a[1:0];
+        dma_valid <= dma_req;               // a word a clock while video asks
+    end
+    wire [7:0] mem_q = lane_q[m_lane];
+
+    // ---- I/O ------------------------------------------------------------------------
+    reg  [1:0] s_s0 = 2'b00, s_s = 2'b00;
+    always @(posedge mem_clk) begin s_s0 <= {s2, s1}; s_s <= s_s0; end
+
+    wire [15:0] vid_ctrl, vid_scrollx, vid_scrolly, vid_cursor, pal_wdata, wvalue;
+    wire [31:0] vid_text, vid_bmp;
+    wire [2:0]  vid_backdrop;
+    wire [7:0]  pal_windex, io_q, leds;
+    wire        pal_we, line_tgl, line_top, con_take, con_we, exit_we;
+    reg  [8:0]  con_in = 9'h1FF;            // bit 8: empty
+    reg         io_sel = 1'b0;
+    always @(posedge mem_clk) io_sel <= io;
+    assign din = io_sel ? io_q : mem_q;
+
+    iosys ios (
+        .clk(mem_clk), .io_wr(run && io && wr), .io_rd(run && io && rd), .io_addr(addr[15:0]),
+        .io_wdata(dout), .cpu_lat(1'b1), .cur_rd(run && io && rd), .cur_addr(addr[15:0]),
+        .io_rdata(io_q), .cycles(cycles),
+        .line_tgl(line_tgl), .line_top(line_top),
+        .vid_ctrl(vid_ctrl), .vid_backdrop(vid_backdrop), .vid_text(vid_text), .vid_bmp(vid_bmp),
+        .vid_scrollx(vid_scrollx), .vid_scrolly(vid_scrolly), .vid_cursor(vid_cursor),
+        .pal_we(pal_we), .pal_windex(pal_windex), .pal_wdata(pal_wdata),
+        .switches(8'd0), .buttons({2'b00, s_s}), .leds(leds), .seg7(), .seg7_ctrl(),
+        .con_in(con_in), .con_take(con_take), .con_we(con_we), .exit_we(exit_we), .wvalue(wvalue)
+    );
+
+    // ---- video ------------------------------------------------------------------------
+    wire [23:0] rgb24;
+    wire        hs, vs, de;
+    video #(.FONT_FILE(FONT_FILE), .TRUE_COLOR(1)) vid (
+        .clk(mem_clk), .pclk(pclk),
+        .vid_ctrl(vid_ctrl), .vid_backdrop(vid_backdrop), .vid_text(vid_text), .vid_bmp(vid_bmp),
+        .vid_scrollx(vid_scrollx), .vid_scrolly(vid_scrolly), .vid_cursor(vid_cursor),
+        .pal_we(pal_we), .pal_windex(pal_windex), .pal_wdata(pal_wdata),
+        .dma_req(dma_req), .dma_addr(dma_addr), .dma_left(dma_left), .dma_take({2'b00, dma_req}),
+        .dma_valid(dma_valid), .dma_data(dma_data),
+        .line_tgl(line_tgl), .line_top(line_top),
+        .hsync(hs), .vsync(vs), .rgb(), .rgb24(rgb24), .de(de)
+    );
+    dvi_tx #(.HDMI(1)) tx (.pclk(pclk), .sclk(sclk), .rst(!plocked), .de(de), .hsync(hs), .vsync(vs),
+               .r(rgb24[23:16]), .g(rgb24[15:8]), .b(rgb24[7:0]), .tmds_p(tmds_p), .tmds_n(tmds_n));
+
+    // ---- UART -------------------------------------------------------------------------
 `ifdef SIM
     localparam BAUD_DIV = 4;                // fast serial in simulation
 `else
@@ -119,101 +212,28 @@ module t1tang (
         end
     end
 
-    // ---- memory -------------------------------------------------------------------
-    wire io = addr[23:16] == 8'hF0;
-    reg  [7:0]  mem [0:65535];
-    reg  [7:0]  mem_q = 8'd0;
-    reg         ld_we = 1'b0;               // the loader writes when T1 is held
-    reg  [15:0] ld_a = 16'd0;
-    reg  [7:0]  ld_d = 8'd0;
-    wire        m_we = run ? (wr && !io) : ld_we;
-    wire [15:0] m_a  = run ? addr[15:0] : ld_a;
-    wire [7:0]  m_d  = run ? dout : ld_d;
-    always @(posedge mem_clk) begin
-        if (m_we) mem[m_a] <= m_d;
-        mem_q <= mem[m_a];
-    end
-
-    // ---- I/O registers (16 bits: low byte held, committed with the high byte;
-    // a read of the low byte latches the high byte for the next read) ------------
-    reg  [7:0]  lo = 8'd0;
-    reg         io_sel = 1'b0;
-    reg  [7:0]  io_q = 8'd0;
-    assign din = io_sel ? io_q : mem_q;
-    reg  [15:0] latch = 16'd0;
-    reg  [15:0] latch_a = 16'hFFFF;
-    reg  [7:0]  leds = 8'd0;
-    reg  [8:0]  con_in = 9'h1FF;            // bit 8: empty
-    reg  [15:0] frame = 16'd0;
-    reg  [18:0] frame_div = 19'd0;          // 60 Hz: 281250 clocks
-    reg  [9:0]  line = 10'd0;               // 750 lines a frame, as on the 720p display
-    reg  [8:0]  line_div = 9'd0;            // 375 clocks a line
-    reg  [1:0]  s_s0 = 2'b00, s_s = 2'b00;
-    wire [15:0] wv = {dout, lo};
-
-    function [15:0] rv;
-        input [15:0] a;
-        case ({a[15:1], 1'b0})
-            16'h0004: rv = cycles[15:0];
-            16'h0006: rv = cycles[31:16];
-            16'h0008: rv = con_in[8] ? 16'hFFFF : {8'd0, con_in[7:0]};
-            16'h000A: rv = frame;
-            16'h000C: rv = {line, 5'd0, line >= 10'd720};
-            16'h0100: rv = 16'hFFFF;
-            16'h0302: rv = 16'd0;
-            16'h0600: rv = {8'd0, leds};
-            16'h0604: rv = {14'd0, s_s};
-            default:  rv = 16'd0;
-        endcase
-    endfunction
-
-    // the loader and the console share the receiver
+    // ---- console and loader ------------------------------------------------------------
     localparam L_IDLE = 3'd0, L_ADDR = 3'd1, L_LEN = 3'd2, L_DATA = 3'd3, L_GO = 3'd4;
     reg [2:0]  ls = L_IDLE;
     reg [1:0]  lk = 2'd0;
     reg [23:0] lv = 24'd0;
     reg [23:0] ln = 24'd0;
     reg        lgo = 1'b0;
+    reg [7:0]  code = 8'd0;
     reg [31:0] sync = 32'd0;
 
     always @(posedge mem_clk) begin
-        s_s0 <= {s2, s1}; s_s <= s_s0;
         txq_we <= 1'b0;
         ld_we  <= 1'b0;
 
-        // timers
-        if (frame_div == 19'd281249) begin frame_div <= 0; end else frame_div <= frame_div + 1'b1;
-        if (line_div == 9'd374) begin
-            line_div <= 0;
-            if (line == 10'd749) line <= 0; else line <= line + 1'b1;
-            if (line == 10'd719) frame <= frame + 1'b1;
-        end else line_div <= line_div + 1'b1;
+        // CON_OUT, and EXIT: 0x04 then the code
+        if (con_we) begin txq_we <= 1'b1; txq_d <= wvalue[7:0]; end
+        if (exit_we) begin txq_we <= 1'b1; txq_d <= 8'h04; lgo <= 1'b1; code <= wvalue[7:0]; end
+        if (lgo && !txq_we && !exit_we) begin
+            txq_we <= 1'b1; txq_d <= code; lgo <= 1'b0;
+        end
 
-        // T1's I/O accesses (T1 holds a bus cycle for a whole clock); read
-        // data is registered here, like the RAM's, for T1's next edge
-        io_sel <= io;
-        io_q   <= 8'd0;
-        if (run && io && rd) begin
-            if (!addr[0]) begin
-                latch   <= rv(addr[15:0]);
-                latch_a <= addr[15:0];
-                io_q    <= rv(addr[15:0]);
-                if ({addr[15:1], 1'b0} == 16'h0008) con_in[8] <= 1'b1;   // read removes it
-            end else
-                io_q <= (addr[15:0] == (latch_a | 16'd1)) ? latch[15:8] : rv(addr[15:0]) >> 8;
-        end
-        if (run && io && wr) begin
-            if (!addr[0]) lo <= dout;
-            else case ({addr[15:1], 1'b0})
-                16'h0000: begin txq_we <= 1'b1; txq_d <= lo; end
-                16'h0002: begin txq_we <= 1'b1; txq_d <= 8'h04; lgo <= 1'b1; lv <= {16'd0, lo}; end
-                16'h0600: leds <= lo;
-                default: ;
-            endcase
-        end
-        if (lgo && !txq_we) begin           // EXIT: the code byte after 0x04
-            txq_we <= 1'b1; txq_d <= lv[7:0]; lgo <= 1'b0;
-        end
+        if (con_take) con_in[8] <= 1'b1;   // a read takes it
 
         // serial input: the sync word, the loader, or CON_IN
         if (rx_ok) begin
@@ -263,6 +283,7 @@ module t1tang (
     // LEDs: T1's LEDS register; LED5 shows T1 halted, LED4 held in reset
     assign led = ~{halted, !run, leds[3:0]};
 endmodule
+
 
 // 8N1 UART, DIV clocks a bit.
 module uart #(
@@ -321,4 +342,50 @@ module uart #(
             tx  <= tsh[1];
             tb  <= tb - 1'b1;
         end
+endmodule
+
+// 16 KB of dual-port block RAM, one clock: port A reads or writes (no read
+// while writing), port B reads. Eight 16K x 1 DPBs, instantiated because
+// yosys gives a memory with two read ports a copy per port.
+module ram16k8 (
+    input  wire        clk,
+    input  wire [13:0] a_addr,
+    input  wire        a_we,
+    input  wire [7:0]  a_d,
+    output wire [7:0]  a_q,
+    input  wire [13:0] b_addr,
+    output wire [7:0]  b_q
+);
+`ifdef SIM
+    reg [7:0] ram [0:16383];
+    reg [7:0] qa = 8'd0, qb = 8'd0;
+    always @(posedge clk) begin
+        if (a_we) ram[a_addr] <= a_d;
+        else qa <= ram[a_addr];
+        qb <= ram[b_addr];
+    end
+    assign a_q = qa;
+    assign b_q = qb;
+`else
+    genvar i;
+    generate
+        for (i = 0; i < 8; i = i + 1) begin : bit_
+            wire [15:0] doa, dob;
+            DPB #(
+                .READ_MODE0(1'b0), .READ_MODE1(1'b0),
+                .WRITE_MODE0(2'b00), .WRITE_MODE1(2'b00),
+                .BIT_WIDTH_0(1), .BIT_WIDTH_1(1),
+                .BLK_SEL_0(3'b000), .BLK_SEL_1(3'b000),
+                .RESET_MODE("SYNC")
+            ) b (
+                .CLKA(clk), .CEA(1'b1), .OCEA(1'b1), .RESETA(1'b0), .WREA(a_we),
+                .ADA(a_addr), .BLKSELA(3'b000), .DIA({15'd0, a_d[i]}), .DOA(doa),
+                .CLKB(clk), .CEB(1'b1), .OCEB(1'b1), .RESETB(1'b0), .WREB(1'b0),
+                .ADB(b_addr), .BLKSELB(3'b000), .DIB(16'd0), .DOB(dob)
+            );
+            assign a_q[i] = doa[0];
+            assign b_q[i] = dob[0];
+        end
+    endgenerate
+`endif
 endmodule

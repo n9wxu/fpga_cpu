@@ -5,6 +5,11 @@
 // 2x2 to the 3-bit VGA, scrolled in x and y) and the 80x25 text layer.
 // The sprite layer is not here yet.
 //
+// Two outputs: rgb, the 3-bit VGA colour, and rgb24 with de for a digital
+// display (HDMI). In rgb24 the 3-bit colours are full scale; hi-color is
+// the palette's true colour with TRUE_COLOR = 1 (fsim --true-color), the
+// same dither as rgb with TRUE_COLOR = 0. Unused outputs are trimmed away.
+//
 // Two clock domains:
 //
 //   clk (50 MHz)    the DMA engine: for each logical line it reads the
@@ -15,7 +20,8 @@
 //
 // Buffer addresses (VID_BMP, VID_TEXT) must be multiples of 4.
 module video #(
-    parameter FONT_FILE = "font8x14.mem"
+    parameter FONT_FILE = "font8x14.mem",
+    parameter TRUE_COLOR = 0
 ) (
     input  wire        clk,
     input  wire        pclk,
@@ -43,8 +49,15 @@ module video #(
     // VGA
     output reg         hsync = 1'b0,
     output reg         vsync = 1'b0,
-    output reg  [2:0]  rgb = 3'b000
+    output reg  [2:0]  rgb = 3'b000,
+    // digital: 8 bits per channel, and data enable (the visible area)
+    output reg  [23:0] rgb24 = 24'd0,
+    output reg         de = 1'b0
 );
+    function [23:0] full;                    // a 3-bit colour at full scale
+        input [2:0] c;
+        full = {{8{c[2]}}, {8{c[1]}}, {8{c[0]}}};
+    endfunction
     localparam H_VIS = 1280, H_SYNC0 = 1390, H_SYNC1 = 1430, H_TOTAL = 1650;
     localparam V_VIS = 720,  V_SYNC0 = 725,  V_SYNC1 = 730,  V_TOTAL = 750;
     localparam LW = 640, LH = 360, TROWS = 25, CELL_H = 14;
@@ -322,10 +335,13 @@ module video #(
                         {b5, 3'b000} > t * 8'd31 };
 
     // register the layers' colours and whether each is opaque here
-    reg [2:0] bmp3, fg3, bg3;
-    reg       bmp_op3, on3, bg_op3, txt3, vis3, hs3, vs3;
+    reg [2:0]  bmp3, fg3, bg3;
+    reg [23:0] bmp24;
+    reg        bmp_op3, on3, bg_op3, txt3, vis3, hs3, vs3;
     always @(posedge pclk) begin
         bmp3    <= p_hicol ? dith : nib2[2:0];
+        bmp24   <= (p_hicol && TRUE_COLOR) ? {r5, r5[4:2], g6, g6[5:4], b5, b5[4:2]}
+                                           : full(p_hicol ? dith : nib2[2:0]);
         bmp_op3 <= p_bmp && (p_hicol ? idx2 != 0 : !nib2[3]);
         on3     <= glyph[3'd7 - gx2] | cur2;
         bg_op3  <= !cell2[14] && !(cell2[15] && (x02 ^ y02));
@@ -336,13 +352,15 @@ module video #(
     end
 
     // ---- stage 3: compose, back to front ------------------------------------------
-    reg [2:0] c;
+    reg [2:0]  c;
+    reg [23:0] c24;
     always @* begin
         c = bd_p;
-        if (bmp_op3) c = bmp3;
+        c24 = full(bd_p);
+        if (bmp_op3) begin c = bmp3; c24 = bmp24; end
         if (txt3) begin
-            if (on3)          c = fg3;
-            else if (bg_op3)  c = bg3;
+            if (on3)          begin c = fg3; c24 = full(fg3); end
+            else if (bg_op3)  begin c = bg3; c24 = full(bg3); end
         end
     end
 
@@ -350,5 +368,7 @@ module video #(
         hsync <= hs3;
         vsync <= vs3;
         rgb   <= vis3 ? c : 3'b000;
+        rgb24 <= vis3 ? c24 : 24'd0;
+        de    <= vis3;
     end
 endmodule

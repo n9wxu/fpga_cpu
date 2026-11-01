@@ -130,7 +130,7 @@ module system (
         .vid_scrollx(vid_scrollx), .vid_scrolly(vid_scrolly), .vid_cursor(vid_cursor),
         .pal_we(pal_we), .pal_windex(pal_windex), .pal_wdata(pal_wdata),
         .switches(sw_s), .buttons(btn_s), .leds(led), .seg7(seg7), .seg7_ctrl(seg7_ctrl),
-        .con_we(), .exit_we(), .wvalue()
+        .con_in(9'h100), .con_take(), .con_we(), .exit_we(), .wvalue()
     );
 
     video vid (

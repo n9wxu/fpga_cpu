@@ -11,8 +11,8 @@
 //     torn between its two bytes.
 //
 // Not here yet: the keyboard (KBD_DATA reads "no key"), sound, the file
-// service, CON_IN (reads "no input") and CON_OUT/EXIT (ignored, but
-// visible on con_we/exit_we for testbenches).
+// service. CON_IN comes from con_in (bit 8: empty; con_take pulses when a
+// read takes the byte); CON_OUT and EXIT are con_we/exit_we with wvalue.
 module iosys (
     input  wire        clk,                 // 50 MHz
     input  wire        io_wr,
@@ -45,7 +45,9 @@ module iosys (
     output reg  [7:0]  leds = 8'd0,
     output reg  [15:0] seg7 = 16'd0,
     output reg  [7:0]  seg7_ctrl = 8'h00,
-    // for testbenches
+    // console: CON_IN in, CON_OUT/EXIT out (with wvalue)
+    input  wire [8:0]  con_in,              // bit 8: nothing waiting
+    output reg         con_take = 1'b0,
     output reg         con_we = 1'b0,
     output reg         exit_we = 1'b0,
     output reg  [15:0] wvalue = 16'd0
@@ -75,7 +77,7 @@ module iosys (
         case ({a[15:1], 1'b0})
             16'h0004: rv = cycles[15:0];
             16'h0006: rv = cycles[31:16];
-            16'h0008: rv = 16'hFFFF;        // CON_IN: nothing waiting
+            16'h0008: rv = con_in[8] ? 16'hFFFF : {8'd0, con_in[7:0]};
             16'h000A: rv = frame;
             16'h000C: rv = {line, 3'b000, vblank};
             16'h0100: rv = 16'hFFFF;        // KBD_DATA: no key
@@ -107,15 +109,18 @@ module iosys (
     reg [15:0] latch = 16'd0;
     reg [15:0] latch_a = 16'hFFFF;
     wire [15:0] live = rv(cur_addr);
-    always @(posedge clk)
+    always @(posedge clk) begin
+        con_take <= 1'b0;
         if (cpu_lat && cur_rd) begin
             if (!cur_addr[0]) begin
                 io_rdata <= live[7:0];
                 latch    <= live;
                 latch_a  <= cur_addr;
+                con_take <= {cur_addr[15:1], 1'b0} == 16'h0008;
             end else
                 io_rdata <= (cur_addr == (latch_a | 16'd1)) ? latch[15:8] : live[15:8];
         end
+    end
 
     // writes
     reg [7:0] lo = 8'd0;

@@ -1,4 +1,4 @@
-"""Load an fcc image into the Tang Nano 20K's T1 (tang/rtl/t1tang.v) over
+"""Load an fcc image into the Tang Nano 20K's T1 (tang/rtl/system.v) over
 the USB serial port and run it, printing what it sends; ends with the
 program's EXIT code (or Ctrl-C).
 
