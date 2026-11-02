@@ -25,10 +25,12 @@
 #define LEDS        REG(0xF00600)
 #define SWITCHES    REG(0xF00602)
 
+#ifndef T1_KHZ                          /* CYCLE's rate (the Makefiles set it) */
 #ifdef TANG
-#define T1_KHZ 16875                    /* CYCLE's rate: T1 periods */
+#define T1_KHZ 16875                    /* T1 periods of 4 x 67.5 MHz, whatever the core */
 #else
-#define T1_KHZ 10000
+#define T1_KHZ 10000                    /* the Spartan-3 (12500 with S3PER=4) */
+#endif
 #endif
 
 #define BMP  ((volatile uint8_t *)0x0C3C00)
@@ -221,11 +223,15 @@ static const char msg[] =
     "                                                                                "
 #ifdef TANG
     "*** fpga_cpu on a Tang Nano 20K ***   "
-    "The T1 core runs these 60 frames a second at 16.875 MHz, the screen in the SDRAM "
+    "The T1F core runs these 60 frames a second at 33.75 MHz, the screen in the SDRAM "
     "inside the FPGA's package, shown on HDMI in true color ...   "
 #else
     "*** fpga_cpu on a Spartan-3 Starter Board ***   "
-    "The T1 core runs these 60 frames a second at 10 MHz, from the board's SRAM, "
+#if T1_KHZ == 12500
+    "The T1F core runs these 60 frames a second at 12.5 MHz, from the board's SRAM, "
+#else
+    "The core runs these 60 frames a second at 10 MHz, from the board's SRAM, "
+#endif
     "sharing it with the video DMA ...   "
 #endif
     "Every pixel of the 640x360 plasma was computed by T1 at start-up; what moves now is "
@@ -271,16 +277,19 @@ int main(void)
         sec_frames += (uint16_t)(now - last_frame);
         last_frame = now;
 
+        /* hardware scroll wobble: first, while still in vertical blank (the
+         * palette below takes longer than the blank, and a scroll change
+         * after the picture has started tears it) */
+        uint16_t scx = (uint16_t)(W + (sintab[phase] >> 2));
+        uint16_t scy = (uint16_t)(H + (sintab[(uint8_t)(phase * 2 + 64)] >> 3));
+        SCROLLX = scx;
+        SCROLLY = scy;
+
         /* palette cycling: indices 1-255 (0 is see-through) */
         PAL_INDEX = 1;
         for (uint16_t i = 1; i < 256; i++)
             PAL_DATA = pal[(uint8_t)(i + phase)];
 
-        /* hardware scroll wobble */
-        uint16_t scx = (uint16_t)(W + (sintab[phase] >> 2));
-        uint16_t scy = (uint16_t)(H + (sintab[(uint8_t)(phase * 2 + 64)] >> 3));
-        SCROLLX = scx;
-        SCROLLY = scy;
         stars(scx % W, scy % H);
 
         /* the scroller, a character every 4 frames */

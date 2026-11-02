@@ -5,7 +5,9 @@ variant A) on an 8-bit datapath. [docs/t1.md](../docs/t1.md) describes it.
 
 - `rtl/`: synthesizable Verilog-2001 (ISE 14.7 XST has no SystemVerilog, so
   stay within Verilog-2001). `t1_core.v` is the core (parameter `EXT_X`
-  keeps or drops extension X), `t1_rf.v` its register file.
+  keeps or drops extension X), `t1_rf.v` its register file. `t1f_core.v` is
+  T1F, the same ISA tuned for FPGAs ([docs/t1f.md](../docs/t1f.md)); every
+  tool below runs it with `T1_CORE=t1f` in the environment.
 - `tb/`: testbenches and the tools that drive them (Icarus Verilog; Python 3;
   the simulator built with `make -C sim`, and the Python environment `make`
   creates in `.venv`).

@@ -1,0 +1,24 @@
+# Timing for rtl/system.v with T1F at four cycles a clock (S3PER=4), added
+# to s3starter.ucf by the Makefile.
+#
+# T1F runs one clock per four 50 MHz cycles (memsys.v: PER = 4, LAT = 2).
+# Its own paths (with its reset and counters, which run on its clock) are a
+# PERIOD on that clock, so ISE checks hold on them too (a FROM:TO MAXDELAY
+# would not). Its bus outputs come through its decode and are registered by
+# memsys and the I/O block at e2. Read data is at the SRAM pins by
+# e2 + 15 ns (5.1 ns clock to pin, 10 ns SRAM) and reaches T1F
+# combinationally by e4. The I/O block's read register is loaded at e2. DMA reads hold each
+# address for two cycles.
+NET "cpu_clk" TNM_NET = "cpu_clk";
+TIMESPEC "TS_cpu_clk" = PERIOD "cpu_clk" 80 ns HIGH 25%;
+INST "cpu/*" TNM = "t1";
+INST "t1_rst" TNM = "t1";
+INST "cycles*" TNM = "t1";
+INST "insts*" TNM = "t1";
+INST "mem/*" TNM = "membus";
+INST "io/io_rdata*" TNM = "membus";
+INST "io/latch*" TNM = "membus";
+INST "io/io_rdata*" TNM = "iord";
+TIMESPEC "TS_t1bus" = FROM "t1" TO "membus" TS_clk * 2;
+TIMESPEC "TS_din"   = FROM "PADS" TO "t1" 25 ns;
+TIMESPEC "TS_iord"  = FROM "iord" TO "t1" TS_clk * 3;

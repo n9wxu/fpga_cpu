@@ -25,8 +25,11 @@ UCF   := build/$(TOP).ucf
 
 SRC_board_test  := rtl/seg7.v rtl/clkgen.v rtl/video720.v
 DATA_board_test := build/font8x14.mem build/text_demo.hex
+# the core in system: t1f (verilog/rtl/t1f_core.v, docs/t1f.md) or t1
+CORE ?= t1f
+CDEF := $(if $(filter t1f,$(CORE)),T1F $(if $(filter 4,$(S3PER)),T1F_PER4))
 SRC_system      := rtl/memsys.v rtl/iosys.v rtl/video.v rtl/jtagldr.v rtl/clkgen.v rtl/clkgate.v rtl/seg7.v \
-                   ../verilog/rtl/t1_core.v ../verilog/rtl/t1_rf.v
+                   ../verilog/rtl/$(CORE)_core.v ../verilog/rtl/t1_rf.v
 DATA_system     := build/font8x14.mem
 SRC_t1test      := rtl/jtagldr.v rtl/clkgen.v rtl/clkgate.v rtl/seg7.v \
                    ../verilog/rtl/t1_core.v ../verilog/rtl/t1_rf.v
@@ -50,11 +53,17 @@ ROOT_FILES = $(foreach f,$(SRC) $(UCF) scripts/ise_build.sh $(DATA),$(if $(filte
 OPENOCD ?= $(firstword $(wildcard $(HOME)/Library/Arduino15/packages/esp32/tools/openocd-esp32/*/bin/openocd) openocd)
 OCD     := $(OPENOCD) -f openocd/opella-ld.cfg -f openocd/s3starter.cfg
 
+FORCE:
+
 .PHONY: sim sim-board_test sim-system sim-t1test bit prog scan demo run clean
 
-build/$(TOP).ucf: constraints/s3starter.ucf $(wildcard constraints/$(TOP).ucf)
+# S3PER=4: T1F at four 50 MHz cycles a clock (system_per4.ucf); the default is five
+S3PER ?= 5
+DUCF := constraints/$(TOP)$(if $(and $(filter system,$(TOP)),$(filter 4,$(S3PER))),_per4).ucf
+build/$(TOP).ucf: constraints/s3starter.ucf $(wildcard $(DUCF)) FORCE
 	@mkdir -p build
-	cat $^ > $@
+	@cat $(filter-out FORCE,$^) > $@.new
+	@cmp -s $@.new $@ && rm $@.new || mv $@.new $@     # rewritten only when CORE changes it
 
 build/font8x14.mem: ../sim/assets/font8x14.mem
 	@mkdir -p build
@@ -71,7 +80,7 @@ build/text_demo.hex: tools/mktext.py
 sim: sim-$(TOP)
 
 sim-system: $(DATA)
-	iverilog -g2005 -Wall -DSIM -o build/system_tb.vvp sim/system_tb.v sim/sram_model.v $(SIM_SRC)
+	iverilog -g2005 -Wall -DSIM $(addprefix -D,$(CDEF)) -o build/system_tb.vvp sim/system_tb.v sim/sram_model.v $(SIM_SRC)
 	cd build && vvp -n system_tb.vvp $(SIMARGS)
 
 sim-t1test: $(DATA)
@@ -90,7 +99,7 @@ bit: build/$(TOP).bit
 build/$(TOP).bit: $(SRC) $(UCF) scripts/ise_build.sh $(DATA)
 	ssh $(ISE_HOST) mkdir -p $(ISE_DIR)/build
 	cd .. && rsync -aR $(ROOT_FILES) $(ISE_HOST):$(ISE_ROOT)/
-	ssh $(ISE_HOST) 'cd $(ISE_DIR) && scripts/ise_build.sh $(TOP) $(PART) $(UCF) $(SRC) > build/$(TOP).log 2>&1' \
+	ssh $(ISE_HOST) 'cd $(ISE_DIR) && XSTDEF="$(if $(filter system,$(TOP)),$(CDEF))" scripts/ise_build.sh $(TOP) $(PART) $(UCF) $(SRC) > build/$(TOP).log 2>&1' \
 	  || { ssh $(ISE_HOST) 'tail -40 $(ISE_DIR)/build/$(TOP).log'; exit 1; }
 	scp -q $(ISE_HOST):$(ISE_DIR)/build/$(TOP).{log,syr,twr,bit,svf} build/
 	@grep -A3 "Timing summary" build/$(TOP).twr
@@ -101,9 +110,9 @@ prog: build/$(TOP).bit
 
 # Programs for TOP=system: fcc images loaded over JTAG (tools/jtagload.py)
 PROG ?= build/demo.bin
-build/demo.bin: demo/demo.c
+build/demo.bin: demo/demo.c FORCE
 	@mkdir -p build
-	cd .. && llvm/fcc -O2 -o fpga/$@ fpga/demo/demo.c
+	cd .. && llvm/fcc -O2 $(if $(filter 4,$(S3PER)),-DT1_KHZ=12500) -o fpga/$@ fpga/demo/demo.c
 
 demo: build/demo.bin
 

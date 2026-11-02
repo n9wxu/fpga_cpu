@@ -53,8 +53,13 @@ module system (
 
     wire        cpu_lat;
 
+`ifdef T1F
+    t1f_core #(.EXT_X(0)) cpu (    // extension X off: fcc uses it only with --ext
+        .clk(cpu_clk), .ce(1'b1), .rst(t1_rst), .reset_pc(entry),
+`else
     t1_core #(.EXT_X(0)) cpu (     // extension X off: fcc uses it only with --ext
         .clk(cpu_clk), .rst(t1_rst), .reset_pc(entry),
+`endif
         .addr(cpu_addr), .mem_rd(cpu_rd), .mem_wr(cpu_wr), .dout(cpu_dout), .din(cpu_din),
         .sr_sel(sr_sel), .sr_in(sr_in),
         .halted(halted), .halt_code(halt_code), .retire(retire)
@@ -93,7 +98,16 @@ module system (
     wire [17:0] ldr_addr;
     wire [31:0] ldr_data;
 
-    memsys mem (
+    // Five 50 MHz cycles a clock (10 MHz), the bus taken at e2, for T1 and
+    // T1F. T1F_PER4 (make S3PER=4): T1F at four (12.5 MHz). ISE passes it
+    // (bus 38 ns, read data 12 ns from the pins), the demo runs 1.35x
+    // faster, but its palette animation is less even on the board than at
+    // five; not understood yet (docs/t1f.md).
+`ifdef T1F_PER4
+    memsys #(.PER(4), .LAT(2)) mem (
+`else
+    memsys #(.PER(5), .LAT(2)) mem (
+`endif
         .clk(clk50), .cpu_ce(cpu_ce),
         .cpu_addr(cpu_addr), .cpu_rd(cpu_rd), .cpu_wr(cpu_wr), .cpu_dout(cpu_dout), .cpu_din(cpu_din),
         .io_wr(io_wr), .io_rd(io_rd), .io_addr(io_addr), .io_wdata(io_wdata),

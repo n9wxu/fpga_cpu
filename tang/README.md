@@ -32,17 +32,19 @@ must be pushed fully into the connector. If the TV crops the edges
 
 ## system
 
-T1 runs on a 67.5 MHz clock gated by a DQCE: a T1 cycle is 4 clocks
-(16.875 MHz) for block RAM (000000-00FFFF) and I/O, and longer while the
-SDRAM answers (everything else in the 1 MB; reads take 7 clocks). The SDRAM
+The core is T1F (`../verilog/rtl/t1f_core.v`, docs/t1f.md; `make CORE=t1`
+builds T1). It runs on a 67.5 MHz clock gated by a DQCE: a T1F cycle is 2
+clocks (33.75 MHz) for block RAM (000000-00FFFF), 3 for I/O, and longer
+while the SDRAM answers (everything else in the 1 MB). T1 needs 4 clocks. The SDRAM
 controller (`rtl/sdram.v`) also feeds video DMA, so video buffers must be in
 the SDRAM. The video is `../fpga/rtl/video.v`, shared with the Spartan-3, in
 true colour; the I/O registers are `../fpga/rtl/iosys.v`. Programs link with
 `--stack 0x10000` (the Makefile does) so the stack is in block RAM.
 
 - `../fpga/demo/demo.c` built with `-DTANG` (`make run`, the default): the demo
-  (measured: 60 fps, CPU busy 20%, 3.32 MIPS, 5.06 T1 clocks per instruction,
-  SDRAM waits included; the Spartan-3 runs it at 37% busy, 1.81 MIPS, CPI 5.51)
+  (measured, 60 fps: T1F 10% busy, 6.47 MIPS; T1 20% busy, 3.32 MIPS; the
+  Spartan-3's T1 37% busy, 1.81 MIPS. The demo's clocks per instruction are
+  in 16.875 MHz units, SDRAM waits included: T1F 2.6, T1 5.06)
 - `progs/sdtest.c`: SDRAM tests, then a scrolling hi-color bitmap
 - `progs/vidtest.c`: the text layer: attributes, CP437, live counters
 
@@ -52,11 +54,9 @@ sometimes gave the next word, so the controller leaves a cycle between
 reads; capture at the falling edge, an earlier SDRAM clock, or the input
 register in the I/O block (nextpnr `ioreg_in_iob`) all failed.
 
-T1 (`../verilog/rtl/t1_core.v`) runs on a 16.875 MHz PLL clock; memory, I/O and
-the UART run on the same clock shifted 180 degrees, so they see T1's bus half
-a period after its edge. The loader protocol and the console are described at
-the top of `rtl/system.v`; `tools/run.py` (needs pyserial) loads an image,
-runs it and prints its output until EXIT.
+The loader protocol and the console are described at the top of
+`rtl/system.v`; `tools/run.py` (needs pyserial) loads an image, runs it and
+prints its output until EXIT.
 
 ## Board notes
 

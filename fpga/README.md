@@ -23,9 +23,12 @@ design is running; `0x088C` has DONE low, the load failed.
 
 ## The system design
 
-- `rtl/system.v`: the top. T1 (`../verilog/rtl/t1_core.v`, extension X off)
-  runs at **10 MHz**: one clock per five 50 MHz cycles, on a gated global
-  clock (`rtl/clkgate.v`). Its reset and its cycle and instruction counters
+- `rtl/system.v`: the top. The core is T1F (`../verilog/rtl/t1f_core.v`,
+  docs/t1f.md, extension X off; `make CORE=t1` builds T1) at **10 MHz**: one
+  clock per five 50 MHz cycles, on a gated global clock (`rtl/clkgate.v`).
+  `make S3PER=4` runs T1F at four cycles (12.5 MHz, `constraints/system_per4.ucf`):
+  it meets timing and runs the demo 1.35x faster, but the demo's palette
+  animation is less even than at five, for a reason not yet found. Its reset and its cycle and instruction counters
   (SR1-SR3, `CYCLE`) run on that clock.
 - `rtl/memsys.v`: the SRAM, shared in periods: a CPU period (five cycles;
   T1's bus is registered at the second edge, read data reaches T1 straight
@@ -45,17 +48,20 @@ design is running; `0x088C` has DONE low, the load failed.
   T1 and reads SRAM back. `tools/jtagload.py` drives it (`--status`,
   `--verify`, `--dump`).
 
-Measured on the board with the demo: 1.81 MIPS while working, 5.5 T1 clocks
-per instruction (the T1 cycle counts of docs/t1.md, plus memory accesses
-lost to video DMA). The design uses 91% of the slices.
+Measured on the board with the demo: T1 1.81 MIPS while working (37% busy),
+5.51 clocks per instruction (the cycle counts of docs/t1.md, plus memory
+accesses lost to video DMA); T1F 1.95 MIPS, 5.11; T1F at four cycles
+(S3PER=4) 2.45 MIPS, 5.08.
+With T1F the design uses 97% of the LUTs.
 
 ### Why 10 MHz
 
-T1 meets 21 MHz on its own, but its bus outputs (address, data, strobes)
-come out of its single-cycle instruction decode about 40 ns after its clock
-edge, and it expects read data in the same cycle. With the SRAM's 10 ns and
-the pins in between, a CPU access needs five 50 MHz cycles. A pipelined core
-(c1/c2 of docs/cores.md) is where speed comes from.
+T1's bus outputs (address, data, strobes) settle ~40 ns after its clock edge
+(T1F's 38 ns), so they are registered two 50 MHz cycles later. With the
+SRAM's 10 ns and the pins, read data reaches T1 ~25 ns after the pins (T1F:
+12 ns): five cycles in all for T1, four for T1F (S3PER=4, see above). A core
+that pipelines its bus (c1/c2 of docs/cores.md) is where more speed comes
+from.
 
 ### Programs
 

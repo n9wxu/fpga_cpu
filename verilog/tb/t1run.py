@@ -18,16 +18,20 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 FSIM = os.path.join(ROOT, "sim", "build", "fsim")
 BUILD = os.path.join(ROOT, "verilog", "build")
-SRCS = [os.path.join(HERE, "t1_tb.v"), os.path.join(ROOT, "verilog", "rtl", "t1_core.v"),
+# T1_CORE=t1f runs everything on T1F (verilog/rtl/t1f_core.v) instead of T1
+CORE = os.environ.get("T1_CORE", "t1")
+SRCS = [os.path.join(HERE, "t1_tb.v"), os.path.join(ROOT, "verilog", "rtl", f"{CORE}_core.v"),
         os.path.join(ROOT, "verilog", "rtl", "t1_rf.v")]
 
 
 def build(ext_x=1):
     os.makedirs(BUILD, exist_ok=True)
-    vvp = os.path.join(BUILD, f"t1_tb_x{ext_x}.vvp")
+    tag = "" if CORE == "t1" else f"_{CORE}"
+    vvp = os.path.join(BUILD, f"t1_tb{tag}_x{ext_x}.vvp")
     if os.path.exists(vvp) and all(os.path.getmtime(vvp) > os.path.getmtime(s) for s in SRCS):
         return vvp
-    r = subprocess.run(["iverilog", "-g2001", f"-Pt1_tb.EXT_X={ext_x}", "-o", vvp, *SRCS],
+    defs = ["-DT1F"] if CORE == "t1f" else []
+    r = subprocess.run(["iverilog", "-g2001", *defs, f"-Pt1_tb.EXT_X={ext_x}", "-o", vvp, *SRCS],
                        capture_output=True, text=True)
     if r.returncode:
         sys.exit(r.stderr)

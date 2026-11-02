@@ -1,6 +1,8 @@
-# Timing for rtl/system.v, added to s3starter.ucf by the Makefile.
+# Timing for rtl/system.v, added to s3starter.ucf by the Makefile
+# (system_per4.ucf for S3PER=4).
 #
-# T1 runs one clock per five 50 MHz cycles (memsys.v: PER = 5, LAT = 2).
+# The core (T1F or T1) runs one clock per five 50 MHz cycles (memsys.v:
+# PER = 5, LAT = 2).
 # Its own paths (with its reset and counters, which run on its clock) are a
 # PERIOD on that clock, so ISE checks hold on them too (a FROM:TO MAXDELAY
 # would not). Its bus outputs come through its decode and are registered by

@@ -107,8 +107,13 @@ module system #(
     reg         t1_rst = 1'b1;
     always @(posedge cpu_clk) t1_rst <= !run;
 
+`ifdef T1F
+    t1f_core #(.EXT_X(0)) cpu (
+        .clk(cpu_clk), .ce(1'b1), .rst(t1_rst), .reset_pc(entry),
+`else
     t1_core #(.EXT_X(0)) cpu (
         .clk(cpu_clk), .rst(t1_rst), .reset_pc(entry),
+`endif
         .addr(addr), .mem_rd(rd), .mem_wr(wr), .dout(dout), .din(din),
         .sr_sel(sr_sel), .sr_in(sr_in),
         .halted(halted), .halt_code(halt_code), .retire(retire)
@@ -135,8 +140,13 @@ module system #(
         endcase
 
     // ---- the period: T1's bus at lat, then its edge when the access is done ---------
+`ifdef T1F
+    localparam PER = 2;                     // fclk cycles in a T1F period (BRAM, I/O)
+`else
+    localparam PER = 4;
+`endif
     reg  [3:0]  ph = 4'd0;                  // fclk cycles since T1's edge
-    wire        lat = ph == 4'd1;
+    wire        lat = ph == (PER == 2 ? 4'd0 : 4'd1);   // the bus has settled (T1F 11.6 ns, T1 ~21 ns)
     wire        io  = addr[23:16] == 8'hF0;
     wire        low = addr[23:16] == 8'h00;
     reg  [1:0]  src = 2'd0;                 // din from: 0 block RAM, 1 I/O, 2 SDRAM
@@ -155,21 +165,36 @@ module system #(
     wire        c_wdone, c_rsoon, sd_ready;
     wire [7:0]  c_q;
 
+    // T1F: at lat (one fclk cycle after T1F's edge) the address alone says
+    // whether this is block RAM or I/O (served now, T1F's edge a cycle
+    // later) or the SDRAM, whose request is taken a cycle later still, when
+    // rd/wr (from T1F's decode) have had two cycles. T1 has four-cycle
+    // periods and takes everything at lat.
+    reg         sd_q = 1'b0, io_q2 = 1'b0;  // the SDRAM region, I/O, at lat
+    wire        sd_now = (PER == 2) ? (ph == 4'd1 && sd_q) : (lat && !io && !low);
+    wire        io_lat = (PER == 2) ? (ph == 4'd1 && io_q2) : lat;   // I/O registers: their address decode gets two cycles
     always @(posedge fclk) begin
         ph     <= cpu_ce ? 4'd0 : (ph == 4'd15 ? ph : ph + 1'b1);
         cpu_ce <= 1'b0;
-        if (ph == 4'd2) cycles_t1 <= cycles;
         if (lat) begin
-            src <= io ? 2'd1 : low ? 2'd0 : 2'd2;
-            if (run && !io && !low && (rd || wr)) begin
+            cycles_t1 <= cycles;            // SR0/SR1 hold still from here to T1's edge
+            src  <= io ? 2'd1 : low ? 2'd0 : 2'd2;
+            sd_q <= !io && !low;
+            io_q2 <= io;
+        end
+        if (sd_now && run) begin
+            if (run && (rd || wr)) begin
                 c_req   <= 1'b1;
                 c_we    <= wr;
                 c_addr  <= addr[22:0];
                 c_wd    <= dout;
                 t1_wait <= 1'b1;
-            end
+            end else if (PER == 2)
+                cpu_ce <= 1'b1;             // no access after all
         end
-        if (ph == 4'd2 && !t1_wait) cpu_ce <= 1'b1;
+        // (held in reset, T1 is clocked whatever its bus says)
+        if (ph == PER - 2 && !t1_wait && (!run || PER != 2 || low)) cpu_ce <= 1'b1;
+        if (PER == 2 && ph == 4'd1 && io_q2 && run) cpu_ce <= 1'b1;   // I/O done at io_lat
         if (c_req && (c_wdone || c_rsoon)) begin
             c_req <= 1'b0;
             if (t1_wait) begin t1_wait <= 1'b0; cpu_ce <= 1'b1; end
@@ -231,8 +256,8 @@ module system #(
         endcase
 
     iosys ios (
-        .clk(fclk), .io_wr(lat && run && io && wr), .io_rd(lat && run && io && rd),
-        .io_addr(addr[15:0]), .io_wdata(dout), .cpu_lat(lat), .cur_rd(run && io && rd),
+        .clk(fclk), .io_wr(io_lat && run && io && wr), .io_rd(io_lat && run && io && rd),
+        .io_addr(addr[15:0]), .io_wdata(dout), .cpu_lat(io_lat), .cur_rd(run && io && rd),
         .cur_addr(addr[15:0]), .io_rdata(io_q), .cycles(cycles),
         .line_tgl(line_tgl), .line_top(line_top),
         .vid_ctrl(vid_ctrl), .vid_backdrop(vid_backdrop), .vid_text(vid_text), .vid_bmp(vid_bmp),

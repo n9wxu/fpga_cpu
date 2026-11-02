@@ -21,7 +21,11 @@ OSS    ?= $(HOME)/oss-cad-suite/bin
 DEVICE := GW2AR-LV18QN88C8/I7
 FAMILY := GW2A-18C
 
-T1 := ../verilog/rtl/t1_core.v ../verilog/rtl/t1_rf.v
+# the core: t1f (verilog/rtl/t1f_core.v, the FPGA variant; T1F periods are 2
+# fclk cycles) or t1 (t1_core.v, 4)
+CORE ?= t1f
+T1 := ../verilog/rtl/$(CORE)_core.v ../verilog/rtl/t1_rf.v
+CDEF := $(if $(filter t1f,$(CORE)),-DT1F)
 SRC_blinky   :=
 SRC_hdmitest := rtl/dvi_tx.v
 SRC_system   := $(T1) rtl/dvi_tx.v ../fpga/rtl/video.v ../fpga/rtl/iosys.v rtl/sdram.v
@@ -51,7 +55,7 @@ build/font8x14.mem: ../sim/assets/font8x14.mem
 
 build/$(TOP).json: $(SRC) $(DATA_$(TOP))
 	@mkdir -p build
-	$(OSS)/yosys -q -l build/$(TOP)-yosys.log $(DEFS) -p "read_verilog -defer $(SRC); synth_gowin -top $(TOP) -json $@ -family gw2a"
+	$(OSS)/yosys -q -l build/$(TOP)-yosys.log $(CDEF) $(DEFS) -p "read_verilog -defer $(SRC); synth_gowin -top $(TOP) -json $@ -family gw2a"
 
 build/$(TOP)_pnr.json: build/$(TOP).json build/$(TOP).cst $(wildcard constraints/$(TOP).sdc)
 	$(OSS)/nextpnr-himbaechel -q -l build/$(TOP)-pnr.log --json $< --write $@ --device $(DEVICE) \
@@ -67,7 +71,7 @@ prog: build/$(TOP).fs
 
 sim: $(DATA_$(TOP))
 	@mkdir -p build
-	$(OSS)/iverilog -g2005 -Wall -DSIM -o build/$(TOP)_tb.vvp sim/$(TOP)_tb.v $(SIM_$(TOP)) $(SRC)
+	$(OSS)/iverilog -g2005 -Wall -DSIM $(CDEF) -o build/$(TOP)_tb.vvp sim/$(TOP)_tb.v $(SIM_$(TOP)) $(SRC)
 	cd build && $(OSS)/vvp -n $(TOP)_tb.vvp $(SIMARGS)
 
 PROG ?= build/demo.bin
