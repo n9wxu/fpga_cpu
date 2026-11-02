@@ -1,0 +1,13 @@
+# Timing for rtl/t1test.v, added to s3starter.ucf by the Makefile.
+# GATED = 1: T1 clocked as in system.v (an edge every five 50 MHz cycles);
+# its bus is registered two cycles after its edge, and the RAM's read data
+# (registered then) has three cycles to reach it.
+INST "cpu/*" TNM = "t1";
+INST "t1_rst" TNM = "t1";
+INST "was_io*" TNM = "t1bus";
+INST "led*" TNM = "t1bus";
+INST "seg7*" TNM = "t1bus";
+INST "Mram_ram*" TNM = "t1bus";
+TIMESPEC "TS_t1"    = FROM "t1" TO "t1" TS_clk * 5;
+TIMESPEC "TS_t1bus" = FROM "t1" TO "t1bus" TS_clk * 2;
+TIMESPEC "TS_t1din" = FROM "t1bus" TO "t1" TS_clk * 3;

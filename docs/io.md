@@ -88,7 +88,7 @@ sets the layout below, with text and cursor on.
 | 10:8 | foreground color |
 | 13:11 | background color |
 | 14 | 1 = background is transparent, so lower layers show through |
-| 15 | stipple: draw the background as a 50% checkerboard of the background color and transparency |
+| 15 | stipple: draw the background as a 50% checkerboard of the background color and transparency (on a true-color display, such as HDMI or the simulator's `--true-color`: a 50% blend of the background color with what is beneath) |
 
 The buffer is 4000 bytes, row-major.
 

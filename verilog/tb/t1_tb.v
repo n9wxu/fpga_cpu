@@ -31,7 +31,11 @@ module t1_tb;
     reg  [15:0] sr_in;
     reg  [23:0] reset_pc;
 
+`ifdef T1F
+    t1f_core #(.EXT_X(EXT_X)) core (.clk(clk), .ce(1'b1), .rst(rst), .reset_pc(reset_pc), .addr(addr), .mem_rd(mem_rd), .mem_wr(mem_wr),
+`else
     t1_core #(.EXT_X(EXT_X)) core (.clk(clk), .rst(rst), .reset_pc(reset_pc), .addr(addr), .mem_rd(mem_rd), .mem_wr(mem_wr),
+`endif
                   .dout(dout), .din(din), .sr_sel(sr_sel), .sr_in(sr_in),
                   .halted(halted), .halt_code(halt_code), .retire(retire));
 

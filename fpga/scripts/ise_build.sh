@@ -25,16 +25,22 @@ mkdir -p build && cd build
 for f in "$@"; do echo "verilog work \"../$f\"" >> "$TOP.prj"; done
 
 mkdir -p xst/tmp
+# XSTDEF (environment): a Verilog define, e.g. T1F
+DEFOPT=""
+if [ -n "${XSTDEF:-}" ]; then DEFOPT="-define {$XSTDEF}"; fi
 cat > "$TOP.xst" <<XST
 set -tmpdir xst/tmp
-run -ifn $TOP.prj -ifmt mixed -ofn $TOP -ofmt NGC -p $PART -top $TOP -opt_mode Speed -opt_level 1
+run -ifn $TOP.prj -ifmt mixed -ofn $TOP -ofmt NGC -p $PART -top $TOP -opt_mode Speed -opt_level 1 $DEFOPT
 XST
 
 xst -ifn "$TOP.xst" -ofn "$TOP.syr"
 # -aul: the UCF covers the whole board; a design may use only some of it.
 ngdbuild -aul -p "$PART" -uc "../$UCF" "$TOP.ngc" "$TOP.ngd"
-map -p "$PART" -o "${TOP}_map.ncd" "$TOP.ngd" "$TOP.pcf"
-par -w "${TOP}_map.ncd" "$TOP.ncd" "$TOP.pcf"
+# -pr b: registers next to pins go into the I/O blocks (the SRAM bus);
+# -c 100: pack unrelated logic into slices too (the system design fills the part);
+# -timing, -ol high: timing-driven packing and placement, full effort
+map -pr b -c 100 -timing -ol high -p "$PART" -o "${TOP}_map.ncd" "$TOP.ngd" "$TOP.pcf"
+par -w -ol high "${TOP}_map.ncd" "$TOP.ncd" "$TOP.pcf"
 trce -v 3 -u "$TOP.ncd" -o "$TOP.twr" "$TOP.pcf"
 # JtagClk startup is right for loading over JTAG; use CCLK when writing the Platform Flash.
 bitgen -w -g StartUpClk:JtagClk "$TOP.ncd" "$TOP.bit" "$TOP.pcf"

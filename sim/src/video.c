@@ -49,6 +49,15 @@ static uint32_t hicolor(uint16_t c565, int x, int y, int true_color)
     return rgb8[on];
 }
 
+/* the average of two colors, channel by channel */
+static uint32_t blend50(uint32_t a, uint32_t b)
+{
+    uint32_t r = 0;
+    for (int sh = 0; sh < 24; sh += 8)
+        r |= ((((a >> sh) & 255) + ((b >> sh) & 255)) >> 1) << sh;
+    return r;
+}
+
 void video_render(const cpu_t *c, uint32_t *px, int true_color, int cursor_on)
 {
     const iodev_t *d = &c->dev;
@@ -96,8 +105,14 @@ void video_render(const cpu_t *c, uint32_t *px, int true_color, int cursor_on)
                     on = 1;
                 if (on)
                     col = rgb8[fg];
-                else if (!(v & 0x4000) && !((v & 0x8000) && ((x + y) & 1)))
-                    col = rgb8[bg];
+                else if (!(v & 0x4000)) {
+                    if (!(v & 0x8000))
+                        col = rgb8[bg];
+                    else if (true_color)       /* stipple: a 50% blend */
+                        col = blend50(col, rgb8[bg]);
+                    else if (!((x + y) & 1))   /* stipple: a checkerboard */
+                        col = rgb8[bg];
+                }
             }
             o[2 * x] = o[2 * x + 1] = col;
         }
