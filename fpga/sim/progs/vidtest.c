@@ -1,7 +1,7 @@
 /* Video test for fpga/rtl/video.v: the picture comes with the image (the
  * bitmap at 0C3C00 and the text at 0FC000, see tools/mkvidtest.py); this
  * sets the palette and the registers, then exits. The frame after exit
- * must equal fsim --screenshot. HICOL=0 tests the 8-color bitmap. */
+ * must equal fsim --screenshot. HICOL=0 tests the 8-color bitmap, HICOL=2 the 16-color one (direct). */
 #include <stdint.h>
 #include <fcpu.h>
 
@@ -21,6 +21,6 @@ int main(void)
     REG(0xF00214) = 700;                   /* scroll x: 700 mod 640 = 60 */
     REG(0xF00216) = 391;                   /* scroll y: 391 mod 360 = 31 */
     REG(0xF00218) = 3 * 80 + 5;            /* cursor */
-    REG(0xF00200) = 0x23 | (HICOL ? 4 : 0);   /* text, bitmap, cursor (+ hi-color) */
+    REG(0xF00200) = 0x23 | (HICOL == 1 ? 4 : HICOL == 2 ? 0x80 : 0);   /* text, bitmap, cursor (+ hi-color or 16-color) */
     return 0;
 }

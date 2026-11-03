@@ -55,15 +55,15 @@ module fcsys (
 
     // SR1-SR3 and CYCLE: FC clocks and instructions since the start
     reg [31:0] cycles = 32'd0;
-    reg [15:0] insts = 16'd0;
+    reg [31:0] insts = 32'd0;              // SR3: the low 16 bits; INSTRET (I/O): all 32
     always @(posedge cpu_clk)
-        if (fc_rst) begin cycles <= 32'd0; insts <= 16'd0; end
+        if (fc_rst) begin cycles <= 32'd0; insts <= 32'd0; end
         else begin cycles <= cycles + 1'b1; insts <= insts + retire; end
     always @*
         case (sr_sel)
             2'd0: sr_in = cycles[15:0];
             2'd1: sr_in = cycles[31:16];
-            default: sr_in = insts;
+            default: sr_in = insts[15:0];
         endcase
 
     // ---- memory ------------------------------------------------------------------
@@ -108,7 +108,7 @@ module fcsys (
     end
     iosys io (
         .clk(clk50), .io_wr(io_wr), .io_rd(1'b0), .io_addr(io_addr), .io_wdata(io_wdata),
-        .cpu_lat(io_lat), .cur_rd(io_lat), .cur_addr(io_addr), .io_rdata(io_rdata), .cycles(cycles),
+        .cpu_lat(io_lat), .cur_rd(io_lat), .cur_addr(io_addr), .io_rdata(io_rdata), .cycles(cycles), .insts(insts),
         .line_tgl(line_tgl), .line_top(line_top),
         .vid_ctrl(vid_ctrl), .vid_backdrop(vid_backdrop), .vid_text(vid_text), .vid_bmp(vid_bmp),
         .vid_scrollx(vid_scrollx), .vid_scrolly(vid_scrolly), .vid_cursor(vid_cursor),
@@ -130,7 +130,7 @@ module fcsys (
 
     // ---- JTAG ----------------------------------------------------------------------
     jtagldr ldr (
-        .clk(clk50), .status({1'b0, halted, !fc_rst, 5'd0, halt_code, insts}),
+        .clk(clk50), .status({1'b0, halted, !fc_rst, 5'd0, halt_code, insts[15:0]}),
         .run(run), .entry(entry),
         .ldr_req(ldr_req), .ldr_rd(ldr_rd), .ldr_q(ldr_q), .trace_rd(),
         .ldr_addr(ldr_addr), .ldr_data(ldr_data), .ldr_done(ldr_done)

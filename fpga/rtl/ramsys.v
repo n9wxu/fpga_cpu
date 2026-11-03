@@ -12,6 +12,7 @@
 //             After the data port, so a store reaches the RAM before
 //             T1S fetches the code it changed again
 //   3 loader  JTAG: single words, while T1S is held in reset
+//   4 sound   audio_lite.v's streaming player: a word an output frame
 module ramsys (
     input  wire        clk,                 // 50 MHz pin
     input  wire [3:0]  btn,
@@ -25,7 +26,9 @@ module ramsys (
     output wire        sram_oe_n,
     output wire        sram_we_n,
     output wire [1:0]  sram_ce_n,
-    output wire [3:0]  sram_be_n
+    output wire [3:0]  sram_be_n,
+    // I2S to a DAC on the A2 expansion connector (audio_lite.v)
+    output wire        i2s_bck, i2s_lrck, i2s_data
 );
     parameter PER = 5;                      // 50 MHz cycles in a T1F period, at least
 
@@ -62,7 +65,7 @@ module ramsys (
 `endif
 
     // ================================================================ the CPU
-    wire [3:0]  p_ack, p_rvalid;
+    wire [4:0]  p_ack, p_rvalid;
     wire [31:0] p_rdata;
     wire        cpu_ce;
     wire [23:0] cpu_addr;
@@ -91,32 +94,37 @@ module ramsys (
         .halted(halted), .halt_code(halt_code), .retire(retire)
     );
 
-    reg [31:0] cycles = 32'd0;
     reg [31:0] insts = 32'd0;              // SR3 and the loader's status read the low 16 bits
-    // cycles: T1F's steps; insts: retire pulses for a clock after a step
+    // insts: retire pulses for a clock after a step
     always @(posedge clk50) begin
-        if (cpu_ce) cycles <= t1_rst ? 32'd0 : cycles + 1'b1;
         if (cpu_ce && t1_rst) insts <= 32'd0;
         else insts <= insts + {31'd0, retire};
     end
-    always @*
-        case (sr_sel)
-            2'd0: sr_in = cycles[15:0];
-            2'd1: sr_in = cycles[31:16];
-            default: sr_in = insts[15:0];
-        endcase
+`ifdef SIM
+    // T1S's steps, for the testbench's statistics only
+    reg [31:0] cycles = 32'd0;
+    always @(posedge clk50)
+        if (cpu_ce) cycles <= t1_rst ? 32'd0 : cycles + 1'b1;
+`endif
 
-    // CYCLE (the I/O block): 10 MHz ticks, real time (T1F's clocks vary in
-    // length here; programs take CYCLE at T1_KHZ = 10000, as on system.v)
+    // CYCLE (the I/O block) and SR1-SR2: 10 MHz ticks, real time (T1S's
+    // steps vary in length here; programs take CYCLE at T1_KHZ = 10000, as
+    // on system.v). There is no step counter: its 32 LUTs went to sound.
     reg [31:0] tick10 = 32'd0;
     reg [2:0]  div5 = 3'd0;
     always @(posedge clk50) begin
         div5 <= (div5 == 3'd4) ? 3'd0 : div5 + 3'd1;
         if (div5 == 3'd4) tick10 <= tick10 + 32'd1;
     end
+    always @*
+        case (sr_sel)
+            2'd0: sr_in = tick10[15:0];
+            2'd1: sr_in = tick10[31:16];
+            default: sr_in = insts[15:0];
+        endcase
 
     // ================================================================ the RAM machine
-    localparam NP = 4;
+    localparam NP = 5;
     wire [NP-1:0]    p_wnext;
     wire             phy_cmd, phy_we, phy_ready, phy_rvalid;
     wire [17:0]      phy_addr;
@@ -165,11 +173,15 @@ module ramsys (
         if (p_rvalid[3]) begin l_out <= 1'b0; ldr_q <= p_rdata; ldr_done <= 1'b1; end
     end
 
-    rammux #(.NP(NP), .AW(18), .LW(5), .WMASK(4'b1010)) mux (
+    // port 4: sound (reads only)
+    wire        a_req;
+    wire [17:0] a_addr;
+
+    rammux #(.NP(NP), .AW(18), .LW(5), .WMASK(5'b01010)) mux (
         .clk(clk50),
-        .p_req({l_req, i_req, c_req, dma_req}), .p_we({!ldr_rd, 1'b0, c_we, 1'b0}),
-        .p_addr({ldr_addr, i_addr[19:2], c_addr, dma_addr}), .p_len({5'd1, 5'd1, 5'd1, dma_len}), .p_ack(p_ack),
-        .p_wdata({ldr_data, 32'd0, c_wdata, 32'd0}), .p_wbe({4'hF, 4'h0, c_wbe, 4'h0}), .p_wnext(p_wnext),
+        .p_req({a_req, l_req, i_req, c_req, dma_req}), .p_we({1'b0, !ldr_rd, 1'b0, c_we, 1'b0}),
+        .p_addr({a_addr, ldr_addr, i_addr[19:2], c_addr, dma_addr}), .p_len({5'd1, 5'd1, 5'd1, 5'd1, dma_len}), .p_ack(p_ack),
+        .p_wdata({32'd0, ldr_data, 32'd0, c_wdata, 32'd0}), .p_wbe({4'h0, 4'hF, 4'h0, c_wbe, 4'h0}), .p_wnext(p_wnext),
         .p_rvalid(p_rvalid), .p_rdata(p_rdata),
         .phy_cmd(phy_cmd), .phy_we(phy_we), .phy_addr(phy_addr), .phy_wdata(phy_wdata), .phy_be(phy_be),
         .phy_ready(phy_ready), .phy_rvalid(phy_rvalid), .phy_rdata(phy_rdata));
@@ -193,19 +205,26 @@ module ramsys (
         sw_s0  <= sw;  sw_s  <= sw_s0;
     end
 
-    iosys io (
+    wire [15:0] aud_rd;
+    audio_lite #(.AW(18)) aud (
+        .clk(clk50), .io_wr(io_wr), .io_addr(io_addr), .io_wdata(io_wdata),
+        .rd_addr(cpu_addr[15:0]), .rd_data(aud_rd),
+        .p_req(a_req), .p_addr(a_addr), .p_ack(p_ack[4]), .p_rvalid(p_rvalid[4]), .p_rdata(p_rdata),
+        .i2s_bck(i2s_bck), .i2s_lrck(i2s_lrck), .i2s_data(i2s_data));
+
+    iosys #(.HICOL8(0), .AUDIO(1)) io (
         .clk(clk50), .io_wr(io_wr), .io_rd(io_rd), .io_addr(io_addr), .io_wdata(io_wdata),
         .cpu_lat(cpu_lat), .cur_rd(cpu_rd && cpu_addr[23:16] == 8'hF0),
-        .cur_addr(cpu_addr[15:0]), .io_rdata(io_rdata), .cycles(tick10),
+        .cur_addr(cpu_addr[15:0]), .io_rdata(io_rdata), .cycles(tick10), .insts(insts),
         .line_tgl(line_tgl), .line_top(line_top),
         .vid_ctrl(vid_ctrl), .vid_backdrop(vid_backdrop), .vid_text(vid_text), .vid_bmp(vid_bmp),
         .vid_scrollx(vid_scrollx), .vid_scrolly(vid_scrolly), .vid_cursor(vid_cursor),
         .pal_we(pal_we), .pal_windex(pal_windex), .pal_wdata(pal_wdata),
         .switches(sw_s), .buttons(btn_s), .leds(led), .seg7(seg7), .seg7_ctrl(seg7_ctrl),
-        .con_in(9'h100), .con_take(), .con_we(), .exit_we(), .wvalue()
+        .con_in(9'h100), .con_take(), .con_we(), .exit_we(), .wvalue(), .aud_rd(aud_rd)
     );
 
-    video vid (
+    video #(.HICOL8(0)) vid (                 // the Spartan-3: 16 colours at most (docs/io.md)
         .clk(clk50), .pclk(pclk),
         .vid_ctrl(vid_ctrl), .vid_backdrop(vid_backdrop), .vid_text(vid_text), .vid_bmp(vid_bmp),
         .vid_scrollx(vid_scrollx), .vid_scrolly(vid_scrolly), .vid_cursor(vid_cursor),

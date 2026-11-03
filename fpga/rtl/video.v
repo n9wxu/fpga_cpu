@@ -1,8 +1,12 @@
 `timescale 1ns/1ps
 // The fpga_cpu video (docs/io.md, "Video"), as sim/src/video.c draws it:
 // 1280x720 60 Hz, a 640x360 logical screen shown 2x, with the backdrop,
-// the bitmap (8-color or hi-color through the 256-entry palette, dithered
-// 2x2 to the 3-bit VGA, scrolled in x and y) and the 80x25 text layer.
+// the bitmap (scrolled in x and y) and the 80x25 text layer. The bitmap is
+// 8-color or 16-color (4 bits a pixel, direct colour), or hi-color through
+// the 256-entry palette, dithered 2x2 to the 3-bit VGA.
+// HICOL8 = 0 is the low video tier (the Spartan-3): no hi-color and no
+// palette, and the bitmap line buffer is half as big. The Tang Nano 20K is
+// the high tier (HICOL8 = 1).
 // The sprite layer is not here yet.
 //
 // Two outputs: rgb, the 3-bit VGA colour, and rgb24 with de for a digital
@@ -23,7 +27,8 @@
 // Buffer addresses (VID_BMP, VID_TEXT) must be multiples of 4.
 module video #(
     parameter FONT_FILE = "font8x14.mem",
-    parameter TRUE_COLOR = 0
+    parameter TRUE_COLOR = 0,
+    parameter HICOL8 = 1
 ) (
     input  wire        clk,
     input  wire        pclk,
@@ -54,34 +59,44 @@ module video #(
     output reg  [2:0]  rgb = 3'b000,
     // digital: 8 bits per channel, and data enable (the visible area)
     output reg  [23:0] rgb24 = 24'd0,
-    output reg         de = 1'b0
+    output reg         de = 1'b0,
+    // diagnostics (clk): a line was asked for while the last one's fetch was
+    // still under way (the DMA fell behind). May be left unconnected.
+    output reg         late = 1'b0
 );
     function [23:0] full;                    // a 3-bit colour at full scale
         input [2:0] c;
         full = {{8{c[2]}}, {8{c[1]}}, {8{c[0]}}};
+    endfunction
+    function [23:0] half;                    // and at half
+        input [2:0] c;
+        half = {c[2], 7'd0, c[1], 7'd0, c[0], 7'd0};
     endfunction
     localparam H_VIS = 1280, H_SYNC0 = 1390, H_SYNC1 = 1430, H_TOTAL = 1650;
     localparam V_VIS = 720,  V_SYNC0 = 725,  V_SYNC1 = 730,  V_TOTAL = 750;
     localparam LW = 640, LH = 360, TROWS = 25, CELL_H = 14;
 
     // VID_CTRL bits
-    wire c_text = vid_ctrl[0], c_bmp = vid_ctrl[1], c_hicol = vid_ctrl[2];
+    // (without HICOL8, bit 2 is ignored: no hi-color)
+    wire c_text = vid_ctrl[0], c_bmp = vid_ctrl[1], c_hicol = HICOL8 && vid_ctrl[2];
+    localparam LBW  = HICOL8 ? 512 : 256;    // bitmap line buffer words: 2 x 160 (8 bpp) or 2 x 80
+    localparam PALN = HICOL8 ? 256 : 1;      // the palette (none on the low tier)
 
     // =====================================================================
     // Line buffers, palette (written at clk, read at pclk)
     // =====================================================================
-    reg [31:0] lb_bmp [0:511];               // {buffer, word 0-159}
+    reg [31:0] lb_bmp [0:LBW-1];             // {buffer, word 0-159 (0-79)}
     (* ram_style = "block" *)
     reg [31:0] lb_txt [0:127];               // {buffer, word 0-39}
-    reg [15:0] pal [0:255];
+    reg [15:0] pal [0:PALN-1];
 
     reg        lbw_bmp = 1'b0, lbw_txt = 1'b0;
     reg [8:0]  lbw_a = 9'd0;
     reg [31:0] lbw_d = 32'd0;
     always @(posedge clk) begin
-        if (lbw_bmp) lb_bmp[lbw_a] <= lbw_d;
+        if (lbw_bmp) lb_bmp[HICOL8 ? lbw_a : {1'b0, lbw_a[8], lbw_a[6:0]}] <= lbw_d;
         if (lbw_txt) lb_txt[lbw_a[6:0]] <= lbw_d;
-        if (pal_we)  pal[pal_windex] <= pal_wdata;
+        if (HICOL8 && pal_we) pal[pal_windex] <= pal_wdata;
     end
 
     // =====================================================================
@@ -120,6 +135,7 @@ module video #(
     always @(posedge clk) begin
         lbw_bmp <= 1'b0;
         lbw_txt <= 1'b0;
+        late <= rq && st != 2'd0;
         if (rq) begin
             ln <= rq_line;
             tr <= rq_row;
@@ -180,7 +196,8 @@ module video #(
         sx_s0   <= vid_scrollx;  sx_p   <= sx_s0;
         cur_s0  <= vid_cursor;   cur_p  <= cur_s0;
     end
-    wire p_text = ctrl_p[0], p_bmp = ctrl_p[1], p_hicol = ctrl_p[2], p_cursor = ctrl_p[5];
+    wire p_text = ctrl_p[0], p_bmp = ctrl_p[1], p_hicol = HICOL8 && ctrl_p[2], p_cursor = ctrl_p[5];
+    wire p_c16 = !p_hicol && ctrl_p[7];      // 16-color: 9-15 are 1-7 at half brightness, 8 transparent
 
     // VID_SCROLLX mod 640
     reg [15:0] sx_src = 16'd0, sx_rem = 16'd0;
@@ -261,7 +278,7 @@ module video #(
 
     reg [31:0] bword, tword;
     always @(posedge pclk) begin
-        bword <= lb_bmp[{y[0], bbyte[9:2]}];
+        bword <= lb_bmp[HICOL8 ? {y[0], bbyte[9:2]} : {1'b0, y[0], bbyte[8:2]}];
         tword <= lb_txt[{y[0], col[6:1]}];
     end
 
@@ -302,7 +319,7 @@ module video #(
     reg [15:0] c565;
     reg [7:0]  glyph;
     always @(posedge pclk) begin
-        c565  <= pal[byte1];
+        c565  <= HICOL8 ? pal[byte1] : 16'd0;
         glyph <= font[faddr];
     end
 
@@ -342,10 +359,13 @@ module video #(
     reg        bmp_op3, on3, bg_op3, txt3, vis3, hs3, vs3;
     reg        bg24_op3, blend3;
     always @(posedge pclk) begin
-        bmp3    <= p_hicol ? dith : nib2[2:0];
-        bmp24   <= (p_hicol && TRUE_COLOR) ? {r5, r5[4:2], g6, g6[5:4], b5, b5[4:2]}
-                                           : full(p_hicol ? dith : nib2[2:0]);
-        bmp_op3 <= p_bmp && (p_hicol ? idx2 != 0 : !nib2[3]);
+        // 16-color: half brightness is a checkerboard with black on the
+        // VGA (as a stippled text background), half scale on true colour
+        bmp3    <= p_hicol ? dith : (p_c16 && nib2[3] && (x02 ^ y02)) ? 3'd0 : nib2[2:0];
+        bmp24   <= (p_hicol && TRUE_COLOR) ? {r5, r5[4:2], g6, g6[5:4], b5, b5[4:2]} :
+                   (p_c16 && nib2[3] && TRUE_COLOR) ? half(nib2[2:0]) :
+                   full(p_hicol ? dith : (p_c16 && nib2[3] && (x02 ^ y02)) ? 3'd0 : nib2[2:0]);
+        bmp_op3 <= p_bmp && (p_hicol ? idx2 != 0 : p_c16 ? nib2 != 4'd8 : !nib2[3]);
         on3     <= glyph[3'd7 - gx2] | cur2;
         bg_op3  <= !cell2[14] && !(cell2[15] && (x02 ^ y02));
         bg24_op3 <= TRUE_COLOR ? !cell2[14] && !cell2[15] : !cell2[14] && !(cell2[15] && (x02 ^ y02));

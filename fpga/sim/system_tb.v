@@ -117,8 +117,29 @@ module system_tb;
     endtask
 
 `ifdef RAMSYS
+    // +i2s=FILE: the I2S output (audio_lite.v) decoded, a line "left right"
+    // (signed decimal) an output frame, to compare with fsim --wav
+    // (fpga/tools/i2scmp.py)
+    reg [1023:0] i2s_file;
+    integer i2s_f = 0;
+    initial if ($value$plusargs("i2s=%s", i2s_file)) i2s_f = $fopen(i2s_file, "w");
+    reg        i2s_lr = 1'b0;
+    reg [5:0]  i2s_slot = 6'd0;
+    reg [15:0] i2s_w = 16'd0, i2s_l = 16'd0;
+    always @(posedge dut.i2s_bck) if (i2s_f) begin
+        // a bit a rising edge; slot 0 is the one where the word clock changed
+        if (dut.i2s_lrck != i2s_lr) i2s_slot = 6'd0;
+        else i2s_slot = i2s_slot + 6'd1;
+        i2s_lr = dut.i2s_lrck;
+        if (i2s_slot >= 1 && i2s_slot <= 16) i2s_w = {i2s_w[14:0], dut.i2s_data};
+        if (i2s_slot == 16) begin
+            if (!i2s_lr) i2s_l = i2s_w;
+            else $fdisplay(i2s_f, "%0d %0d", $signed(i2s_l), $signed(i2s_w));
+        end
+    end
+
     // +textwatch: report SRAM writes into the demo's untouched text rows
-    // (2-10, 12, 14-21, 23) that are not transparent spaces
+    // (2-10, 12, 14-21, 23) that are not transparent spaces, after start-up
     reg textwatch = 0;
     integer tw_n = 0;
     initial textwatch = $test$plusargs("textwatch");
@@ -126,7 +147,8 @@ module system_tb;
     always @(posedge sram_we_n)
         if (textwatch && tw_n < 40 && sram_a >= 18'h3F000 && sram_a < 18'h3F3E8 && sram_ce_n != 2'b11
             && tw_row >= 2 && tw_row != 11 && tw_row != 13 && tw_row != 22 && tw_row != 24
-            && sram_d !== 32'h40204020) begin
+            && cycles > 2000000
+            && ((sram_d ^ 32'h40204020) & {{8{!sram_be_n[3]}}, {8{!sram_be_n[2]}}, {8{!sram_be_n[1]}}, {8{!sram_be_n[0]}}}) != 0) begin
             $display("[textwatch] %0t: write %06x = %08x be_n %b (row %0d), cycle %0d",
                      $time, {sram_a, 2'b00}, sram_d, sram_be_n, tw_row, cycles);
             tw_n = tw_n + 1;

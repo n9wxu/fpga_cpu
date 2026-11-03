@@ -68,11 +68,11 @@ module system (
     // SR1-SR3 and CYCLE_LO/HI: T1 clocks and instructions since the start,
     // counted on T1's clock (the I/O block reads CYCLE mid-period)
     reg [31:0] cycles = 32'd0;
-    reg [15:0] insts = 16'd0;              // only the low 16 bits are read (SR3)
+    reg [31:0] insts = 32'd0;              // SR3: the low 16 bits; INSTRET (I/O): all 32
     always @(posedge cpu_clk)
         if (t1_rst) begin
             cycles <= 32'd0;
-            insts  <= 16'd0;
+            insts  <= 32'd0;
         end else begin
             cycles <= cycles + 1'b1;
             insts  <= insts + retire;
@@ -81,7 +81,7 @@ module system (
         case (sr_sel)
             2'd0: sr_in = cycles[15:0];
             2'd1: sr_in = cycles[31:16];
-            default: sr_in = insts;
+            default: sr_in = insts[15:0];
         endcase
 
     // ---- memory ------------------------------------------------------------------
@@ -138,7 +138,7 @@ module system (
     iosys io (
         .clk(clk50), .io_wr(io_wr), .io_rd(io_rd), .io_addr(io_addr), .io_wdata(io_wdata),
         .cpu_lat(cpu_lat), .cur_rd(cpu_rd && cpu_addr[23:16] == 8'hF0),
-        .cur_addr(cpu_addr[15:0]), .io_rdata(io_rdata), .cycles(cycles),
+        .cur_addr(cpu_addr[15:0]), .io_rdata(io_rdata), .cycles(cycles), .insts(insts),
         .line_tgl(line_tgl), .line_top(line_top),
         .vid_ctrl(vid_ctrl), .vid_backdrop(vid_backdrop), .vid_text(vid_text), .vid_bmp(vid_bmp),
         .vid_scrollx(vid_scrollx), .vid_scrolly(vid_scrolly), .vid_cursor(vid_cursor),
@@ -147,7 +147,7 @@ module system (
         .con_in(9'h100), .con_take(), .con_we(), .exit_we(), .wvalue()
     );
 
-    video vid (
+    video #(.HICOL8(0)) vid (                 // the Spartan-3: 16 colours at most (docs/io.md)
         .clk(clk50), .pclk(pclk),
         .vid_ctrl(vid_ctrl), .vid_backdrop(vid_backdrop), .vid_text(vid_text), .vid_bmp(vid_bmp),
         .vid_scrollx(vid_scrollx), .vid_scrolly(vid_scrolly), .vid_cursor(vid_cursor),
@@ -160,7 +160,7 @@ module system (
 
     // ---- JTAG ----------------------------------------------------------------------
     jtagldr ldr (
-        .clk(clk50), .status({1'b0, halted, !t1_rst, 5'd0, halt_code, insts}),
+        .clk(clk50), .status({1'b0, halted, !t1_rst, 5'd0, halt_code, insts[15:0]}),
         .run(run), .entry(entry),
         .ldr_req(ldr_req), .ldr_rd(ldr_rd), .ldr_q(ldr_q), .trace_rd(),
         .ldr_addr(ldr_addr), .ldr_data(ldr_data), .ldr_done(ldr_done)

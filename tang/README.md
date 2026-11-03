@@ -42,8 +42,10 @@ T1 and the loader, port 1 video DMA in bursts of 4) in front of
 true colour; the I/O registers are `../fpga/rtl/iosys.v`. Programs link with
 `--stack 0x10000` (the Makefile does) so the stack is in block RAM.
 
-- `../fpga/demo/demo.c` built with `-DTANG` (`make run`, the default): the demo
-  (measured, 60 fps: T1F 10% busy, 6.47 MIPS; T1 20% busy, 3.32 MIPS; the
+- `../fpga/demo/demo.c` built with `-DTANG` (`make run`, the default; it links
+  with `--stack 0x1000`, the stack below the program, as it is more than the
+  60 KB of block RAM above 0x1000): the demo (the earlier plasma-only demo
+  measured, 60 fps: T1F 10% busy, 6.47 MIPS; T1 20% busy, 3.32 MIPS; the
   Spartan-3's T1 37% busy, 1.81 MIPS. The demo's clocks per instruction are
   in 16.875 MHz units, SDRAM waits included: T1F 2.6, T1 5.06)
 - `progs/sdtest.c`: SDRAM tests, then a scrolling hi-color bitmap

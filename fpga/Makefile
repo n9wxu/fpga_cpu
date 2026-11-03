@@ -38,8 +38,11 @@ DATA_fcsys      := build/font8x14.mem
 # ramtest: the RAM machine (rammux.v, sram_phy.v) under mock clients (tools/ramtest.py)
 SRC_ramtest     := rtl/rammux.v rtl/sram_phy.v rtl/jtagldr.v rtl/seg7.v
 # ramsys: system.v's T1F, I/O and video on the RAM machine (rammux.v, sram_phy.v, cpumem.v)
-SRC_ramsys      := rtl/cpumem.v rtl/rammux.v rtl/sram_phy.v rtl/iosys.v rtl/video.v rtl/jtagldr.v \
+SRC_ramsys      := rtl/cpumem.v rtl/rammux.v rtl/sram_phy.v rtl/iosys.v rtl/video.v rtl/jtagldr.v rtl/audio_lite.v \
                    rtl/seg7.v ../verilog/rtl/t1s_core.v ../verilog/rtl/t1s_dec.v
+# ramsys fills the XC3S200: XST optimizes for area, and makes no shift registers
+# of LUTs (LUTs are scarce, flip-flops are not); its timing still has slack
+XSTOPT_ramsys   := -opt_mode Area -shreg_extract NO
 DATA_ramsys     := build/font8x14.mem ../verilog/rtl/t1s_rom_x0.vh ../verilog/rtl/t1s_rom_x1.vh
 # ramvid: the RAM machine's 1280x720 status monitor (mockcpu.v, fbvideo.v; tools/mkstatus.py)
 SRC_ramvid      := rtl/rammux.v rtl/sram_phy.v rtl/fbvideo.v rtl/mockcpu.v rtl/jtagldr.v rtl/seg7.v
@@ -132,7 +135,7 @@ bit: build/$(TOP).bit
 build/$(TOP).bit: $(SRC) $(UCF) scripts/ise_build.sh $(DATA)
 	ssh $(ISE_HOST) mkdir -p $(ISE_DIR)/build
 	cd .. && rsync -aR $(ROOT_FILES) $(ISE_HOST):$(ISE_ROOT)/
-	ssh $(ISE_HOST) 'cd $(ISE_DIR) && XSTDEF="$(if $(filter system,$(TOP)),$(CDEF))" scripts/ise_build.sh $(TOP) $(PART) $(UCF) $(SRC) > build/$(TOP).log 2>&1' \
+	ssh $(ISE_HOST) 'cd $(ISE_DIR) && XSTDEF="$(if $(filter system,$(TOP)),$(CDEF))" XSTOPT="$(XSTOPT_$(TOP))" scripts/ise_build.sh $(TOP) $(PART) $(UCF) $(SRC) > build/$(TOP).log 2>&1' \
 	  || { ssh $(ISE_HOST) 'tail -40 $(ISE_DIR)/build/$(TOP).log'; exit 1; }
 	scp -q $(ISE_HOST):$(ISE_DIR)/build/$(TOP).{log,syr,twr,bit,svf} build/
 	@grep -A3 "Timing summary" build/$(TOP).twr
@@ -143,9 +146,9 @@ prog: build/$(TOP).bit
 
 # Programs for TOP=system: fcc images loaded over JTAG (tools/jtagload.py)
 PROG ?= build/demo.bin
-build/demo.bin: demo/demo.c FORCE
+build/demo.bin: $(wildcard demo/*.c demo/*.h) FORCE
 	@mkdir -p build
-	cd .. && llvm/fcc -O2 $(if $(filter 4,$(S3PER)),-DT1_KHZ=12500) $(if $(filter ramsys,$(TOP)),-DRAMSYS) -o fpga/$@ fpga/demo/demo.c
+	cd .. && llvm/fcc -O2 --stack 0x20000 -o fpga/$@ fpga/demo/demo.c
 
 demo: build/demo.bin
 

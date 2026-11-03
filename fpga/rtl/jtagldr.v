@@ -12,7 +12,9 @@
 //     nothing else.
 //   USER1 (IR 0x02): data. Every 32 bits shifted in (bit 0 first) are
 //     written to SRAM at the load pointer, which then advances by 4. A
-//     shift of any multiple of 32 bits streams many words at once.
+//     shift of any multiple of 32 bits streams many words at once. The
+//     first word of each scan is dropped (it is never whole: see below),
+//     so a status read (31 bits) writes nothing.
 //   USER1 shifts out the status word captured at Capture-DR:
 //     {0, halted, running, 5'b0, halt_code[7:0], instructions[15:0]}.
 //     A 31-bit USER1 scan reads it without writing anything.
@@ -37,6 +39,7 @@ module jtagldr (
     wire capture, drck1_l, drck2_l, drck1, drck2, sel1, sel2, shift, tdi, update, jreset;
     reg  [31:0] sr1 = 32'd0, sr2 = 32'd0;
     reg  [4:0]  bc = 5'd0;
+    reg         first = 1'b1;               // the scan's first word: dropped
     reg  [31:0] word = 32'd0;
     reg         wtgl = 1'b0;
 
@@ -54,17 +57,23 @@ module jtagldr (
     // USER1: the data stream (DRCK1 runs only in Capture-DR and Shift-DR).
     // On this board a scan's bits arrive one position late relative to this
     // count: word n is bits 32n-1 .. 32n+30 of the scan, and the first word's
-    // bit 0 is not from the scan at all. tools/jtagload.py allows for it.
+    // bit 0 is not from the scan at all, so that word is dropped (a 31-bit
+    // scan, which reads the status, makes one: it once wrote zeros at the
+    // load pointer). tools/jtagload.py sends a dummy word first.
     always @(posedge drck1)
         if (capture) begin
-            sr1 <= status;
-            bc  <= 5'd0;
+            sr1   <= status;
+            bc    <= 5'd0;
+            first <= 1'b1;
         end else if (shift) begin
             sr1 <= {tdi, sr1[31:1]};
             bc  <= bc + 1'b1;
             if (bc == 5'd31) begin
-                word <= {tdi, sr1[31:1]};
-                wtgl <= ~wtgl;
+                first <= 1'b0;
+                if (!first) begin
+                    word <= {tdi, sr1[31:1]};
+                    wtgl <= ~wtgl;
+                end
             end
         end
 

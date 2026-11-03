@@ -80,9 +80,11 @@ sim: $(DATA_$(TOP))
 
 PROG ?= build/demo.bin
 # the stack at the top of the block RAM (fast); the rest of the default layout is in SDRAM
-build/demo.bin: ../fpga/demo/demo.c
+# The demo's stack is below the program (0x0000-0x0FFF): the demo is more than the
+# 60 KB of block RAM above 0x1000; its code fits there, the tail of its data is in the SDRAM.
+build/demo.bin: $(wildcard ../fpga/demo/*.c ../fpga/demo/*.h)
 	@mkdir -p build
-	cd .. && llvm/fcc -O2 -DTANG --stack 0x10000 -o tang/$@ fpga/demo/demo.c
+	cd .. && llvm/fcc -O2 -DTANG --stack 0x1000 -o tang/$@ fpga/demo/demo.c
 
 build/%.bin: progs/%.c
 	@mkdir -p build

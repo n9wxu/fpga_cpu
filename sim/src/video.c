@@ -26,6 +26,8 @@ static uint8_t rd8(const cpu_t *c, uint32_t a)
     return a < SRAM_SIZE ? c->sram[a] : 0;
 }
 
+int video_hicol8 = 1;
+
 static uint32_t reg32(const iodev_t *d, int lo) { return d->vid[lo] | (uint32_t)d->vid[lo + 1] << 16; }
 
 /* 4-bit pixel at (x, y) of a 320-byte-stride buffer; -1 if transparent */
@@ -62,6 +64,8 @@ void video_render(const cpu_t *c, uint32_t *px, int true_color, int cursor_on)
 {
     const iodev_t *d = &c->dev;
     uint16_t ctrl = d->vid[V_CTRL];
+    if (!video_hicol8)
+        ctrl &= (uint16_t)~(VC_HICOL | VC_SPR8);
     uint32_t text = reg32(d, V_TEXT_LO), bmp = reg32(d, V_BMP_LO), spr = reg32(d, V_SPR_LO);
     int spr8 = (ctrl & VC_SPR8) != 0;
     if (ctrl & VC_SPRBUF)
@@ -78,6 +82,14 @@ void video_render(const cpu_t *c, uint32_t *px, int true_color, int cursor_on)
                     uint8_t i = rd8(c, bmp + (uint32_t)by * LW + (uint32_t)bx);
                     if (i)
                         col = hicolor(d->pal[i], x, y, true_color);
+                } else if (ctrl & VC_C16) {
+                    uint8_t b = rd8(c, bmp + (uint32_t)by * 320 + (uint32_t)bx / 2);
+                    int i = (bx & 1) ? b & 15 : b >> 4;
+                    if (i < 8)
+                        col = rgb8[i];
+                    else if (i > 8)            /* half brightness */
+                        col = true_color ? (rgb8[i & 7] & 0x808080)
+                                         : ((x + y) & 1) ? 0 : rgb8[i & 7];
                 } else {
                     int p = nib(c, bmp, bx, by);
                     if (p >= 0)

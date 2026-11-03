@@ -124,6 +124,7 @@ int main(int argc, char **argv)
         if (write_ppm(o.screenshot, px, SCREEN_W, SCREEN_H))
             perror(o.screenshot);
     }
+    audlo_finish(&c);
     if (o.dump) {
         char *e;
         uint32_t a = (uint32_t)strtoul(o.dump, &e, 0), n = *e == ':' ? (uint32_t)strtoul(e + 1, &e, 0) : 0;

@@ -36,10 +36,18 @@ design is running; `0x088C` has DONE low, the load failed.
   taking every other period while a line is fetched) and a loader period.
   Nothing on the SRAM bus changes on T1's clock edge.
 - `rtl/video.v`: docs/io.md's video at 1280x720 60 Hz: the backdrop, the
-  bitmap (8-color, or hi-color through the 256-entry palette with the 2x2
-  dither, scrolled in x and y) and the 80x25 text layer, from SRAM through
-  per-line buffers. Not yet: the sprite layer. In simulation its frames
+  bitmap (scrolled in x and y) and the 80x25 text layer, from SRAM through
+  per-line buffers. The Spartan-3 is the low video tier (`HICOL8 = 0`): the
+  bitmap is 4 bits a pixel, 8-color or 16-color direct (no palette; colors
+  9-15 are 1-7 at half brightness, a checkerboard on the 3-bit VGA). The
+  Tang is the high tier, with hi-color through the 256-entry palette. Not yet: the sprite layer. In simulation its frames
   equal `fsim --screenshot` pixel for pixel (`tools/cmpshot.py`).
+- `rtl/audio_lite.v`: the low tier's sound (docs/io.md "Sound"): the
+  3-voice device at F00400 and a streaming player (a stereo ring buffer in
+  SRAM, a word a frame through rammux port 4), mixed to an I2S DAC on the A2
+  connector at 48,828 Hz. `sim/progs/audtest.c` checks it: the RTL's I2S
+  (`system_tb +i2s=FILE`) against `fsim --no-hicolor --wav FILE`
+  (`tools/i2scmp.py`), frame for frame.
 - `rtl/iosys.v`: the I/O registers (system, video, palette, board LEDs,
   switches, buttons, 7-segment display). 16-bit registers are written low
   byte then high, and read with the high byte latched from the low read.
@@ -70,10 +78,16 @@ board. crt0 relies on zeroed memory for the text buffer, so the loader
 zeroes it (`--no-clear` to skip). `int` is 16 bits: products and offsets
 that can pass 32767 need 32-bit types.
 
-- `demo/demo.c`: the demo. A 640x360 plasma in 256 colors computed pixel by
-  pixel at start-up, then at 60 fps: palette cycling, a hardware scroll
-  wobble, 96 3D stars, a scroller, and live statistics (fps, CPU load,
-  MIPS, clocks per instruction, from `CYCLE` and SR3).
+- `demo/`: the demo, six self-playing sections in a loop, all original and
+  all drawn by the CPU in 16 colors (`demo.c` runs them; `gfx.c` is their
+  graphics library): a platform game (`sec_platform.c`), a bullet-hell
+  shooter (`sec_bullets.c`), a plasma (`sec_plasma.c`; on the Tang the
+  256-color palette plasma), a third-person racer (`sec_racing.c`, 30 fps),
+  an isometric flyer (`sec_iso.c`) and 30 s of a paint program on a desktop
+  (`sec_desktop.c`). Row 24 shows live statistics (fps, CPU busy, thousands
+  of instructions a frame, MIPS, CPI, `CYCLE`'s rate; SW0 hides it), and each
+  section's latest are kept at 0x05FF00 for `jtagload.py --dump 0x05FF00 24`.
+  `sectest.c` runs one section in fsim and prints its instructions a frame.
 - `sim/progs/systest.c`: memory and I/O checks, output compared with fsim
 - `sim/progs/vidtest.c` + `tools/mkvidtest.py`: video against fsim's renderer
 - `sim/progs/hwtest.c`: on the board: an SRAM test, a hi-color bitmap, live

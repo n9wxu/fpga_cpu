@@ -256,8 +256,10 @@ about 8k LUT4 + 1.7-2.3k ALU (carry) cells, 3.9k flip-flops, 6 block RAMs
 9x9 multipliers. nextpnr place and route (GW2AR-18): 85 MHz, 67.5 MHz needed.
 
 On the Spartan-3 Starter Board the engine does not fit (the XC3S200 has about
-3.8k LUTs, 12 block RAMs and 12 multipliers); there the RP2350 makes the sound
-as planned, and this register map could be served by it.
+3.8k LUTs, 12 block RAMs and 12 multipliers; yosys puts the engine at about
+7k LUTs and 8 block RAMs). The Spartan-3 has the low tier's sound instead
+(`fpga/rtl/audio_lite.v`, docs/io.md "Sound"): the 3-voice device at F00400
+and a streaming player, on an I2S DAC.
 
 ## Verification
 

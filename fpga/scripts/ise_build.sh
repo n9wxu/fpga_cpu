@@ -25,12 +25,14 @@ mkdir -p build && cd build
 for f in "$@"; do echo "verilog work \"../$f\"" >> "$TOP.prj"; done
 
 mkdir -p xst/tmp
+# XSTOPT (environment): XST's optimization options (default: speed)
+XSTOPT="${XSTOPT:--opt_mode Speed}"
 # XSTDEF (environment): a Verilog define, e.g. T1F
 DEFOPT=""
 if [ -n "${XSTDEF:-}" ]; then DEFOPT="-define {$XSTDEF}"; fi
 cat > "$TOP.xst" <<XST
 set -tmpdir xst/tmp
-run -ifn $TOP.prj -ifmt mixed -ofn $TOP -ofmt NGC -p $PART -top $TOP -opt_mode Speed -opt_level 1 -vlgincdir {../../verilog/rtl} $DEFOPT
+run -ifn $TOP.prj -ifmt mixed -ofn $TOP -ofmt NGC -p $PART -top $TOP $XSTOPT -opt_level 1 -vlgincdir {../../verilog/rtl} $DEFOPT
 XST
 
 xst -ifn "$TOP.xst" -ofn "$TOP.syr"

@@ -10,10 +10,20 @@
 //     the next byte returns the latched high byte, so LDW never sees a value
 //     torn between its two bytes.
 //
-// Not here yet: the keyboard (KBD_DATA reads "no key"), sound, the file
-// service. CON_IN comes from con_in (bit 8: empty; con_take pulses when a
-// read takes the byte); CON_OUT and EXIT are con_we/exit_we with wvalue.
-module iosys (
+// Not here yet: the keyboard (KBD_DATA reads "no key"), the file service.
+// CON_IN comes from con_in (bit 8: empty; con_take pulses when a read takes
+// the byte); CON_OUT and EXIT are con_we/exit_we with wvalue.
+//
+// HICOL8 = 0 is the low video tier (the Spartan-3): no palette (PAL_INDEX,
+// PAL_DATA do nothing), no sprite registers, and VID_CTRL keeps only the
+// bits that video.v uses there (0 text, 1 bitmap, 5 cursor, 7 16-color).
+// AUDIO = 1: a sound block's registers (audio_lite.v) read through aud_rd
+// (16 bits, zero when the address is not its own); it takes the writes
+// itself, from the same io_wr/io_addr/io_wdata.
+module iosys #(
+    parameter HICOL8 = 1,
+    parameter AUDIO = 0
+) (
     input  wire        clk,                 // 50 MHz
     input  wire        io_wr,
     input  wire        io_rd,
@@ -25,6 +35,7 @@ module iosys (
     output reg  [7:0]  io_rdata = 8'd0,
     // counters
     input  wire [31:0] cycles,
+    input  wire [31:0] insts,              // instructions retired (INSTRET)
     // video timing from the pixel clock domain (toggles: synchronized here)
     input  wire        line_tgl,            // a scan line started
     input  wire        line_top,            // ... and it is line 0
@@ -50,17 +61,24 @@ module iosys (
     output reg         con_take = 1'b0,
     output reg         con_we = 1'b0,
     output reg         exit_we = 1'b0,
-    output reg  [15:0] wvalue = 16'd0
+    output reg  [15:0] wvalue = 16'd0,
+    // sound (AUDIO = 1; unconnected otherwise)
+    input  wire [15:0] aud_rd
 );
     // ---- frame and scan line -------------------------------------------------
-    reg [2:0]  lt_s = 3'b000;
+    // line_tgl and line_top change at the same pixel-clock edge and cross
+    // separately, so the toggle is seen three clocks after line_top has
+    // settled (with one clock between them, the skew of the two crossings
+    // sometimes lost line 0: lines counted to 1499 and a frame in three
+    // went uncounted, FRAME at 40 Hz)
+    reg [4:0]  lt_s = 5'b00000;
     reg [1:0]  top_s = 2'b00;
     reg [11:0] line = 12'd0;
     reg [15:0] frame = 16'd0;
     always @(posedge clk) begin
-        lt_s  <= {lt_s[1:0], line_tgl};
+        lt_s  <= {lt_s[3:0], line_tgl};
         top_s <= {top_s[0], line_top};
-        if (lt_s[2] != lt_s[1]) begin
+        if (lt_s[4] != lt_s[3]) begin
             line <= top_s[1] ? 12'd0 : line + 1'b1;
             if (!top_s[1] && line == 12'd719) frame <= frame + 1'b1;   // vertical blank starts
         end
@@ -77,6 +95,8 @@ module iosys (
         case ({a[15:1], 1'b0})
             16'h0004: rv = cycles[15:0];
             16'h0006: rv = cycles[31:16];
+            16'h0010: rv = insts[15:0];
+            16'h0012: rv = insts[31:16];
             16'h0008: rv = con_in[8] ? 16'hFFFF : {8'd0, con_in[7:0]};
             16'h000A: rv = frame;
             16'h000C: rv = {line, 3'b000, vblank};
@@ -88,9 +108,9 @@ module iosys (
             16'h0206: rv = vid_text[31:16];
             16'h0208: rv = vid_bmp[15:0];
             16'h020A: rv = vid_bmp[31:16];
-            16'h020C: rv = spr_lo;
-            16'h020E: rv = spr_hi;
-            16'h0210: rv = {8'd0, pal_index};
+            16'h020C: rv = HICOL8 ? spr_lo : 16'd0;
+            16'h020E: rv = HICOL8 ? spr_hi : 16'd0;
+            16'h0210: rv = HICOL8 ? {8'd0, pal_index} : 16'd0;
             16'h0214: rv = vid_scrollx;
             16'h0216: rv = vid_scrolly;
             16'h0218: rv = vid_cursor;
@@ -108,7 +128,7 @@ module iosys (
     // byte from the latch when it follows
     reg [15:0] latch = 16'd0;
     reg [15:0] latch_a = 16'hFFFF;
-    wire [15:0] live = rv(cur_addr);
+    wire [15:0] live = rv(cur_addr) | (AUDIO ? aud_rd : 16'd0);
     always @(posedge clk) begin
         con_take <= 1'b0;
         if (cpu_lat && cur_rd) begin
@@ -139,16 +159,16 @@ module iosys (
                     16'h0000: con_we <= 1'b1;
                     16'h0002: exit_we <= 1'b1;
                     16'h0104: kbd_ctrl <= {15'd0, w[0]};
-                    16'h0200: vid_ctrl <= w;
+                    16'h0200: vid_ctrl <= HICOL8 ? w : (w & 16'h00A3);
                     16'h0202: vid_backdrop <= w[2:0];
                     16'h0204: vid_text[15:0] <= w;
                     16'h0206: vid_text[31:16] <= w;
                     16'h0208: vid_bmp[15:0] <= w;
                     16'h020A: vid_bmp[31:16] <= w;
-                    16'h020C: spr_lo <= w;
-                    16'h020E: spr_hi <= w;
-                    16'h0210: pal_index <= w[7:0];
-                    16'h0212: begin
+                    16'h020C: if (HICOL8) spr_lo <= w;
+                    16'h020E: if (HICOL8) spr_hi <= w;
+                    16'h0210: if (HICOL8) pal_index <= w[7:0];
+                    16'h0212: if (HICOL8) begin
                         pal_we     <= 1'b1;
                         pal_windex <= pal_index;
                         pal_wdata  <= w;

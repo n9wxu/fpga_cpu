@@ -56,23 +56,24 @@ def stream_raw(words):
 
 def load(base, words):
     """Write words at base (a multiple of 4). Each scan starts with a dummy
-    word, written one word below its chunk (its bit 0 is lost); the chunks go
-    last to first, so each dummy lands on a word a later scan rewrites. Only
-    the first dummy is left, at base - 4."""
+    word, which rtl/jtagldr.v drops (its bit 0 is lost), so each chunk's
+    pointer is its own address. (Before the loader dropped it, the dummy
+    was written a word below the chunk, and the 31-bit status read wrote a
+    word of zeros at the pointer: black cells in the text buffer.)"""
     cmds = []
     starts = list(range(0, len(words), CHUNK))
     for i in reversed(starts):
         part = words[i:i + CHUNK]
         dummy = words[i - 1] if i else 0
-        cmds += user2(0x40000000 | ((base + 4 * i - 4) & 0xFFFFC))
+        cmds += user2(0x40000000 | ((base + 4 * i) & 0xFFFFC))
         cmds += ["irscan xc3s.tap 0x02", stream_raw([dummy] + part)]
     return cmds
 
 
 def stream(words):
     """Legacy name used by tests: words at the load pointer already set.
-    (Kept for callers that set the pointer themselves; it loses bit 0 of the
-    first word.)"""
+    (Kept for callers that set the pointer themselves; the loader drops the
+    first word, so start with a dummy.)"""
     return ["irscan xc3s.tap 0x02", stream_raw(words)]
 
 
