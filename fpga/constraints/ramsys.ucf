@@ -1,0 +1,35 @@
+# Timing for rtl/ramsys.v, added to s3starter.ucf by the Makefile.
+#
+# One clock, clk50. T1S steps when cpumem enables it (cpu_ce), at most once
+# in PERF = 4 clocks (PER = 5 with a bus access), so paths between its
+# registers (and into and out of its decode ROM, a block RAM loaded at its
+# steps) have four clocks. Its register file (a block RAM read every clock)
+# is read with addresses that settle within two clocks of a step; its data
+# then has the last two clocks. T1S's bus outputs are taken by cpumem and
+# the I/O block at e2 (or later): two clocks; a write's data (from the
+# register file) at e4. Its read data comes from cpumem's word buffer, which
+# changes at e2 (a write) or one clock before T1S's step (a word back from
+# the RAM), through the byte select: a clock. The I/O block's read register
+# is loaded at e2, three clocks before T1S's step at the earliest.
+# T1S's instruction fetch (cpu/fq) runs at every clock: its paths, and those
+# between it and the core (the core's queue takes its landing buffer at a
+# step; it reads the core's PC, epoch and queue count), have one clock.
+INST "cpu/*" TNM = "t1all";
+INST "cpu/rf/*" TNM = "t1rf";
+INST "cpu/fq/*" TNM = "t1fq";
+INST "t1_rst" TNM = "t1all";
+INST "cycles*" TNM = "t1all";
+TIMEGRP "t1" = "t1all" EXCEPT "t1rf" "t1fq";
+INST "mem/*" TNM = "membus";
+INST "io/io_rdata*" TNM = "membus";
+INST "io/latch*" TNM = "membus";
+INST "io/io_rdata*" TNM = "iord";
+INST "mem/rbuf*" TNM = "rbuf";
+TIMESPEC "TS_t1"    = FROM "t1" TO "t1" TS_clk * 4;
+TIMESPEC "TS_t1rf"  = FROM "t1" TO "t1rf" TS_clk * 2;
+TIMESPEC "TS_rft1"  = FROM "t1rf" TO "t1" TS_clk * 2;
+TIMESPEC "TS_rfrf"  = FROM "t1rf" TO "t1rf" TS_clk * 2;
+TIMESPEC "TS_t1bus" = FROM "t1" TO "membus" TS_clk * 2;
+TIMESPEC "TS_rfbus" = FROM "t1rf" TO "membus" TS_clk;
+TIMESPEC "TS_rbuf"  = FROM "rbuf" TO "t1" TS_clk;
+TIMESPEC "TS_iord"  = FROM "iord" TO "t1" TS_clk * 3;

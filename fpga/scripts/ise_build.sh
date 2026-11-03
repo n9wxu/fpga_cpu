@@ -30,7 +30,7 @@ DEFOPT=""
 if [ -n "${XSTDEF:-}" ]; then DEFOPT="-define {$XSTDEF}"; fi
 cat > "$TOP.xst" <<XST
 set -tmpdir xst/tmp
-run -ifn $TOP.prj -ifmt mixed -ofn $TOP -ofmt NGC -p $PART -top $TOP -opt_mode Speed -opt_level 1 $DEFOPT
+run -ifn $TOP.prj -ifmt mixed -ofn $TOP -ofmt NGC -p $PART -top $TOP -opt_mode Speed -opt_level 1 -vlgincdir {../../verilog/rtl} $DEFOPT
 XST
 
 xst -ifn "$TOP.xst" -ofn "$TOP.syr"

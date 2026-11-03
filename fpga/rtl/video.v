@@ -42,7 +42,7 @@ module video #(
     output wire        dma_req,
     output reg  [17:0] dma_addr = 18'd0,
     output reg  [8:0]  dma_left = 9'd0,
-    input  wire [2:0]  dma_take,
+    input  wire [4:0]  dma_take,            // words taken now (memsys: up to 4; rammux: up to 16)
     input  wire        dma_valid,
     input  wire [31:0] dma_data,
     // timing to the I/O block (pclk domain toggles)

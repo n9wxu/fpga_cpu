@@ -20,8 +20,18 @@ FSIM = os.path.join(ROOT, "sim", "build", "fsim")
 BUILD = os.path.join(ROOT, "verilog", "build")
 # T1_CORE=t1f runs everything on T1F (verilog/rtl/t1f_core.v) instead of T1
 CORE = os.environ.get("T1_CORE", "t1")
-SRCS = [os.path.join(HERE, "t1_tb.v"), os.path.join(ROOT, "verilog", "rtl", f"{CORE}_core.v"),
-        os.path.join(ROOT, "verilog", "rtl", "t1_rf.v")]
+# T1_CORE=fc: the pipelined core (verilog/rtl/fc_core.v, its own testbench fc_tb.v)
+RTL = os.path.join(ROOT, "verilog", "rtl")
+if CORE == "fc":
+    SRCS = [os.path.join(HERE, "fc_tb.v"), os.path.join(RTL, "fc_core.v"), os.path.join(RTL, "t1_dec.v")]
+elif CORE == "t1s":
+    # T1S: T1F with its decode and register file in block RAM (t1s_core.v)
+    SRCS = [os.path.join(HERE, "t1_tb.v"), os.path.join(RTL, "t1s_core.v"), os.path.join(RTL, "t1s_dec.v"),
+            os.path.join(RTL, "t1s_rom_x0.vh"), os.path.join(RTL, "t1s_rom_x1.vh")]
+else:
+    SRCS = [os.path.join(HERE, "t1_tb.v"), os.path.join(RTL, f"{CORE}_core.v"), os.path.join(RTL, "t1_rf.v")] + \
+           ([os.path.join(RTL, "t1_dec.v")] if CORE == "t1f" else [])
+TB = "fc_tb" if CORE == "fc" else "t1_tb"
 
 
 def build(ext_x=1):
@@ -30,8 +40,9 @@ def build(ext_x=1):
     vvp = os.path.join(BUILD, f"t1_tb{tag}_x{ext_x}.vvp")
     if os.path.exists(vvp) and all(os.path.getmtime(vvp) > os.path.getmtime(s) for s in SRCS):
         return vvp
-    defs = ["-DT1F"] if CORE == "t1f" else []
-    r = subprocess.run(["iverilog", "-g2001", *defs, f"-Pt1_tb.EXT_X={ext_x}", "-o", vvp, *SRCS],
+    defs = {"t1f": ["-DT1F"], "t1s": ["-DT1S", "-I", RTL]}.get(CORE, [])
+    srcs = [s for s in SRCS if s.endswith(".v")]
+    r = subprocess.run(["iverilog", "-g2001", *defs, f"-P{TB}.EXT_X={ext_x}", "-o", vvp, *srcs],
                        capture_output=True, text=True)
     if r.returncode:
         sys.exit(r.stderr)
@@ -88,7 +99,11 @@ def run(image, lockstep=False, max_cycles=4_000_000_000, ext_x=1, entry=None):
     with tempfile.TemporaryDirectory() as td:
         hx = os.path.join(td, "image.hex")
         to_hex(image, hx)
-        args = ["vvp", "-n", vvp, f"+image={hx}", f"+max={max_cycles}"]
+        args = ["vvp", "-n", vvp, f"+image={hx}", f"+max={max_cycles}"] + \
+               ([f"+stall={os.environ['T1_STALL']}"] if os.environ.get("T1_STALL") else []) + \
+               ([f"+per={os.environ['T1_PER']}"] if os.environ.get("T1_PER") else []) + \
+               ([f"+ilat={os.environ['T1_ILAT']}"] if os.environ.get("T1_ILAT") else []) + \
+               (["+irand"] if os.environ.get("T1_IRAND") else [])
         if entry is not None:
             args.append(f"+entry={entry:x}")
         fs = None

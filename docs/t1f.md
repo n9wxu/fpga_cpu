@@ -7,16 +7,18 @@ stays the transistor-count model. The changes:
 - **Registered decode.** T1 decodes the instruction parcels combinationally
   every clock, and its decode sat at the start of its longest paths (and of
   its bus outputs). T1F registers the decode. Two decoders run every clock:
-  one from IR and P2, one from the prefetch buffer NB. An instruction that
-  is already whole in NB when the one before ends starts executing at once,
-  from NB's decoder (`use_b` for that first clock). One that arrives from
-  the bus spends a clock in the new state `S_DEC` while IR's decoder loads.
-  For a 32-bit instruction that clock also fetches the second parcel's low
-  byte, so it costs nothing extra.
+  one from IR and P2, one from `np`, the parcel IR loads when an instruction
+  starts (NB, or NB's low byte and the byte arriving on din). The new
+  instruction's first clock uses `np`'s decode registers (`use_b`), the
+  rest IR's, so it executes from the clock after its last byte arrives, as
+  on T1. When that byte came from din the next state cannot look at it, so
+  the first clock is `S_DEC`: a 16-bit instruction executes there (as
+  `S_EX`), a 32-bit one fetches its second parcel's low byte instead (where
+  T1 would be in `S_P2`). The second parcel's high byte also goes through
+  the IR decoder from din.
 - **din reaches registers only.** Read data goes straight to the register
-  file's write data, NB, IR, P2 and the load sign, never through the ALU or
-  into the next-state logic (whether a parcel starts a 32-bit instruction
-  is decided in `S_DEC`, from IR).
+  file's write data, NB, IR, P2, the load sign and the decode registers,
+  never through the ALU or into the next-state logic.
 - **Hardware multiply.** MUL, MULH, MULHU and MULPU read the operands' low
   bytes, then their high bytes into one 17 x 17 multiply (a DSP block), then
   write the product's bytes: 4 clocks (6 for MULPU) instead of up to about
@@ -73,14 +75,17 @@ made the system fit.
 
 | program | T1 cycles/inst | T1F cycles/inst |
 |---|---|---|
-| arith32 | 11.78 | 4.14 |
-| fib | 5.37 | 6.26 |
-| lines | 3.01 | 3.81 |
-| memops | 3.61 | 4.45 |
-| sieve | 3.49 | 4.44 |
-| tokenize | 3.29 | 4.06 |
+| arith32 | 11.78 | 3.28 |
+| fib | 5.37 | 5.37 |
+| lines | 3.01 | 3.01 |
+| memops | 3.61 | 3.61 |
+| sieve | 3.49 | 3.49 |
+| tokenize | 3.29 | 3.25 |
 
-The decode clock adds about 20% to everything but multiplication. The demo:
+T1F takes T1's cycles or fewer (far fewer where it multiplies). Before the decoders took `np`
+and P2's high byte from din, an instruction whose last byte arrived at the
+clock it started spent a clock in `S_DEC` first (about 20% more cycles
+than T1, sieve 4.44). The demo, measured with that older T1F:
 
 | board | T1 | T1F |
 |---|---|---|
@@ -88,8 +93,53 @@ The decode clock adds about 20% to everything but multiplication. The demo:
 | Spartan-3, both at 10 MHz | 1.81 MIPS, CPI 5.51 | 1.95 MIPS, CPI 5.11 |
 | Spartan-3, T1F at 12.5 MHz (S3PER=4) | | 2.45 MIPS, CPI 5.08 |
 
-On the Spartan-3 the demo's CPI drops despite the decode clock: its star
-projection multiplies.
+On the Spartan-3 the demo's CPI dropped even with the decode clock: its
+star projection multiplies. Without the decode clock the Spartan-3 RAM
+machine's T1S (fpga/rtl/ramsys.v, simulated) takes 3.34 steps an
+instruction in the demo, against 4.14 before.
+
+## T1S: synchronous and pipelined
+
+`verilog/rtl/t1s_core.v` is T1F for a block-RAM FPGA without asynchronous
+RAM to spare, as on the Spartan-3 RAM machine (`fpga/rtl/ramsys.v`). It
+runs on the system clock with a clock enable, one step per enabled edge:
+
+- **Decode in a ROM.** The instruction's 10-bit key (`t1s_dec.v`) addresses
+  a 1K x 81 block-RAM ROM (`t1s_rom_x*.vh`, made by `verilog/tb/t1sgen.py`
+  from T1F's decoder, checked against it on every first parcel); the ROM's
+  output register is the decode register.
+- **Register file in a block RAM**, read every clock: a step needs at least
+  two clocks.
+- **Two instructions in flight.** `t1s_fetch` runs at every clock, reading
+  32-bit words from the PC on through its own port into a two-word landing
+  buffer, which feeds a 4-parcel queue in the core. The next instruction is
+  decoded from the queue (or straight from the landing buffer) at the edge
+  the current one ends and starts executing at once, so fetching costs no
+  steps. The byte bus carries only loads and stores. PC is a register of
+  its own; a jump empties the queue and fetching restarts at the target. A
+  store within 32 bytes after the PC (everything fetched ahead lies there)
+  empties the queue too and the code is fetched again, so the next
+  instruction sees the store, as in fsim, with no SYNC.
+
+Steps per instruction (`T1_CORE=t1s T1_PER=4 T1_ILAT=5`: a step every 4
+clocks, a fetched word back 5 clocks after it is asked for):
+
+| program | T1 | T1F | T1S |
+|---|---|---|---|
+| arith32 | 11.78 | 3.28 | 2.71 |
+| fib | 5.37 | 5.37 | 4.53 |
+| lines | 3.01 | 3.01 | 2.83 |
+| memops | 3.61 | 3.61 | 3.38 |
+| sieve | 3.49 | 3.49 | 2.67 |
+| tokenize | 3.29 | 3.25 | 2.95 |
+
+On the RAM machine a step without a data access takes 4 clocks of 50 MHz
+(`cpumem.v`, PERF); one with a load or store 5 or more. The demo runs
+1.59x as many instructions in the same time as T1S did before the fetch
+unit, and the system uses 3,747 of the XC3S200's 3,840 LUTs.
+
+`T1_ILAT` and `T1_IRAND` (the instruction port takes requests at random)
+vary the fetch timing in the test suites.
 
 ## Tests
 

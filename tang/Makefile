@@ -12,6 +12,7 @@
 #
 #   blinky     bring-up: LEDs
 #   hdmitest   1280x720 60 Hz HDMI test pattern (-D MODE480: 640x480)
+#   hdmiaudio  the same with a 440/660 Hz stereo tone in the TV's speakers
 #   system     the fpga_cpu: T1, 64 KB of block RAM, 720p video on HDMI,
 #              the I/O registers, serial loader and console
 
@@ -24,17 +25,20 @@ FAMILY := GW2A-18C
 # the core: t1f (verilog/rtl/t1f_core.v, the FPGA variant; T1F periods are 2
 # fclk cycles) or t1 (t1_core.v, 4)
 CORE ?= t1f
-T1 := ../verilog/rtl/$(CORE)_core.v ../verilog/rtl/t1_rf.v
+T1 := ../verilog/rtl/$(CORE)_core.v ../verilog/rtl/t1_rf.v $(if $(filter t1f,$(CORE)),../verilog/rtl/t1_dec.v)
 CDEF := $(if $(filter t1f,$(CORE)),-DT1F)
 SRC_blinky   :=
 SRC_hdmitest := rtl/dvi_tx.v
-SRC_system   := $(T1) rtl/dvi_tx.v ../fpga/rtl/video.v ../fpga/rtl/iosys.v rtl/sdram.v
+SRC_hdmiaudio := rtl/dvi_tx.v rtl/hdmi_audio_cdc.v rtl/hdmi_audio_tone.v
+SRC_system   := $(T1) rtl/dvi_tx.v ../fpga/rtl/video.v ../fpga/rtl/iosys.v ../fpga/rtl/rammux.v rtl/sdram_phy.v ../fpga/rtl/audio_engine.v ../fpga/rtl/audio_regs.v rtl/hdmi_audio_cdc.v
 SIM_system   := sim/sdram_model.v
 CST_hdmitest := constraints/hdmi.cst
+CST_hdmiaudio := constraints/hdmi.cst
 CST_system   := constraints/hdmi.cst
 DATA_system  := build/font8x14.mem
 FREQ_blinky   := 27
 FREQ_hdmitest := 74.25
+FREQ_hdmiaudio := 74.25
 FREQ_system   := 74.25
 
 SRC := rtl/$(TOP).v $(SRC_$(TOP))

@@ -1,20 +1,22 @@
 `timescale 1ns/1ps
 // fpga_cpu on the Tang Nano 20K: the T1 core (verilog/rtl/t1_core.v), 64 KB
-// of block RAM and the 8 MB SDRAM, the video of docs/io.md on HDMI
+// of block RAM and the 8 MB SDRAM (on the RAM machine: ../fpga/rtl/rammux.v
+// in front of rtl/sdram_phy.v), the video of docs/io.md on HDMI
 // (fpga/rtl/video.v, as on the Spartan-3, in true colour), the I/O
 // registers (fpga/rtl/iosys.v), and the console and program loading on the
 // USB serial port (the onboard BL616's second channel).
 //
 // Clocks. A PLL makes fclk, 67.5 MHz, for everything but the video, and the
-// SDRAM's clock, the same shifted 180 degrees (sdram.v). T1's clock is fclk
+// SDRAM's clock, the same shifted 180 degrees (sdram_phy.v). T1's clock is fclk
 // through a DQCE clock gate: a T1 cycle is a period of fclk cycles ending
 // with the one edge the gate lets through. T1's bus settles in under two
 // fclk cycles, so it is taken at the second edge of the period (lat):
 //   - block RAM (000000-00FFFF) and I/O: read or written at that edge, and
 //     T1's edge two cycles later: 4 cycles, 16.875 MHz;
-//   - the SDRAM (the rest, repeating every 8 MB): a write is done when its
-//     command goes out, a read when its data is captured, and T1's edge
-//     follows: 4 cycles for a write to an open row, 7 for a read.
+//   - the SDRAM (the rest, repeating every 8 MB), through rammux port 0: a
+//     write is done when its command goes out, a read when its word is back
+//     (rvalid), and T1's edge follows: 4 cycles for a write to an open row,
+//     7 for a read, longer behind a video burst.
 // Another PLL makes the 720p pixel clock (dvi_tx.v). Video buffers (text,
 // bitmap) must be in the SDRAM: video DMA reads only that.
 //
@@ -84,15 +86,17 @@ module system #(
     wire sclk, pclk, plocked;
     dvi_clocks vclk (.clk27(clk), .sclk(sclk), .pclk(pclk), .locked(plocked));
 
-    // T1's clock: fclk where cpu_ce was high in the cycle before
+    // T1's clock: fclk where ce was high in the cycle before (ce: cpu_ce, or
+    // the clock in which T1's SDRAM read comes back)
     reg  cpu_ce = 1'b0;
+    wire ce;
     wire cpu_clk;
 `ifdef SIM
     reg ce_l = 1'b0;
-    always @(negedge fclk) ce_l <= cpu_ce;
+    always @(negedge fclk) ce_l <= ce;
     assign cpu_clk = fclk & ce_l;
 `else
-    DQCE gate (.CLKIN(fclk), .CE(cpu_ce), .CLKOUT(cpu_clk));
+    DQCE gate (.CLKIN(fclk), .CE(ce), .CLKOUT(cpu_clk));
 `endif
 
     // ---- T1 -------------------------------------------------------------------
@@ -150,6 +154,7 @@ module system #(
     wire        io  = addr[23:16] == 8'hF0;
     wire        low = addr[23:16] == 8'h00;
     reg  [1:0]  src = 2'd0;                 // din from: 0 block RAM, 1 I/O, 2 SDRAM
+    reg         aud_s = 1'b0;               // ... I/O: the audio engine's registers
     reg         t1_wait = 1'b0;             // T1's SDRAM access under way
 
     // the loader (below) writes when T1 is held
@@ -162,8 +167,16 @@ module system #(
     reg         c_req = 1'b0, c_we = 1'b0;
     reg  [22:0] c_addr = 23'd0;
     reg  [7:0]  c_wd = 8'd0;
-    wire        c_wdone, c_rsoon, sd_ready;
-    wire [7:0]  c_q;
+    reg         c_rd_out = 1'b0;            // a read is out; its word comes back with p_rvalid[0]
+    reg  [31:0] c_word = 32'd0;             // the last word read
+    wire [2:0]  p_ack, p_wnext, p_rvalid;   // rammux: 0 T1 and the loader, 1 video, 2 audio
+    wire [31:0] p_rdata;
+    wire        c_back = c_rd_out && p_rvalid[0];
+    // T1's byte: from the word as it comes back (T1's edge is the next one:
+    // ce is high now), held in c_word after
+    wire [31:0] c_w = c_back ? p_rdata : c_word;
+    wire [7:0]  c_q = c_w[8*c_addr[1:0] +: 8];
+    assign ce = cpu_ce || (c_back && t1_wait);
 
     // T1F: at lat (one fclk cycle after T1F's edge) the address alone says
     // whether this is block RAM or I/O (served now, T1F's edge a cycle
@@ -174,11 +187,12 @@ module system #(
     wire        sd_now = (PER == 2) ? (ph == 4'd1 && sd_q) : (lat && !io && !low);
     wire        io_lat = (PER == 2) ? (ph == 4'd1 && io_q2) : lat;   // I/O registers: their address decode gets two cycles
     always @(posedge fclk) begin
-        ph     <= cpu_ce ? 4'd0 : (ph == 4'd15 ? ph : ph + 1'b1);
+        ph     <= ce ? 4'd0 : (ph == 4'd15 ? ph : ph + 1'b1);
         cpu_ce <= 1'b0;
         if (lat) begin
             cycles_t1 <= cycles;            // SR0/SR1 hold still from here to T1's edge
             src  <= io ? 2'd1 : low ? 2'd0 : 2'd2;
+            aud_s <= addr[15:12] == 4'h1;   // F01000-F01FFF: the audio engine
             sd_q <= !io && !low;
             io_q2 <= io;
         end
@@ -195,10 +209,14 @@ module system #(
         // (held in reset, T1 is clocked whatever its bus says)
         if (ph == PER - 2 && !t1_wait && (!run || PER != 2 || low)) cpu_ce <= 1'b1;
         if (PER == 2 && ph == 4'd1 && io_q2 && run) cpu_ce <= 1'b1;   // I/O done at io_lat
-        if (c_req && (c_wdone || c_rsoon)) begin
+        // rammux took the request: a write is done (T1's edge next), a read
+        // waits for its word (c_back: T1's edge at once, by ce)
+        if (c_req && p_ack[0]) begin
             c_req <= 1'b0;
-            if (t1_wait) begin t1_wait <= 1'b0; cpu_ce <= 1'b1; end
+            if (!c_we) c_rd_out <= 1'b1;
+            else if (t1_wait) begin t1_wait <= 1'b0; cpu_ce <= 1'b1; end
         end
+        if (c_back) begin c_rd_out <= 1'b0; c_word <= p_rdata; t1_wait <= 1'b0; end
         if (!run && ld_we && !ld_low) begin
             c_req <= 1'b1; c_we <= 1'b1; c_addr <= ld_a[22:0]; c_wd <= ld_d;
         end
@@ -214,27 +232,51 @@ module system #(
         if (m_we) mem[m_a] <= m_d;
         else if (lat) mem_q <= mem[m_a];
 
-    // ---- SDRAM ----------------------------------------------------------------------------
-    wire        dma_take;
+    // ---- SDRAM: the RAM machine ------------------------------------------------------------
+    // rammux ports, highest priority first:
+    //   0 T1 (and the loader while T1 is held): single words, one byte enabled
+    //   1 video DMA (video.v): bursts of up to VLEN words. A burst is not
+    //     interrupted, so VLEN reads (two clocks each) is the longest T1 waits
+    //     behind one; the line buffers leave video a line of slack.
+    //   2 the audio engine (../fpga/rtl/audio_engine.v): sample data, bursts of
+    //     8 words (16 clocks), read only. Each voice reads ahead 16 words, so
+    //     the lowest priority is enough.
+    localparam VLEN = 4;
+    wire        dma_req, dma_valid;
     wire [17:0] dma_addr;
     wire [8:0]  dma_left;
-    wire        dma_valid;
-    wire [31:0] dma_data;
-    sdram #(
+    wire [4:0]  dma_len  = (dma_left >= VLEN) ? VLEN : dma_left[4:0];
+    wire [4:0]  dma_take = p_ack[1] ? dma_len : 5'd0;
+    assign dma_valid = p_rvalid[1];
+
+    wire        phy_cmd, phy_we, phy_ready, phy_rvalid, sd_ready;
+    wire [20:0] phy_addr;
+    wire [31:0] phy_wdata, phy_rdata;
+    wire [3:0]  phy_be;
+    wire        a_req;
+    wire [20:0] a_addr;
+    wire [4:0]  a_len;
+    rammux #(.NP(3), .AW(21), .LW(5), .WMASK(3'b001)) mux (
+        .clk(fclk),
+        .p_req({a_req, dma_req, c_req}), .p_we({2'b00, c_we}),
+        .p_addr({a_addr, 3'b000, dma_addr, c_addr[22:2]}), .p_len({a_len, dma_len, 5'd1}), .p_ack(p_ack),
+        .p_wdata({64'd0, {4{c_wd}}}), .p_wbe({8'h00, 4'b0001 << c_addr[1:0]}), .p_wnext(p_wnext),
+        .p_rvalid(p_rvalid), .p_rdata(p_rdata),
+        .phy_cmd(phy_cmd), .phy_we(phy_we), .phy_addr(phy_addr), .phy_wdata(phy_wdata), .phy_be(phy_be),
+        .phy_ready(phy_ready), .phy_rvalid(phy_rvalid), .phy_rdata(phy_rdata));
+    sdram_phy #(
 `ifdef SIM
         .INIT_WAIT(100)
 `else
         .INIT_WAIT(15000)
 `endif
-    ) sd (
+    ) phy (
         .clk(fclk),
-        .c_req(c_req), .c_we(c_we), .c_addr(c_addr), .c_wd(c_wd),
-        .c_wdone(c_wdone), .c_rsoon(c_rsoon), .c_q(c_q),
-        .d_left(dma_left), .d_addr({3'b000, dma_addr}), .d_take(dma_take),
-        .d_valid(dma_valid), .d_data(dma_data),
+        .cmd(phy_cmd), .we(phy_we), .addr(phy_addr), .wdata(phy_wdata), .be(phy_be),
+        .ready(phy_ready), .rvalid(phy_rvalid), .rdata(phy_rdata), .init_done(sd_ready),
         .sd_cke(O_sdram_cke), .sd_cs_n(O_sdram_cs_n), .sd_ras_n(O_sdram_ras_n),
         .sd_cas_n(O_sdram_cas_n), .sd_we_n(O_sdram_wen_n), .sd_a(O_sdram_addr),
-        .sd_ba(O_sdram_ba), .sd_dqm(O_sdram_dqm), .sd_dq(IO_sdram_dq), .ready(sd_ready)
+        .sd_ba(O_sdram_ba), .sd_dqm(O_sdram_dqm), .sd_dq(IO_sdram_dq)
     );
 
     // ---- I/O ------------------------------------------------------------------------
@@ -251,7 +293,7 @@ module system #(
     always @*
         case (src)
             2'd0: din = mem_q;
-            2'd1: din = io_q;
+            2'd1: din = aud_s ? aud_q : io_q;
             default: din = c_q;
         endcase
 
@@ -267,6 +309,37 @@ module system #(
         .con_in(con_in), .con_take(con_take), .con_we(con_we), .exit_we(exit_we), .wvalue(wvalue)
     );
 
+    // ---- audio ---------------------------------------------------------------------------
+    // The engine's registers (F01000 global, F01800 voices: docs/audio.md) on
+    // the same write strobe as iosys. Reads: the engine's rd_data (16 bits)
+    // is valid a clock after the address, which has settled by io_lat; as in
+    // iosys, the low byte is read live and the word latched, and the high
+    // byte comes from the latch when it follows.
+    wire [15:0] aud_rd;
+    reg  [7:0]  aud_q = 8'd0;
+    reg  [15:0] aud_latch = 16'd0;
+    reg  [15:0] aud_la = 16'hFFFF;
+    always @(posedge fclk)
+        if (io_lat && run && io && rd) begin
+            if (!addr[0]) begin aud_q <= aud_rd[7:0]; aud_latch <= aud_rd; aud_la <= addr[15:0]; end
+            else aud_q <= (addr[15:0] == (aud_la | 16'd1)) ? aud_latch[15:8] : aud_rd[15:8];
+        end
+
+    wire        s_valid, s_ready, a_pop;
+    wire [15:0] s_l, s_r, a_l, a_r;
+    audio_engine #(.AW(21)) aud (
+        .clk(fclk),
+        .io_wr(io_lat && run && io && wr), .io_addr(addr[15:0]), .io_wdata(dout),
+        .rd_addr(addr[15:0]), .rd_data(aud_rd), .irq(),
+        .p_req(a_req), .p_we(), .p_addr(a_addr), .p_len(a_len),
+        .p_ack(p_ack[2]), .p_rvalid(p_rvalid[2]), .p_rdata(p_rdata),
+        .s_valid(s_valid), .s_l(s_l), .s_r(s_r), .s_ready(s_ready)
+    );
+    // to the pixel clock: dvi_tx pops a sample 48,000 times a second, and the
+    // engine makes one whenever the FIFO has room
+    hdmi_audio_cdc afifo (.s_clk(fclk), .s_valid(s_valid), .s_l(s_l), .s_r(s_r), .s_ready(s_ready),
+                          .p_clk(pclk), .p_pop(a_pop), .p_l(a_l), .p_r(a_r), .p_under());
+
     // ---- video ------------------------------------------------------------------------
     wire [23:0] rgb24;
     wire        hs, vs, de;
@@ -275,13 +348,14 @@ module system #(
         .vid_ctrl(vid_ctrl), .vid_backdrop(vid_backdrop), .vid_text(vid_text), .vid_bmp(vid_bmp),
         .vid_scrollx(vid_scrollx), .vid_scrolly(vid_scrolly), .vid_cursor(vid_cursor),
         .pal_we(pal_we), .pal_windex(pal_windex), .pal_wdata(pal_wdata),
-        .dma_req(), .dma_addr(dma_addr), .dma_left(dma_left), .dma_take({2'b00, dma_take}),
-        .dma_valid(dma_valid), .dma_data(dma_data),
+        .dma_req(dma_req), .dma_addr(dma_addr), .dma_left(dma_left), .dma_take(dma_take),
+        .dma_valid(dma_valid), .dma_data(p_rdata),
         .line_tgl(line_tgl), .line_top(line_top),
         .hsync(hs), .vsync(vs), .rgb(), .rgb24(rgb24), .de(de)
     );
-    dvi_tx #(.HDMI(1)) tx (.pclk(pclk), .sclk(sclk), .rst(!plocked), .de(de), .hsync(hs), .vsync(vs),
-               .r(rgb24[23:16]), .g(rgb24[15:8]), .b(rgb24[7:0]), .tmds_p(tmds_p), .tmds_n(tmds_n));
+    dvi_tx #(.HDMI(1), .AUDIO(1)) tx (.pclk(pclk), .sclk(sclk), .rst(!plocked), .de(de), .hsync(hs), .vsync(vs),
+               .r(rgb24[23:16]), .g(rgb24[15:8]), .b(rgb24[7:0]),
+               .a_l(a_l), .a_r(a_r), .a_pop(a_pop), .tmds_p(tmds_p), .tmds_n(tmds_n));
 
     // ---- UART -------------------------------------------------------------------------
 `ifdef SIM

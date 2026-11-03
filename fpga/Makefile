@@ -29,8 +29,21 @@ DATA_board_test := build/font8x14.mem build/text_demo.hex
 CORE ?= t1f
 CDEF := $(if $(filter t1f,$(CORE)),T1F $(if $(filter 4,$(S3PER)),T1F_PER4))
 SRC_system      := rtl/memsys.v rtl/iosys.v rtl/video.v rtl/jtagldr.v rtl/clkgen.v rtl/clkgate.v rtl/seg7.v \
-                   ../verilog/rtl/$(CORE)_core.v ../verilog/rtl/t1_rf.v
+                   ../verilog/rtl/$(CORE)_core.v ../verilog/rtl/t1_rf.v $(if $(filter t1f,$(CORE)),../verilog/rtl/t1_dec.v)
 DATA_system     := build/font8x14.mem
+# fcsys: the system with FC, the pipelined core (docs/fc.md)
+SRC_fcsys       := rtl/fcmem.v rtl/iosys.v rtl/video.v rtl/jtagldr.v rtl/clkgen.v rtl/clkgate.v rtl/seg7.v \
+                   ../verilog/rtl/fc_core.v ../verilog/rtl/t1_dec.v
+DATA_fcsys      := build/font8x14.mem
+# ramtest: the RAM machine (rammux.v, sram_phy.v) under mock clients (tools/ramtest.py)
+SRC_ramtest     := rtl/rammux.v rtl/sram_phy.v rtl/jtagldr.v rtl/seg7.v
+# ramsys: system.v's T1F, I/O and video on the RAM machine (rammux.v, sram_phy.v, cpumem.v)
+SRC_ramsys      := rtl/cpumem.v rtl/rammux.v rtl/sram_phy.v rtl/iosys.v rtl/video.v rtl/jtagldr.v \
+                   rtl/seg7.v ../verilog/rtl/t1s_core.v ../verilog/rtl/t1s_dec.v
+DATA_ramsys     := build/font8x14.mem ../verilog/rtl/t1s_rom_x0.vh ../verilog/rtl/t1s_rom_x1.vh
+# ramvid: the RAM machine's 1280x720 status monitor (mockcpu.v, fbvideo.v; tools/mkstatus.py)
+SRC_ramvid      := rtl/rammux.v rtl/sram_phy.v rtl/fbvideo.v rtl/mockcpu.v rtl/jtagldr.v rtl/seg7.v
+DATA_ramvid     := build/font8x14.mem build/stat_text.hex build/stat_fields.hex build/stat_colours.hex
 SRC_t1test      := rtl/jtagldr.v rtl/clkgen.v rtl/clkgate.v rtl/seg7.v \
                    ../verilog/rtl/t1_core.v ../verilog/rtl/t1_rf.v
 DATA_t1test     := build/t1test.hex
@@ -55,7 +68,7 @@ OCD     := $(OPENOCD) -f openocd/opella-ld.cfg -f openocd/s3starter.cfg
 
 FORCE:
 
-.PHONY: sim sim-board_test sim-system sim-t1test bit prog scan demo run clean
+.PHONY: sim sim-board_test sim-system sim-fcsys sim-ramtest sim-ramvid sim-ramsys sim-t1test bit prog scan demo run clean
 
 # S3PER=4: T1F at four 50 MHz cycles a clock (system_per4.ucf); the default is five
 S3PER ?= 5
@@ -82,6 +95,26 @@ sim: sim-$(TOP)
 sim-system: $(DATA)
 	iverilog -g2005 -Wall -DSIM $(addprefix -D,$(CDEF)) -o build/system_tb.vvp sim/system_tb.v sim/sram_model.v $(SIM_SRC)
 	cd build && vvp -n system_tb.vvp $(SIMARGS)
+
+sim-fcsys: $(DATA)
+	iverilog -g2005 -Wall -DSIM -DFCSYS -o build/fcsys_tb.vvp sim/system_tb.v sim/sram_model.v $(SIM_SRC)
+	cd build && vvp -n fcsys_tb.vvp $(SIMARGS)
+
+sim-ramtest:
+	iverilog -g2005 -DSIM -o build/ramtest_tb.vvp sim/ramtest_tb.v sim/sram_model.v $(SRC)
+	cd build && vvp -n ramtest_tb.vvp $(SIMARGS)
+
+build/stat_text.hex build/stat_fields.hex build/stat_colours.hex: tools/mkstatus.py
+	python3 tools/mkstatus.py
+
+sim-ramsys: $(DATA)
+	iverilog -g2005 -Wall -DSIM -DRAMSYS -I ../verilog/rtl -o build/ramsys_tb.vvp sim/system_tb.v sim/sram_model.v $(SRC)
+	cd build && vvp -n ramsys_tb.vvp $(SIMARGS)
+
+sim-ramvid: $(DATA)
+	iverilog -g2005 -DSIM -o build/ramvid_tb.vvp sim/ramvid_tb.v sim/sram_model.v $(SRC)
+	cd build && vvp -n ramvid_tb.vvp $(SIMARGS)
+	python3 sim/frame2png.py build/ramvid_frame.txt build/ramvid_frame.png
 
 sim-t1test: $(DATA)
 	iverilog -g2005 -Wall -DSIM -o build/t1test_tb.vvp sim/t1test_tb.v $(SIM_SRC)
@@ -112,7 +145,7 @@ prog: build/$(TOP).bit
 PROG ?= build/demo.bin
 build/demo.bin: demo/demo.c FORCE
 	@mkdir -p build
-	cd .. && llvm/fcc -O2 $(if $(filter 4,$(S3PER)),-DT1_KHZ=12500) -o fpga/$@ fpga/demo/demo.c
+	cd .. && llvm/fcc -O2 $(if $(filter 4,$(S3PER)),-DT1_KHZ=12500) $(if $(filter ramsys,$(TOP)),-DRAMSYS) -o fpga/$@ fpga/demo/demo.c
 
 demo: build/demo.bin
 

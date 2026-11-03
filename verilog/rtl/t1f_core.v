@@ -103,11 +103,12 @@ module t1f_core #(
     endfunction
 
     // The decode is registered: the sequencer runs from these, decoded a
-    // clock earlier from registers, never from din. One decoder takes IR and
-    // P2 (an instruction that has just arrived goes through S_DEC for a
-    // clock). The other takes the prefetch buffer, so an instruction already
-    // whole in it at the end of the one before starts executing at once: its
-    // first clock uses that decoder's registers (use_b), the rest IR's.
+    // clock earlier, never from din combinationally. One decoder takes IR
+    // and P2 (P2's high byte from din in S_P2's last clock). The other takes
+    // np, the parcel IR loads when an instruction starts (NB, or NB's low
+    // byte and din), so the instruction executes from the clock after its
+    // last byte arrives, as on T1: its first clock uses that decoder's
+    // registers (use_b), the rest IR's.
     reg  [3:0] cls_qi, cls_qb;
     reg  [3:0] fn_qi, fn_qb;
     reg  [3:0] ra_r_qi, ra_r_qb;
@@ -235,9 +236,17 @@ module t1f_core #(
     wire [1:0] pa_src_b;
     wire [1:0] pb_src_b;
     wire [7:0] tcode_b;
-    t1f_dec #(.EXT_X(EXT_X)) dec_i (.ir(ir), .p2(p2), .cls(cls_i), .fn(fn_i), .ra_r(ra_r_i), .rb_r(rb_r_i), .rd_r(rd_r_i), .xr(xr_i), .sh_n(sh_n_i), .cc(cc_i), .fsh(fsh_i), .mp(mp_i), .b_imm(b_imm_i), .mld(mld_i), .sfill(sfill_i), .zx(zx_i), .sh_reg(sh_reg_i), .pstop(pstop_i), .mw(mw_i), .msig(msig_i), .narrow(narrow_i), .ifill(ifill_i), .corr(corr_i), .imm(imm_i), .pn(pn_i), .sr(sr_i), .msz(msz_i), .mmode(mmode_i), .sc(sc_i), .shk(shk_i), .pa_src(pa_src_i), .pb_src(pb_src_i), .tcode(tcode_i));
+    // The parcel the next instruction starts with, when IR loads at this
+    // edge: NB, or NB's low byte and din (the high byte arriving now). And
+    // P2 with its high byte from din in S_P2 (it is in at this edge then).
+    // Decoding these, not IR and P2 after they load, is what lets an
+    // instruction start executing at the clock after its last byte arrives,
+    // as on T1 (no decode clock).
+    wire [15:0] np = (nbn == 2'd2) ? nb : {din, nb[7:0]};
+    wire [15:0] p2x = (state == S_P2) ? {din, p2[7:0]} : p2;
+    t1f_dec #(.EXT_X(EXT_X)) dec_i (.ir(ir), .p2(p2x), .cls(cls_i), .fn(fn_i), .ra_r(ra_r_i), .rb_r(rb_r_i), .rd_r(rd_r_i), .xr(xr_i), .sh_n(sh_n_i), .cc(cc_i), .fsh(fsh_i), .mp(mp_i), .b_imm(b_imm_i), .mld(mld_i), .sfill(sfill_i), .zx(zx_i), .sh_reg(sh_reg_i), .pstop(pstop_i), .mw(mw_i), .msig(msig_i), .narrow(narrow_i), .ifill(ifill_i), .corr(corr_i), .imm(imm_i), .pn(pn_i), .sr(sr_i), .msz(msz_i), .mmode(mmode_i), .sc(sc_i), .shk(shk_i), .pa_src(pa_src_i), .pb_src(pb_src_i), .tcode(tcode_i));
     // (16-bit instructions only, so no second parcel: its logic drops out)
-    t1f_dec #(.EXT_X(EXT_X)) dec_b (.ir(nb), .p2(16'd0), .cls(cls_b), .fn(fn_b), .ra_r(ra_r_b), .rb_r(rb_r_b), .rd_r(rd_r_b), .xr(xr_b), .sh_n(sh_n_b), .cc(cc_b), .fsh(fsh_b), .mp(mp_b), .b_imm(b_imm_b), .mld(mld_b), .sfill(sfill_b), .zx(zx_b), .sh_reg(sh_reg_b), .pstop(pstop_b), .mw(mw_b), .msig(msig_b), .narrow(narrow_b), .ifill(ifill_b), .corr(corr_b), .imm(imm_b), .pn(pn_b), .sr(sr_b), .msz(msz_b), .mmode(mmode_b), .sc(sc_b), .shk(shk_b), .pa_src(pa_src_b), .pb_src(pb_src_b), .tcode(tcode_b));
+    t1f_dec #(.EXT_X(EXT_X)) dec_b (.ir(np), .p2(16'd0), .cls(cls_b), .fn(fn_b), .ra_r(ra_r_b), .rb_r(rb_r_b), .rd_r(rd_r_b), .xr(xr_b), .sh_n(sh_n_b), .cc(cc_b), .fsh(fsh_b), .mp(mp_b), .b_imm(b_imm_b), .mld(mld_b), .sfill(sfill_b), .zx(zx_b), .sh_reg(sh_reg_b), .pstop(pstop_b), .mw(mw_b), .msig(msig_b), .narrow(narrow_b), .ifill(ifill_b), .corr(corr_b), .imm(imm_b), .pn(pn_b), .sr(sr_b), .msz(msz_b), .mmode(mmode_b), .sc(sc_b), .shk(shk_b), .pa_src(pa_src_b), .pb_src(pb_src_b), .tcode(tcode_b));
     reg        dnb;                // this edge starts the instruction in NB
 
     always @(posedge clk) if (ce) begin
@@ -413,6 +422,8 @@ module t1f_core #(
     // ---------------------------------------------------------------- sequencer
 
     reg [2:0]  state_n;
+    // S_DEC with a 16-bit instruction is its first execute clock
+    wire [2:0] st = (state == S_DEC && !is32(ir)) ? S_EX : state;
     reg [3:0]  k_n;
     reg [20:0] pcf_n, ar_n;
     reg [15:0] ir_n, p2_n, nb_n;
@@ -453,7 +464,7 @@ module t1f_core #(
         pf_ok = 1'b0; done = 1'b0; jump = 1'b0; bad = 1'b0; arb = 8'h00; pcx_n = pcx; pinc = 1'b0;
         dnb = 1'b0; wd_m = 1'b0; wd_d = 1'b0; mop_n = mop; prod_n = prod;
 
-        case (state)
+        case (st)
         S_FETCH: if (pcx) bad = 1'b1;                      // fetch a parcel into IR (nothing at 0x100000)
         else begin
             mem_rd_c = 1'b1; pcf_n = binc; pinc = 1'b1;
@@ -461,7 +472,7 @@ module t1f_core #(
                 nb_n[7:0] = din; nbn_n = 2'd1;
             end else begin
                 ir_n = {din, nb[7:0]}; nbn_n = 2'd0; k_n = 4'd0;
-                state_n = S_DEC;                           // S_DEC looks at IR (not din) for a second parcel
+                state_n = S_DEC;                           // S_DEC runs it (decoded from np)
             end
         end
 
@@ -469,18 +480,15 @@ module t1f_core #(
         else begin
             mem_rd_c = 1'b1; pcf_n = binc; pinc = 1'b1;
             if (k == 4'd0) begin p2_n[7:0] = din; k_n = 4'd1; end
-            else begin p2_n[15:8] = din; k_n = 4'd1; state_n = S_DEC; end   // k 1: the parcels are in
+            else begin p2_n[15:8] = din; k_n = 4'd0; state_n = S_EX; end    // decoded from IR and p2x
         end
 
-        // The decode registers load. Coming from the first parcel (k 0) of a
-        // 32-bit instruction, this clock fetches the second parcel's low byte
-        // (S_P2 takes the high byte and comes back). No prefetch here:
-        // branches, JAL and LEAPC take the PC (the fetch pointer) as the next
-        // instruction's.
-        S_DEC: if (k == 4'd0 && is32(ir)) begin
-            if (pcx) bad = 1'b1;
-            else begin mem_rd_c = 1'b1; pcf_n = binc; pinc = 1'b1; p2_n[7:0] = din; k_n = 4'd1; state_n = S_P2; end
-        end else begin k_n = 4'd0; state_n = S_EX; end
+        // The first clock of an instruction whose first parcel has just
+        // arrived (its decode came from np). A 16-bit one executes (st is
+        // S_EX); a 32-bit one fetches the second parcel's low byte here
+        // (S_P2 takes the high byte, then S_EX).
+        S_DEC: if (pcx) bad = 1'b1;
+        else begin mem_rd_c = 1'b1; pcf_n = binc; pinc = 1'b1; p2_n[7:0] = din; k_n = 4'd1; state_n = S_P2; end
 
         S_EX: case (cls)
         C_ALU: begin                                       // two byte passes
@@ -779,8 +787,8 @@ module t1f_core #(
         if (done) begin
             k_n = 4'd0;
             if (nbn_n == 2'd2) begin
-                ir_n = nb_n; nbn_n = 2'd0;
-                state_n = (nbn != 2'd2) ? S_DEC : is32(nb) ? S_P2 : S_EX;   // not from din: S_DEC sees it
+                ir_n = nb_n; nbn_n = 2'd0; dnb = 1'b1;
+                state_n = (nbn != 2'd2) ? S_DEC : is32(nb) ? S_P2 : S_EX;   // not from din: S_DEC sees is32
             end else
                 state_n = S_FETCH;
         end
@@ -788,7 +796,8 @@ module t1f_core #(
         else if (pinc && !pcf[20] && binc[20]) pcx_n = 1'b1;   // 0x0FFFFF + 1: no wrap into I/O
         if (done | jump) swp_n = 1'b0;
         if (bad) begin halted_n = 1'b1; halt_code_n = 8'hFD; state_n = S_HALT; end
-        dnb = state_n == S_EX && done && !jump && !bad;   // NB was whole: decoded from NB
+        // IR loads from np at this edge: the next clock's decode is np's
+        dnb = !bad && !jump && (dnb || (state == S_FETCH && nbn != 2'd0));
 
         // a write to bytes 1-2 of the tagged pair makes AR stale
         if (!tag_set && we && !wa[5] && wa[4:2] == tag && (wa[1:0] == 2'd1 || wa[1:0] == 2'd2))
@@ -825,207 +834,3 @@ endmodule
 
 `default_nettype wire
 
-// T1F's instruction decoder: the parcels to the controls of the sequencer
-// (t1_core.v's decode, unchanged, as a module so the core can have two).
-module t1f_dec #(
-    parameter EXT_X = 1
-) (
-    input  wire [15:0] ir,
-    input  wire [15:0] p2,
-    output reg  [3:0] cls,
-    output reg  [3:0] fn,
-    output reg  [3:0] ra_r,
-    output reg  [3:0] rb_r,
-    output reg  [3:0] rd_r,
-    output reg  [3:0] xr,
-    output reg  [3:0] sh_n,
-    output reg  [3:0] cc,
-    output reg  fsh,
-    output reg  mp,
-    output reg  b_imm,
-    output reg  mld,
-    output reg  sfill,
-    output reg  zx,
-    output reg  sh_reg,
-    output reg  pstop,
-    output reg  mw,
-    output reg  msig,
-    output reg  narrow,
-    output reg  ifill,
-    output reg  corr,
-    output reg  [23:0] imm,
-    output reg  [2:0] pn,
-    output reg  [2:0] sr,
-    output reg  [1:0] msz,
-    output reg  [1:0] mmode,
-    output reg  [1:0] sc,
-    output reg  [1:0] shk,
-    output reg  [1:0] pa_src,
-    output reg  [1:0] pb_src,
-    output reg  [7:0] tcode
-);
-    localparam C_ALU = 4'd0, C_SHF = 4'd1, C_MUL = 4'd2, C_MEM = 4'd3, C_PAIR = 4'd4,
-               C_BR = 4'd5, C_JAL = 4'd6, C_JR = 4'd7, C_JALR = 4'd8, C_MFSR = 4'd9,
-               C_MTSR = 4'd10, C_NOP = 4'd11, C_TRAP = 4'd12, C_CLZ = 4'd13, C_DST = 4'd14;
-
-    // ALUFN, isa.yaml tables.ALUFN
-    localparam F_ADD = 4'd0, F_ADC = 4'd1, F_SUB = 4'd2, F_SBC = 4'd3, F_AND = 4'd4,
-               F_OR = 4'd5, F_XOR = 4'd6, F_MOV = 4'd7, F_CMP = 4'd8, F_CPC = 4'd9,
-               F_NEG = 4'd14, F_NOT = 4'd15;
-
-    localparam M_D = 2'd0, M_X = 2'd1, M_PI = 2'd2, M_PD = 2'd3;
-
-
-    // B/16 offset relative to the next instruction: 2*off8 - 2 = 2*(off8 - 1)
-    wire [8:0] boff = {ir[7], ir[7:0]} - 9'd1;
-    reg        ill;
-
-    always @* begin
-        cls = C_TRAP; tcode = 8'hFE; ill = 1'b0; fsh = 1'b0; mp = 1'b0;
-        fn = F_ADD; ra_r = 4'd0; rb_r = 4'd0; rd_r = 4'd0; xr = 4'd0; sh_n = 4'd0; cc = 4'd14;
-        b_imm = 1'b0; mld = 1'b0; sfill = 1'b0; zx = 1'b0; sh_reg = 1'b0; pstop = 1'b0;
-        mw = 1'b0; msig = 1'b0; narrow = 1'b0; ifill = 1'b0; corr = 1'b0;
-        imm = 24'd0; pn = 3'd0; sr = 3'd0;
-        msz = 2'd0; mmode = M_D; sc = 2'd0; shk = 2'd0; pa_src = 2'd0; pb_src = 2'd0;
-        // ill: a reserved bit or field value is set. Every form checks all of
-        // its fixed bits, and pair fields (2*N) must be even.
-        case (ir[15:12])
-        4'h0: begin                                        // ALU2: rd = rd op rs
-            fn = ir[3:0]; ra_r = ir[11:8]; rb_r = ir[7:4]; rd_r = ir[11:8];
-            if (ir[3:0] >= 4'd10 && ir[3:0] <= 4'd12) begin cls = C_SHF; shk = ir[1:0] - 2'd2; sh_reg = 1'b1; end
-            else if (ir[3:0] == 4'd13) cls = C_MUL;
-            else cls = C_ALU;
-        end
-        4'h1, 4'h2, 4'h3: begin                            // ADDI / MOVI / CMPI imm8
-            cls = C_ALU; fn = (ir[13:12] == 2'd1) ? F_ADD : (ir[13:12] == 2'd2) ? F_MOV : F_CMP;
-            ra_r = ir[11:8]; rd_r = ir[11:8]; b_imm = 1'b1; imm = {{16{ir[7]}}, ir[7:0]};
-        end
-        4'h4, 4'h5: begin                                  // LDW/STW [pN + disp5*2]
-            cls = C_MEM; mld = ~ir[12]; msz = 2'd1; rd_r = ir[11:8]; pn = ir[7:5];
-            imm = {18'd0, ir[4:0], 1'b0}; narrow = 1'b1;
-        end
-        4'h6: begin                                        // LDBU/STB [pN + disp4]
-            cls = C_MEM; mld = ~ir[4]; rd_r = ir[11:8]; pn = ir[7:5]; imm = {20'd0, ir[3:0]}; narrow = 1'b1;
-        end
-        4'h7: begin                                        // LDP/STP [pN + disp5*2]
-            cls = C_MEM; mld = ~ir[5]; msz = 2'd2; rd_r = {ir[11:9], 1'b0}; pn = ir[8:6];
-            imm = {18'd0, ir[4:0], 1'b0}; narrow = 1'b1;
-        end
-        4'h8: begin                                        // LDW/STW [sp + disp7*2]
-            cls = C_MEM; mld = ~ir[7]; msz = 2'd1; rd_r = ir[11:8]; pn = 3'd7;
-            imm = {16'd0, ir[6:0], 1'b0}; narrow = 1'b1;
-        end
-        4'h9: begin                                        // Bcc off8 (cc 15 is reserved)
-            cls = (ir[11:8] == 4'd15) ? C_TRAP : C_BR; cc = ir[11:8];
-            imm = {{8{boff[8]}}, {7{boff[8]}}, boff[7], boff[6:0], 1'b0};
-            ifill = boff[8]; narrow = (boff[8] == boff[7]);
-        end
-        4'hA: case (ir[11:8])                              // MISC
-            4'h0: begin cls = C_JR; pn = ir[2:0]; ill = |ir[7:3]; end
-            4'h1: begin cls = C_JALR; pn = ir[2:0]; ill = |ir[7:3]; end
-            4'h2: tcode = ir[7:0];                         // SYS
-            4'h3: if (ir[7:0] == 8'h00) tcode = 8'hFF;     // RETI: no interrupts yet
-                  else if (ir[7:0] == 8'h01 || ir[7:0] == 8'h02) cls = C_NOP;   // SYNC, NOP
-            4'h5: begin cls = C_PAIR; rd_r = {ir[6:4], 1'b0}; ra_r = {ir[2:0], 1'b0}; pb_src = 2'd3; ill = ir[7] | ir[3]; end  // MOVP
-            4'h6: begin cls = C_PAIR; rd_r = {ir[6:4], 1'b0}; ra_r = {ir[6:4], 1'b0}; pb_src = 2'd2; xr = ir[3:0]; ill = ir[7]; end  // ADDP
-            4'h7, 4'h8, 4'h9: begin                        // SHLI / SHRI / SARI imm4
-                cls = C_SHF; shk = ir[9:8] + 2'd1; sh_n = ir[3:0]; ra_r = ir[7:4]; rd_r = ir[7:4];
-            end
-            4'hB, 4'hC, 4'hD, 4'hE: begin                  // LDW [pN]+, STW -[pN], LDBU [pN]+, STB [pN]+
-                cls = C_MEM; mld = ir[8]; mmode = (ir[11:8] == 4'hC) ? M_PD : M_PI;
-                msz = {1'b0, ir[11:8] == 4'hB || ir[11:8] == 4'hC}; imm = msz[0] ? 24'd2 : 24'd1;
-                rd_r = ir[7:4]; pn = ir[2:0]; ill = ir[3];
-            end
-            4'hF: begin cls = ir[3] ? C_MTSR : C_MFSR; rd_r = ir[7:4]; sr = ir[2:0]; end
-            default: ;
-            endcase
-        4'hB: begin                                        // LDW/STW [pN + rX*2]
-            cls = C_MEM; mld = ~ir[4]; msz = 2'd1; mmode = M_X; rd_r = ir[11:8]; pn = ir[7:5]; xr = ir[3:0]; sc = 2'd1;
-        end
-        4'hC: begin                                        // ADDPI pD, imm9
-            cls = C_PAIR; rd_r = {ir[11:9], 1'b0}; ra_r = {ir[11:9], 1'b0};
-            imm = {{15{ir[8]}}, ir[8:0]}; ifill = ir[8]; narrow = 1'b1; pstop = 1'b1;
-        end
-        4'hD: begin                                        // LEA pD, [abs24] / LEAPC
-            cls = C_PAIR; rd_r = {ir[11:9], 1'b0}; imm = {ir[7:0], p2};
-            if (ir[8]) begin pa_src = 2'd2; ifill = ir[7]; corr = 1'b1; end
-            else pa_src = 2'd1;
-        end
-        4'hE: if (!ir[11]) begin                           // MEM, 32-bit
-            rd_r = ir[7:4]; pn = ir[3:1]; ra_r = {ir[3:1], 1'b0};
-            imm = {{8{p2[15]}}, p2}; ifill = p2[15];
-            ill = ir[4] && (ir[10:8] == 3'd3 || ir[10:8] >= 3'd6);        // LDP, STP, LEA name a pair
-            if (ir[10:8] == 3'd7) begin                    // LEA pD, [pN + disp16] / [pN + rX*s]
-                cls = C_PAIR;
-                if (ir[0]) begin
-                    pb_src = 2'd2; xr = p2[15:12]; sc = p2[9:8]; zx = p2[10];
-                    ill = ill | p2[11] | (p2[9:8] == 2'd3) | (|p2[7:0]);  // no pi/pd, scale code 3 reserved
-                end
-            end else begin
-                cls = C_MEM; mld = ~ir[10]; sfill = (ir[10:8] == 3'd1);
-                msz = ir[10] ? ir[9:8] : (ir[9:8] == 2'd3) ? 2'd2 : {1'b0, ir[9]};
-                if (ir[0]) begin
-                    if (p2[11:8] == 4'h8 || p2[11:8] == 4'h9) begin
-                        mmode = p2[8] ? M_PD : M_PI;
-                        imm = (msz == 2'd0) ? 24'd1 : (msz == 2'd1) ? 24'd2 : 24'd4; ifill = 1'b0;
-                        ill = ill | (|p2[15:12]) | (|p2[7:0]);
-                    end else begin
-                        mmode = M_X; xr = p2[15:12]; sc = p2[9:8]; zx = p2[10];
-                        ill = ill | p2[11] | (p2[9:8] == 2'd3) | (|p2[7:0]);
-                    end
-                end
-            end
-        end else begin                                     // ALUI: rd = rs op imm16
-            rd_r = ir[7:4]; ra_r = ir[3:0]; b_imm = 1'b1; imm = {8'd0, p2};
-            case (ir[10:8])
-            3'd0: begin cls = C_ALU; fn = F_ADD; end
-            3'd1: begin cls = C_ALU; fn = F_AND; end
-            3'd2: begin cls = C_ALU; fn = F_OR;  end
-            3'd3: begin cls = C_ALU; fn = F_XOR; end
-            3'd4: begin cls = C_ALU; fn = F_CMP; ill = |ir[7:4]; end
-            3'd5: begin cls = C_ALU; fn = F_MOV; ill = |ir[3:0]; end
-            3'd6: begin cls = C_PAIR; imm = {{8{p2[15]}}, p2}; ifill = p2[15]; ill = ir[4] | ir[0]; end   // ADDPI pD, pS, imm16
-            default: ;
-            endcase
-        end
-        4'hF: if (!ir[11]) begin                           // Bcc off23 / JAL: 2*off23, then -4
-            cls = (ir[10:7] == 4'd15) ? C_JAL : C_BR; cc = ir[10:7];
-            imm = {ir[6:0], p2, 1'b0}; corr = 1'b1;
-        end else begin                                     // REG3
-            rd_r = ir[7:4]; ra_r = ir[3:0]; rb_r = p2[15:12];
-            case (ir[10:8])
-            3'd0: begin
-                fn = p2[11:8]; ill = |p2[7:0];
-                if (p2[11:8] >= 4'd10 && p2[11:8] <= 4'd12) begin cls = C_SHF; shk = p2[9:8] - 2'd2; sh_reg = 1'b1; end
-                else if (p2[11:8] == 4'd13) cls = C_MUL;
-                else begin
-                    cls = C_ALU;
-                    if (p2[11:8] == F_MOV || p2[11:8] == F_NEG || p2[11:8] == F_NOT) begin rb_r = ir[3:0]; ill = ill | (|p2[15:12]); end
-                    if (p2[11:8] == F_CMP || p2[11:8] == F_CPC) ill = ill | (|ir[7:4]);
-                end
-            end
-            3'd1: if (p2[11:8] <= 4'd2) begin cls = C_SHF; shk = p2[9:8]; sh_n = p2[3:0]; ill = (|p2[15:12]) | (|p2[7:4]); end
-            3'd2: if (p2[11:8] <= 4'd2) begin              // ADDP / ADDPU / ADDPP
-                cls = C_PAIR; ill = ir[4] | ir[0] | (|p2[7:0]);
-                if (p2[9]) begin pb_src = 2'd1; ill = ill | p2[12]; end
-                else begin pb_src = 2'd2; xr = p2[15:12]; zx = p2[8]; end
-            end
-            3'd3: if (p2[11:10] == 2'd0 && p2[9:8] != 2'd3) begin    // MULH, MULHU, MULPU
-                cls = C_MUL; mw = 1'b1; msig = ~p2[9] & ~p2[8]; sfill = ~p2[9] & ~p2[8]; ill = |p2[7:0];
-                if (p2[9]) begin mp = 1'b1; ill = ill | ir[4]; if (!EXT_X) cls = C_TRAP; end
-            end
-            3'd4: if (EXT_X && p2[11:9] == 3'd0) begin     // FSHR, FSHL
-                cls = C_SHF; fsh = 1'b1; sh_reg = 1'b1; shk = {1'b0, ~p2[8]}; ill = (|p2[7:0]) | ir[0];
-            end
-            3'd5: if (EXT_X && p2[11:9] == 3'd0) begin     // CLZ, DSTEP
-                if (p2[8]) begin cls = C_DST; ill = (|p2[15:12]) | (|p2[7:0]) | ir[4] | ir[0]; end
-                else begin cls = C_CLZ; ill = (|p2[15:12]) | (|p2[7:0]); end
-            end
-            default: ;
-            endcase
-        end
-        default: ;
-        endcase
-        if (ill) begin cls = C_TRAP; tcode = 8'hFE; end
-    end
-endmodule

@@ -227,12 +227,19 @@ static const char msg[] =
     "inside the FPGA's package, shown on HDMI in true color ...   "
 #else
     "*** fpga_cpu on a Spartan-3 Starter Board ***   "
-#if T1_KHZ == 12500
+#if defined(RAMSYS)
+    "The T1F core runs these 60 frames a second on the RAM machine: the board's SRAM "
+    "in bursts at 200 MB/s, video first, then the CPU's write buffer and word buffer ...   "
+    "The video DMA and the loader are clients like the CPU "
+#elif T1_KHZ == 12500
     "The T1F core runs these 60 frames a second at 12.5 MHz, from the board's SRAM, "
 #else
     "The core runs these 60 frames a second at 10 MHz, from the board's SRAM, "
 #endif
-    "sharing it with the video DMA ...   "
+#ifndef RAMSYS
+    "sharing it with the video DMA "
+#endif
+    "...   "
 #endif
     "Every pixel of the 640x360 plasma was computed by T1 at start-up; what moves now is "
     "palette cycling, hardware scroll, 96 real-time 3D stars and this text layer ...   "

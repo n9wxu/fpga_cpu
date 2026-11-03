@@ -36,8 +36,9 @@ The core is T1F (`../verilog/rtl/t1f_core.v`, docs/t1f.md; `make CORE=t1`
 builds T1). It runs on a 67.5 MHz clock gated by a DQCE: a T1F cycle is 2
 clocks (33.75 MHz) for block RAM (000000-00FFFF), 3 for I/O, and longer
 while the SDRAM answers (everything else in the 1 MB). T1 needs 4 clocks. The SDRAM
-controller (`rtl/sdram.v`) also feeds video DMA, so video buffers must be in
-the SDRAM. The video is `../fpga/rtl/video.v`, shared with the Spartan-3, in
+is on the RAM machine, as on the Spartan-3: `../fpga/rtl/rammux.v` (port 0
+T1 and the loader, port 1 video DMA in bursts of 4) in front of
+`rtl/sdram_phy.v`. Video buffers must be in the SDRAM. The video is `../fpga/rtl/video.v`, shared with the Spartan-3, in
 true colour; the I/O registers are `../fpga/rtl/iosys.v`. Programs link with
 `--stack 0x10000` (the Makefile does) so the stack is in block RAM.
 
@@ -50,8 +51,8 @@ true colour; the I/O registers are `../fpga/rtl/iosys.v`. Programs link with
 
 SDRAM timing, found on the board: its clock is fclk at 180 degrees and read
 data is taken at the third rising edge after the READ. Back-to-back reads
-sometimes gave the next word, so the controller leaves a cycle between
-reads; capture at the falling edge, an earlier SDRAM clock, or the input
+sometimes gave the next word, so the PHY leaves a cycle between
+reads (reads stream at 135 MB/s, writes at 270 MB/s); capture at the falling edge, an earlier SDRAM clock, or the input
 register in the I/O block (nextpnr `ioreg_in_iob`) all failed.
 
 The loader protocol and the console are described at the top of

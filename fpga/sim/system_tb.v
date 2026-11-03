@@ -23,7 +23,13 @@ module system_tb;
     wire [7:0]  seg;
     wire        vr, vg, vb, hs, vs;
 
+`ifdef FCSYS
+    fcsys dut (
+`elsif RAMSYS
+    ramsys dut (
+`else
     system dut (
+`endif
         .clk(clk), .btn(4'b0000), .sw(8'h00), .led(led), .an(an), .seg(seg),
         .vga_r(vr), .vga_g(vg), .vga_b(vb), .vga_hs(hs), .vga_vs(vs),
         .sram_a(sram_a), .sram_d(sram_d), .sram_oe_n(sram_oe_n), .sram_we_n(sram_we_n),
@@ -40,6 +46,22 @@ module system_tb;
 
     // period counts by owner
     integer slots_cpu = 0, slots_dma = 0, slots_ldr = 0, dma_words = 0;
+`ifdef RAMSYS
+    // RAMSYS_STATS: 50 MHz clocks by what the core's step was waiting for
+    integer st_rd = 0, st_wr = 0, st_clk = 0;
+    always @(posedge dut.clk50) if (dut.run) begin
+        st_clk = st_clk + 1;
+        if (dut.mem.rd_v) st_rd = st_rd + 1;
+        if (dut.mem.wpend && dut.mem.ph >= 3) st_wr = st_wr + 1;
+    end
+    always @(posedge dut.clk50) begin
+        if (dut.mem.s_period) slots_cpu = slots_cpu + 1;
+        if (dut.mem.s_miss) slots_dma = slots_dma + 1;      // (here: CPU reads that waited for the RAM)
+        if (dut.dma_valid) dma_words = dma_words + 1;
+    end
+`elsif FCSYS
+    always @(posedge dut.clk50) if (dut.mem.dma_valid) dma_words = dma_words + 1;
+`else
     always @(posedge dut.clk50) begin
         if (dut.mem.ph == 0) begin
             if (dut.mem.slot == 0) slots_cpu = slots_cpu + 1;
@@ -48,6 +70,7 @@ module system_tb;
         end
         if (dut.mem.dma_valid) dma_words = dma_words + 1;
     end
+`endif
 
 
     initial begin
@@ -85,19 +108,46 @@ module system_tb;
                      why, code, dut.cycles, dut.insts, cycles);
             $display("[system_tb] periods: cpu %0d, dma %0d, loader %0d; dma words %0d",
                      slots_cpu, slots_dma, slots_ldr, dma_words);
+`ifdef RAMSYS
+            $display("[system_tb] RAMSYS_STATS clocks %0d: waiting for a read %0d, for the write buffer %0d; steps %0d (%0.2f clocks a step), instructions %0d (%0.2f steps each)",
+                     st_clk, st_rd, st_wr, dut.cycles, 1.0 * st_clk / dut.cycles, dut.insts, 1.0 * dut.cycles / dut.insts);
+`endif
             if (!want_shot) $finish;
         end
     endtask
 
+`ifdef RAMSYS
+    // +textwatch: report SRAM writes into the demo's untouched text rows
+    // (2-10, 12, 14-21, 23) that are not transparent spaces
+    reg textwatch = 0;
+    integer tw_n = 0;
+    initial textwatch = $test$plusargs("textwatch");
+    wire [17:0] tw_row = (sram_a - 18'h3F000) / 40;
+    always @(posedge sram_we_n)
+        if (textwatch && tw_n < 40 && sram_a >= 18'h3F000 && sram_a < 18'h3F3E8 && sram_ce_n != 2'b11
+            && tw_row >= 2 && tw_row != 11 && tw_row != 13 && tw_row != 22 && tw_row != 24
+            && sram_d !== 32'h40204020) begin
+            $display("[textwatch] %0t: write %06x = %08x be_n %b (row %0d), cycle %0d",
+                     $time, {sram_a, 2'b00}, sram_d, sram_be_n, tw_row, cycles);
+            tw_n = tw_n + 1;
+        end
+`endif
+
     // +trace=N: T1's first N bus accesses
     integer trace = 0;
     initial if ($value$plusargs("trace=%d", trace)) ;
+`ifndef FCSYS
+`ifdef RAMSYS
+    always @(posedge dut.clk50) if (dut.cpu_ce)
+`else
     always @(posedge dut.cpu_clk)
+`endif
         if (trace > 0 && dut.run && (dut.cpu_rd || dut.cpu_wr)) begin
             $display("[t1] %06x %s %02x", dut.cpu_addr, dut.cpu_wr ? "W" : "R",
                      dut.cpu_wr ? dut.cpu_dout : dut.cpu_din);
             trace = trace - 1;
         end
+`endif
 
     // ---- frame capture: rgb comes out four pixel clocks after the counters
     reg [10:0] h1 = 0, h2 = 0, h3 = 0, h4 = 0;

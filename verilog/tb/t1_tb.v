@@ -31,7 +31,46 @@ module t1_tb;
     reg  [15:0] sr_in;
     reg  [23:0] reset_pc;
 
-`ifdef T1F
+    reg [7:0] ram [0:20'hFFFFF];
+
+    // T1S steps when ce is high: one clock in +per=N (default 2; its register
+    // file reads a clock ahead). The others step every clock (ce = 1).
+    reg  [3:0]  cdiv = 4'd0;
+    integer     per = 1;
+`ifdef T1S
+    wire        ce = cdiv == per - 1;
+    always @(posedge clk) cdiv <= (cdiv == per - 1) ? 4'd0 : cdiv + 4'd1;
+`else
+    wire        ce = 1'b1;
+`endif
+`ifdef T1S
+    // T1S's instruction port: a word asked for is taken (i_ack) when the
+    // port is free (+irand: at random), and comes back +ilat=N clocks later
+    // (default 3), in order, read from RAM when it was taken
+    wire        i_req;
+    wire [23:2] i_addr;
+    reg         i_ok = 1'b1;
+    wire        i_ack = i_req && i_ok;
+    integer     ilat = 3;
+    reg  [7:0]  i_pv = 8'd0;
+    reg  [31:0] i_pd [0:7];
+    wire        i_valid = i_pv[0];
+    wire [31:0] i_data = i_pd[0];
+    reg         irand = 1'b0;
+    reg  [15:0] lfsr = 16'hACE1;
+    wire [23:0] ia = {i_addr, 2'b00};
+    wire [31:0] i_word = (ia < 24'h100000) ? {ram[ia[19:0] + 3], ram[ia[19:0] + 2], ram[ia[19:0] + 1], ram[ia[19:0]]} : 32'h0;
+    integer     j;
+    always @(posedge clk) begin
+        lfsr <= {lfsr[14:0], lfsr[15] ^ lfsr[13] ^ lfsr[12] ^ lfsr[10]};
+        i_ok <= !irand || lfsr[3:2] != 2'b00;
+        for (j = 0; j < 7; j = j + 1) begin i_pv[j] <= i_pv[j + 1]; i_pd[j] <= i_pd[j + 1]; end
+        i_pv[7] <= 1'b0;
+        if (i_ack) begin i_pv[ilat - 1] <= 1'b1; i_pd[ilat - 1] <= i_word; end
+    end
+    t1s_core #(.EXT_X(EXT_X)) core (.clk(clk), .ce(ce), .rst(rst), .reset_pc(reset_pc), .addr(addr), .mem_rd(mem_rd), .mem_wr(mem_wr),
+                  .i_req(i_req), .i_addr(i_addr), .i_ack(i_ack), .i_valid(i_valid), .i_data(i_data),
+`elsif T1F
     t1f_core #(.EXT_X(EXT_X)) core (.clk(clk), .ce(1'b1), .rst(rst), .reset_pc(reset_pc), .addr(addr), .mem_rd(mem_rd), .mem_wr(mem_wr),
 `else
     t1_core #(.EXT_X(EXT_X)) core (.clk(clk), .rst(rst), .reset_pc(reset_pc), .addr(addr), .mem_rd(mem_rd), .mem_wr(mem_wr),
@@ -39,7 +78,6 @@ module t1_tb;
                   .dout(dout), .din(din), .sr_sel(sr_sel), .sr_in(sr_in),
                   .halted(halted), .halt_code(halt_code), .retire(retire));
 
-    reg [7:0] ram [0:20'hFFFFF];
     reg [63:0] cycles = 0, insts = 0, maxc;
     reg [15:0] con_in_word;
     reg [7:0]  io_last;     // the last I/O read was at F0xxxx
@@ -74,7 +112,7 @@ module t1_tb;
     reg [63:0] mark_c = 0, mark_i = 0;
     reg [8*64-1:0] fname;
     integer    ff, k;
-    always @(posedge clk) if (!rst && mem_wr && addr == marker) begin
+    always @(posedge clk) if (ce && !rst && mem_wr && addr == marker) begin
         $display("T1 mark %0d cycles=%0d insts=%0d", dout, cycles - mark_c, insts - mark_i);
         mark_c = cycles;
         mark_i = insts;
@@ -94,7 +132,16 @@ module t1_tb;
     reg        busstat = 1'b0;
     reg [63:0] b_fetch = 0, b_p2 = 0, b_pf = 0, b_data = 0, b_full [0:15], b_block [0:15], b_other = 0, b_waste = 0, b_jumps = 0, b_mul = 0;
     initial for (i = 0; i < 16; i = i + 1) begin b_full[i] = 0; b_block[i] = 0; end
-    always @(posedge clk) if (!rst && busstat) begin
+`ifdef T1S
+    always @(posedge clk) if (ce && !rst && busstat) begin
+        if (mem_wr || mem_rd) b_data = b_data + 1;
+        else if (core.state == 3'd0) b_fetch = b_fetch + 1;   // waiting for an instruction
+        else b_other = b_other + 1;
+        if (core.jump) b_jumps = b_jumps + 1;
+        if (core.flush && !core.jump) b_waste = b_waste + 1;  // refetches after a store near the PC
+    end
+`else
+    always @(posedge clk) if (ce && !rst && busstat) begin
         if (mem_wr || mem_rd) begin
             if (core.state == 3'd0) b_fetch = b_fetch + 1;
             else if (core.state == 3'd1) b_p2 = b_p2 + 1;
@@ -106,6 +153,7 @@ module t1_tb;
         if (core.jump) begin b_jumps = b_jumps + 1; b_waste = b_waste + core.nbn; end
         if (core.state == 3'd2 && core.cls == 4'd2) b_mul = b_mul + 1;
     end
+`endif
     task print_busstat;
         begin
             if (busstat) begin
@@ -119,12 +167,12 @@ module t1_tb;
     endtask
 
     // nothing may reach the bus or the register file while in reset
-    always @(posedge clk) if (rst && (mem_rd !== 1'b0 || mem_wr !== 1'b0 || core.rf.we !== 1'b0))
+    always @(posedge clk) if (ce && rst && (mem_rd !== 1'b0 || mem_wr !== 1'b0 || core.rf.we !== 1'b0))
         $display("\nT1 bus or register-file write during reset (rd=%b wr=%b we=%b)", mem_rd, mem_wr, core.rf.we);
 
-    always @(posedge clk) if (!rst) begin
+    always @(posedge clk) if (!rst && retire) insts <= insts + 1;
+    always @(posedge clk) if (ce && !rst) begin
         cycles <= cycles + 1;
-        if (retire) insts <= insts + 1;
         if (mem_wr) begin
             if (addr < 24'h100000)
                 ram[addr[19:0]] <= dout;
@@ -168,7 +216,7 @@ module t1_tb;
     reg        bad;
 
     // which instruction is executing: the core loads IR when it starts one
-    always @(negedge clk) if (!rst) begin
+    always @(negedge clk) if (ce && !rst) begin
         if (pending && tf != 0) begin
             n = $fscanf(tf, "%h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h\n", t_pc,
                         t_r[0], t_r[1], t_r[2], t_r[3], t_r[4], t_r[5], t_r[6], t_r[7],
@@ -205,8 +253,13 @@ module t1_tb;
             pending = 1'b1; ret_pc = cur_pc; io_read = 1'b0;
         end
         if (mem_rd && core.bus_ar && addr[23:16] == 8'hF0) io_read = 1'b1;
+`ifdef T1S
+        if (core.start)
+            cur_pc = core.pcx ? {4'h1, core.pcf[19:0]} : {{4{core.pcf[20]}}, core.pcf[19:0]};
+`else
         if ((core.state == 3'd0 && core.nbn == 2'd1) || (core.done && core.state_n != 3'd0))
             cur_pc = (core.pcx_n ? {4'h1, core.pcf_n[19:0]} : {{4{core.pcf_n[20]}}, core.pcf_n[19:0]}) - 24'd2;
+`endif
     end
 
     reg [8*512-1:0] path;
@@ -225,7 +278,14 @@ module t1_tb;
         if ($value$plusargs("trace=%s", path)) tf = $fopen(path, "r");
         if (!$value$plusargs("entry=%h", reset_pc)) reset_pc = load;
         cur_pc = reset_pc;
-        repeat (2) @(posedge clk);
+`ifdef T1S
+        if (!$value$plusargs("per=%d", per)) per = 2;
+`ifdef T1S
+        if (!$value$plusargs("ilat=%d", ilat)) ilat = 3;
+        irand = $test$plusargs("irand");
+`endif
+`endif
+        repeat (2 * per) @(posedge clk);
         rst = 1'b0;
     end
 endmodule
