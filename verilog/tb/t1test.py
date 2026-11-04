@@ -66,6 +66,10 @@ def main():
         name = os.path.basename(src)
         if name == "common.s" or a.k not in name:
             continue
+        if re.search(r"^;\s*cores:", open(src).read(), re.M):          # e.g. "; cores: t1s"
+            cores = re.search(r"^;\s*cores:\s*(.*)$", open(src).read(), re.M).group(1).split()
+            if os.environ.get("T1_CORE", "t1") not in cores:
+                continue
         img = assemble(src)
         ents, ext = header(src)
         runs = [(e, 1) for e in ents] + ([(e, 0) for e in ents] if ext else [])

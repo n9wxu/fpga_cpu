@@ -15,14 +15,16 @@
 // the byte); CON_OUT and EXIT are con_we/exit_we with wvalue.
 //
 // HICOL8 = 0 is the low video tier (the Spartan-3): no palette (PAL_INDEX,
-// PAL_DATA do nothing), no sprite registers, and VID_CTRL keeps only the
-// bits that video.v uses there (0 text, 1 bitmap, 5 cursor, 7 16-color).
+// PAL_DATA do nothing), no sprite registers, VID_CTRL keeps only the bits
+// that video.v uses there (0 text, 1 bitmap, 5 cursor, 7 16-color), and the
+// other video registers are write-only (they read 0).
 // AUDIO = 1: a sound block's registers (audio_lite.v) read through aud_rd
 // (16 bits, zero when the address is not its own); it takes the writes
 // itself, from the same io_wr/io_addr/io_wdata.
 module iosys #(
     parameter HICOL8 = 1,
-    parameter AUDIO = 0
+    parameter AUDIO = 0,
+    parameter IRQ = 0                       // 1: the interrupt controller's device sources (irq_src)
 ) (
     input  wire        clk,                 // 50 MHz
     input  wire        io_wr,
@@ -63,7 +65,10 @@ module iosys #(
     output reg         exit_we = 1'b0,
     output reg  [15:0] wvalue = 16'd0,
     // sound (AUDIO = 1; unconnected otherwise)
-    input  wire [15:0] aud_rd
+    input  wire [15:0] aud_rd,
+    // interrupts (F00700): sources in, the line out
+    input  wire [6:0]  irq_src,             // pulses: sources 1-6 (bit 0 is the frame, from here)
+    output wire        irq
 );
     // ---- frame and scan line -------------------------------------------------
     // line_tgl and line_top change at the same pixel-clock edge and cross
@@ -84,6 +89,12 @@ module iosys #(
         end
     end
     wire vblank = line >= 12'd720;
+    reg  frame_tick = 1'b0;                 // FRAME moved this clock
+    always @(posedge clk) frame_tick <= (lt_s[4] != lt_s[3]) && !top_s[1] && line == 12'd719;
+
+    // ---- interrupts: 8 sources (bit 7: software), pending and enabled
+    reg  [7:0] irq_pend = 8'd0, irq_en = 8'd0;
+    assign irq = (irq_pend & irq_en) != 8'd0;
 
     // ---- registers -----------------------------------------------------------
     reg [15:0] kbd_ctrl = 16'd0;
@@ -95,6 +106,8 @@ module iosys #(
         case ({a[15:1], 1'b0})
             16'h0004: rv = cycles[15:0];
             16'h0006: rv = cycles[31:16];
+            16'h0700: rv = {8'd0, irq_pend};
+            16'h0702: rv = {8'd0, irq_en};
             16'h0010: rv = insts[15:0];
             16'h0012: rv = insts[31:16];
             16'h0008: rv = con_in[8] ? 16'hFFFF : {8'd0, con_in[7:0]};
@@ -103,17 +116,19 @@ module iosys #(
             16'h0100: rv = 16'hFFFF;        // KBD_DATA: no key
             16'h0104: rv = kbd_ctrl;
             16'h0200: rv = vid_ctrl;
-            16'h0202: rv = {13'd0, vid_backdrop};
-            16'h0204: rv = vid_text[15:0];
-            16'h0206: rv = vid_text[31:16];
-            16'h0208: rv = vid_bmp[15:0];
-            16'h020A: rv = vid_bmp[31:16];
+            // (the low tier: the video's addresses, scroll, cursor and
+            // backdrop are write-only, read 0: a smaller read multiplexer)
+            16'h0202: rv = HICOL8 ? {13'd0, vid_backdrop} : 16'd0;
+            16'h0204: rv = HICOL8 ? vid_text[15:0] : 16'd0;
+            16'h0206: rv = HICOL8 ? vid_text[31:16] : 16'd0;
+            16'h0208: rv = HICOL8 ? vid_bmp[15:0] : 16'd0;
+            16'h020A: rv = HICOL8 ? vid_bmp[31:16] : 16'd0;
             16'h020C: rv = HICOL8 ? spr_lo : 16'd0;
             16'h020E: rv = HICOL8 ? spr_hi : 16'd0;
             16'h0210: rv = HICOL8 ? {8'd0, pal_index} : 16'd0;
-            16'h0214: rv = vid_scrollx;
-            16'h0216: rv = vid_scrolly;
-            16'h0218: rv = vid_cursor;
+            16'h0214: rv = HICOL8 ? vid_scrollx : 16'd0;
+            16'h0216: rv = HICOL8 ? vid_scrolly : 16'd0;
+            16'h0218: rv = HICOL8 ? vid_cursor : 16'd0;
             16'h0302: rv = 16'd0;           // file service: never busy
             16'h0600: rv = {8'd0, leds};
             16'h0602: rv = {8'd0, switches};
@@ -146,6 +161,17 @@ module iosys #(
     reg [7:0] lo = 8'd0;
     wire [15:0] w = {io_wdata, lo};
 
+    // the pending sources: set by the sources and IRQ_SET, cleared by
+    // writing 1s to IRQ_PEND (a source that fires in the same clock wins)
+    reg  [7:0] irq_set_w, irq_clr_w;
+    always @* begin
+        irq_set_w = {1'b0, IRQ ? irq_src : 7'd0} | {7'd0, frame_tick};
+        irq_clr_w = 8'd0;
+        if (io_wr && io_addr[0] && {io_addr[15:1], 1'b0} == 16'h0704) irq_set_w = irq_set_w | w[7:0];
+        if (io_wr && io_addr[0] && {io_addr[15:1], 1'b0} == 16'h0700) irq_clr_w = w[7:0];
+    end
+    always @(posedge clk) irq_pend <= (irq_pend & ~irq_clr_w) | irq_set_w;
+
     always @(posedge clk) begin
         pal_we  <= 1'b0;
         con_we  <= 1'b0;
@@ -177,6 +203,7 @@ module iosys #(
                     16'h0214: vid_scrollx <= w;
                     16'h0216: vid_scrolly <= w;
                     16'h0218: vid_cursor <= w;
+                    16'h0702: irq_en <= w[7:0];
                     16'h0600: leds <= w[7:0];
                     16'h0606: seg7 <= w;
                     16'h0608: seg7_ctrl <= w[7:0];

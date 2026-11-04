@@ -6,7 +6,7 @@ RP2350 over the link UART (files, sound).
 
 All registers are 16 bits wide and sit at even addresses in
 `F00000–F0FFFF`. A 32-bit register is a lo/hi pair; a 32-bit store (`STP`)
-writes the low half first. There are no interrupts yet, so software polls.
+writes the low half first. Devices raise interrupts through the controller at F00700 (below).
 
 ## System (F00000)
 
@@ -231,6 +231,32 @@ The Spartan-3 Starter Board's own LEDs, switches, buttons and display.
 | F00608 | RW | `SEG7_CTRL` | bits 3:0 = decimal points, bits 7:4 = digit blank |
 
 GPIO, I2C and SPI on the expansion connectors come later, at F00700.
+
+
+## Interrupts (F00700)
+
+One interrupt line to the CPU: high while any source is pending and
+enabled. The CPU takes it between instructions when its IE bit is set
+(docs/t1.md, "Interrupts"): it keeps the address of the next instruction
+in EPC, clears IE and jumps to 0x000010; the handler saves registers and
+flags itself. `RETI` returns to EPC and sets IE. A program puts a jump to its handler at 0x000010: an
+unconditional long branch is the two parcels `0xF700 | offset[22:16]`,
+`offset[15:0]`, with offset = (target − 0x10) / 2.
+
+| Address | R/W | Name | Function |
+|---|---|---|---|
+| F00700 | RW | `IRQ_PEND` | pending sources; write 1s to clear them |
+| F00702 | RW | `IRQ_EN` | sources that raise the line |
+| F00704 | W | `IRQ_SET` | set pending bits (a software interrupt; tests) |
+
+| Bit | Source |
+|---|---|
+| 0 | vertical blank started (`FRAME` moved) |
+| 7 | software only (`IRQ_SET`) |
+
+The registers are 8 bits (bits 15:8 read 0). A source stays pending until
+cleared, so a handler clears what it handled. Sources for the keyboard,
+mouse, serial, SD/WiFi and sound will take bits 1-6 as they are added.
 
 ## Memory layout (C runtime convention)
 

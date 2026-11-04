@@ -32,6 +32,8 @@ static void dir_free(iodev_t *d)
 void dev_reset(iodev_t *d)
 {
     memset(d->vid, 0, sizeof d->vid);
+    d->irq_pend = d->irq_en = 0;
+    d->irq_frame = 0;
     memset(d->pal, 0, sizeof d->pal);
     for (int v = 0; v < 3; v++) {
         for (int r = 0; r < 4; r++)
@@ -85,6 +87,17 @@ void dev_con_in(iodev_t *d, uint16_t ch)
  * lines = cycles * 9 / 10000. */
 static uint64_t total_lines(uint64_t cycles) { return cycles * 9 / 10000; }
 uint32_t dev_line(uint64_t cycles) { return (uint32_t)(total_lines(cycles) % FRAME_LINES); }
+int dev_irq(cpu_t *c)
+{
+    iodev_t *d = &c->dev;
+    uint32_t f = dev_frame(c->st.cycles);
+    if (f != d->irq_frame) {
+        d->irq_frame = f;
+        d->irq_pend |= IRQ_VBLANK;
+    }
+    return (d->irq_pend & d->irq_en) != 0;
+}
+
 uint32_t dev_frame(uint64_t cycles)
 {
     return (uint32_t)((total_lines(cycles) + (FRAME_LINES - VISIBLE_LINES)) / FRAME_LINES);
@@ -283,6 +296,8 @@ uint16_t dev_read(cpu_t *c, uint32_t a)
             d->con_head = (d->con_head + 1) % CON_QLEN;
             return ch;
         }
+    case IO_IRQ + 0: dev_irq(c); return d->irq_pend;
+    case IO_IRQ + 2: return d->irq_en;
     case IO_INSTLO: return (uint16_t)c->st.insts;
     case IO_INSTHI: return (uint16_t)(c->st.insts >> 16);
     case IO_FRAME: return (uint16_t)dev_frame(c->st.cycles);
@@ -364,6 +379,9 @@ void dev_write(cpu_t *c, uint32_t a, uint32_t v)
         }
         return;
     }
+    if (a == IO_IRQ + 0) { dev_irq(c); d->irq_pend &= (uint16_t)~v; return; }
+    if (a == IO_IRQ + 2) { dev_irq(c); d->irq_en = (uint16_t)(v & 0xFF); return; }
+    if (a == IO_IRQ + 4) { d->irq_pend |= (uint16_t)(v & 0xFF); return; }
     if (!video_hicol8 && a >= IO_SND && a < IO_SND + 0x40)
         audlo_write(c, a, (uint16_t)v);
     if (a >= IO_SND && a < IO_SND + 24) {

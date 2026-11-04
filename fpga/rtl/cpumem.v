@@ -102,7 +102,10 @@ module cpumem #(
     reg         quick = 1'b0;               // resolved at e(LAT) with nothing to wait for: PERF
     reg         wpend = 1'b0;               // a RAM write waits for its data (e(DLAT)) and the buffer
     reg         iowp = 1'b0;                // an I/O write waits for its data
-    wire        wb_free = !wb_v || (p_ack && wb_v);
+    // the write buffer is free when empty (not also "being taken now": that
+    // made a path from this request through rammux and the PHY's ready back
+    // to rbuf, the 50 MHz clock's longest; a write meeting it waits a clock)
+    wire        wb_free = !wb_v;
     wire        rd_back = p_rvalid && rd_out;
     wire        dtime = ph >= DLATP;        // the write data (cpu_dout) has settled
     wire        wnow = wpend && dtime && wb_free;
@@ -155,7 +158,9 @@ module cpumem #(
             // the core's step ends the period: at least PER cycles, and the
             // access done (a read back: rbuf is loaded at this edge, the
             // step is the next; a write: its data is taken at this edge)
-            if ((ph >= PER - 2 || (quick && ph >= PERF - 2)) && (resolved || rd_back || wnow || (iowp && dtime)))
+            // (an I/O write's period ends a clock after io_wr, so the I/O
+            // block has it, an interrupt it raises included, at T1's step)
+            if ((ph >= PER - 2 || (quick && ph >= PERF - 2)) && (resolved || rd_back || wnow))
                 cpu_ce <= 1'b1;
         end
 

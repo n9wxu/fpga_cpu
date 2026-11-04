@@ -86,12 +86,13 @@ module ramsys (
 
     wire        i_req;
     wire [23:2] i_addr;
+    wire        irq;                       // the interrupt line (iosys.v, F00700)
     t1s_core #(.EXT_X(0)) cpu (
         .clk(clk50), .ce(cpu_ce), .rst(t1_rst), .reset_pc(entry),
         .addr(cpu_addr), .mem_rd(cpu_rd), .mem_wr(cpu_wr), .dout(cpu_dout), .din(cpu_din),
         .i_req(i_req), .i_addr(i_addr), .i_ack(p_ack[2]), .i_valid(p_rvalid[2]), .i_data(p_rdata),
         .sr_sel(sr_sel), .sr_in(sr_in),
-        .halted(halted), .halt_code(halt_code), .retire(retire)
+        .irq(irq), .halted(halted), .halt_code(halt_code), .retire(retire)
     );
 
     reg [31:0] insts = 32'd0;              // SR3 and the loader's status read the low 16 bits
@@ -212,7 +213,7 @@ module ramsys (
         .p_req(a_req), .p_addr(a_addr), .p_ack(p_ack[4]), .p_rvalid(p_rvalid[4]), .p_rdata(p_rdata),
         .i2s_bck(i2s_bck), .i2s_lrck(i2s_lrck), .i2s_data(i2s_data));
 
-    iosys #(.HICOL8(0), .AUDIO(1)) io (
+    iosys #(.HICOL8(0), .AUDIO(1), .IRQ(1)) io (
         .clk(clk50), .io_wr(io_wr), .io_rd(io_rd), .io_addr(io_addr), .io_wdata(io_wdata),
         .cpu_lat(cpu_lat), .cur_rd(cpu_rd && cpu_addr[23:16] == 8'hF0),
         .cur_addr(cpu_addr[15:0]), .io_rdata(io_rdata), .cycles(tick10), .insts(insts),
@@ -221,7 +222,8 @@ module ramsys (
         .vid_scrollx(vid_scrollx), .vid_scrolly(vid_scrolly), .vid_cursor(vid_cursor),
         .pal_we(pal_we), .pal_windex(pal_windex), .pal_wdata(pal_wdata),
         .switches(sw_s), .buttons(btn_s), .leds(led), .seg7(seg7), .seg7_ctrl(seg7_ctrl),
-        .con_in(9'h100), .con_take(), .con_we(), .exit_we(), .wvalue(), .aud_rd(aud_rd)
+        .con_in(9'h100), .con_take(), .con_we(), .exit_we(), .wvalue(), .aud_rd(aud_rd),
+        .irq_src(7'd0), .irq(irq)
     );
 
     video #(.HICOL8(0)) vid (                 // the Spartan-3: 16 colours at most (docs/io.md)
