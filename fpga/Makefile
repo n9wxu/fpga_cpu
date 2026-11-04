@@ -38,7 +38,7 @@ DATA_fcsys      := build/font8x14.mem
 # ramtest: the RAM machine (rammux.v, sram_phy.v) under mock clients (tools/ramtest.py)
 SRC_ramtest     := rtl/rammux.v rtl/sram_phy.v rtl/jtagldr.v rtl/seg7.v
 # ramsys: system.v's T1F, I/O and video on the RAM machine (rammux.v, sram_phy.v, cpumem.v)
-SRC_ramsys      := rtl/cpumem.v rtl/rammux.v rtl/sram_phy.v rtl/iosys.v rtl/video.v rtl/jtagldr.v rtl/audio_lite.v \
+SRC_ramsys      := rtl/cpumem.v rtl/rammux.v rtl/sram_phy.v rtl/iosys.v rtl/video.v rtl/jtagldr.v rtl/audio_lite.v rtl/ps2.v \
                    rtl/seg7.v ../verilog/rtl/t1s_core.v ../verilog/rtl/t1s_dec.v
 # ramsys fills the XC3S200: XST optimizes for area, and makes no shift registers
 # of LUTs (LUTs are scarce, flip-flops are not); its timing still has slack
@@ -111,7 +111,7 @@ build/stat_text.hex build/stat_fields.hex build/stat_colours.hex: tools/mkstatus
 	python3 tools/mkstatus.py
 
 sim-ramsys: $(DATA)
-	iverilog -g2005 -Wall -DSIM -DRAMSYS -I ../verilog/rtl -o build/ramsys_tb.vvp sim/system_tb.v sim/sram_model.v $(SRC)
+	iverilog -g2005 -Wall -DSIM -DRAMSYS -I ../verilog/rtl -o build/ramsys_tb.vvp sim/system_tb.v sim/sram_model.v sim/ps2_dev.v $(SRC)
 	cd build && vvp -n ramsys_tb.vvp $(SIMARGS)
 
 sim-ramvid: $(DATA)

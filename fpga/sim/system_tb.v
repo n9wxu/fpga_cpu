@@ -23,6 +23,9 @@ module system_tb;
     wire [7:0]  seg;
     wire        vr, vg, vb, hs, vs;
 
+`ifdef RAMSYS
+    wire ps2a_c, ps2a_d, ps2b_c, ps2b_d;
+`endif
 `ifdef FCSYS
     fcsys dut (
 `elsif RAMSYS
@@ -34,7 +37,16 @@ module system_tb;
         .vga_r(vr), .vga_g(vg), .vga_b(vb), .vga_hs(hs), .vga_vs(vs),
         .sram_a(sram_a), .sram_d(sram_d), .sram_oe_n(sram_oe_n), .sram_we_n(sram_we_n),
         .sram_ce_n(sram_ce_n), .sram_be_n(sram_be_n)
+`ifdef RAMSYS
+        , .ps2_clk(ps2a_c), .ps2_data(ps2a_d), .ps2b_clk(ps2b_c), .ps2b_data(ps2b_d)
+`endif
     );
+`ifdef RAMSYS
+    // PS/2: a keyboard in port A and a mouse in port B (ps2_dev.v), pulled up
+    pullup (ps2a_c); pullup (ps2a_d); pullup (ps2b_c); pullup (ps2b_d);
+    ps2_dev #(.MOUSE(0)) kbd   (.clk(ps2a_c), .dat(ps2a_d));
+    ps2_dev #(.MOUSE(1)) mouse (.clk(ps2b_c), .dat(ps2b_d));
+`endif
     sram_model sram (.a(sram_a), .d(sram_d), .oe_n(sram_oe_n), .we_n(sram_we_n),
                      .ce_n(sram_ce_n), .be_n(sram_be_n));
 

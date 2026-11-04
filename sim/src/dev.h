@@ -25,6 +25,7 @@ struct cpu;
 #define IO_SND       0xF00400u /* 3 voices x 8 bytes */
 #define IO_FS        0xF00500u /* file service F00500-F0051B */
 #define IO_BOARD     0xF00600u /* board I/O F00600-F00609 */
+#define IO_PS2       0xF00300u /* PS/2 ports: +0 A DATA, +2 A STAT, +4 B DATA, +6 B STAT */
 #define IO_IRQ       0xF00700u /* interrupts: +0 IRQ_PEND (R; W 1s clear), +2 IRQ_EN, +4 IRQ_SET (W) */
 #define IRQ_VBLANK   0x0001u   /* vertical blank started (FRAME moved) */
 #define IRQ_SOFT     0x0080u   /* set by IRQ_SET only (the controller is 8 bits) */
@@ -109,6 +110,16 @@ void audlo_write(struct cpu *c, uint32_t a, uint16_t v);
 uint16_t audlo_read(struct cpu *c, uint32_t a);
 void audlo_finish(const struct cpu *c);
 void audlo_wav(const char *path);
+/* the PS/2 ports (ps2.c, fpga/rtl/ps2.v): F00300-F00307, a keyboard and a mouse */
+int ps2_handles(uint32_t a);
+uint16_t ps2_read(struct cpu *c, uint32_t a);
+void ps2_write(struct cpu *c, uint32_t a, uint16_t v);
+void ps2_poll(struct cpu *c);             /* bytes arrive, sends end (interrupt sources 1, 2) */
+void ps2_reset(void);
+int ps2_config(const char *s);            /* --ps2 A,B: kbd, mouse or none each */
+void ps2_script(int mouse, const char *s); /* --ps2keys, --ps2mouse */
+void ps2_key(int usage, int down);        /* a key (USB HID usage = SDL scancode) */
+void ps2_mouse(int dx, int dy, int buttons);
 /* 0: the low video tier, the Spartan-3 (--no-hicolor): no hi-color, no palette */
 extern int video_hicol8;
 int write_ppm(const char *path, const uint32_t *px, int w, int h);

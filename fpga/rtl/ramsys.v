@@ -28,7 +28,9 @@ module ramsys (
     output wire [1:0]  sram_ce_n,
     output wire [3:0]  sram_be_n,
     // I2S to a DAC on the A2 expansion connector (audio_lite.v)
-    output wire        i2s_bck, i2s_lrck, i2s_data
+    output wire        i2s_bck, i2s_lrck, i2s_data,
+    // PS/2: A the board's connector, B on the A2 expansion connector (open drain)
+    inout  wire        ps2_clk, ps2_data, ps2b_clk, ps2b_data
 );
     parameter PER = 5;                      // 50 MHz cycles in a T1F period, at least
 
@@ -213,7 +215,12 @@ module ramsys (
         .p_req(a_req), .p_addr(a_addr), .p_ack(p_ack[4]), .p_rvalid(p_rvalid[4]), .p_rdata(p_rdata),
         .i2s_bck(i2s_bck), .i2s_lrck(i2s_lrck), .i2s_data(i2s_data));
 
-    iosys #(.HICOL8(0), .AUDIO(1), .IRQ(1)) io (
+    wire [1:0] ps2_co, ps2_do;
+    assign ps2_clk   = ps2_co[0] ? 1'b0 : 1'bz;
+    assign ps2_data  = ps2_do[0] ? 1'b0 : 1'bz;
+    assign ps2b_clk  = ps2_co[1] ? 1'b0 : 1'bz;
+    assign ps2b_data = ps2_do[1] ? 1'b0 : 1'bz;
+    iosys #(.HICOL8(0), .AUDIO(1), .IRQ(1), .PS2(1)) io (
         .clk(clk50), .io_wr(io_wr), .io_rd(io_rd), .io_addr(io_addr), .io_wdata(io_wdata),
         .cpu_lat(cpu_lat), .cur_rd(cpu_rd && cpu_addr[23:16] == 8'hF0),
         .cur_addr(cpu_addr[15:0]), .io_rdata(io_rdata), .cycles(tick10), .insts(insts),
@@ -223,7 +230,8 @@ module ramsys (
         .pal_we(pal_we), .pal_windex(pal_windex), .pal_wdata(pal_wdata),
         .switches(sw_s), .buttons(btn_s), .leds(led), .seg7(seg7), .seg7_ctrl(seg7_ctrl),
         .con_in(9'h100), .con_take(), .con_we(), .exit_we(), .wvalue(), .aud_rd(aud_rd),
-        .irq_src(7'd0), .irq(irq)
+        .irq_src(7'd0), .irq(irq),
+        .ps2_ci({ps2b_clk, ps2_clk}), .ps2_di({ps2b_data, ps2_data}), .ps2_co(ps2_co), .ps2_do(ps2_do)
     );
 
     video #(.HICOL8(0)) vid (                 // the Spartan-3: 16 colours at most (docs/io.md)
