@@ -33,6 +33,10 @@ module system_tb;
         end
     endtask
 
+    // +preload=FILE: words for the SDRAM model ($readmemh, word addresses), after it has cleared itself
+    reg [1023:0] pre;
+    initial if ($value$plusargs("preload=%s", pre)) begin #1 $readmemh(pre, sdm.mem); end
+
     reg [7:0] prog [0:65535];
     integer n, k, base;
     reg [1023:0] file;

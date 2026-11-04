@@ -56,6 +56,30 @@ must be pushed fully into the connector. If the TV crops the edges
 (overscan), its picture settings decide: on the Fire TV set used here,
 "picture reset" showed the whole picture.
 
+## Video extensions and blitter
+
+On the Tang the video (`../fpga/rtl/video.v` with `EXT = 1`) adds what
+docs/io.md lists under "Video extensions" and "Blitter": a second 8 bpp
+playfield with its own scroll, a per-line scroll table for both, the sprite
+buffer layer, 64 hardware sprites (up to 32x32, 16 a line), double buffering
+(the buffer addresses are taken at the start of each frame; `VID_STAT` bit 0
+says when) and a blitter (`rtl/blitter.v`: rectangle copy and fill with
+strides and a colour key, on its own rammux port; it invalidates the CPU
+cache's lines it writes). The registers are `rtl/vidx_regs.v` (F00220) and the
+blitter's own (F00800). Each logical line the DMA engine fetches the
+line-scroll entry, playfield A, playfield B, the sprite buffer row and the
+text row, then builds the sprites' line in a line buffer; the pixel side
+takes the front-most opaque layer and reads the palette once.
+
+`progs/vidxtest.c` shows it all in one picture and checks the blitter and
+the flip status (PASS on the board). Its frame from the RTL simulation
+(`sim/system_tb.v +preload=`, the playfields drawn by fsim and dumped) matches
+fsim's pixel for pixel.
+
+To make room the SDRAM self-test is a build option, `make DEFS=-DSDBIST`
+(serial 'C', 'D', 'E', 'B'). Utilisation with the extensions: about 16,500
+LUT4s (79%) and 3,800 ALUs, 40 of 46 block RAMs; fclk 79 MHz (seed 6).
+
 ## system
 
 The core is T1F (`../verilog/rtl/t1f_core.v`, docs/t1f.md; `make CORE=t1`
