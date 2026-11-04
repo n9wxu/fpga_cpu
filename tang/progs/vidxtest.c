@@ -5,7 +5,9 @@
  *   blitter       a fill (the white box) and a keyed copy (a cross, its key colour left out) into playfield A
  *   double buffer VID_STAT bit 0 checked around a VID_BMP write
  * It prints PASS or the failures on the console, then holds the picture (fsim --screenshot, or the board).
- * Build: llvm/fcc -O2 --stack 0x10000 -o vidxtest.bin tang/progs/vidxtest.c */
+ * Build: llvm/fcc -O2 --stack 0x10000 -o vidxtest.bin tang/progs/vidxtest.c
+ * For the RTL simulation: -DDRAWONLY draws the playfields, sprite images and tables and stops (fsim dumps them),
+ * -DPRELOADED skips that drawing (tang/sim/system_tb.v +preload= puts the dump in the SDRAM model). */
 #include <stdint.h>
 
 #define IO(a) (*(volatile uint16_t *)(0xF00000UL + (a)))
@@ -75,6 +77,7 @@ int main(void)
     pal(250, 255, 0, 0);
     pal(251, 0, 0, 255);
 
+#ifndef PRELOADED
     /* playfield A: (x + y) / 4 through the gradient */
     for (y = 0; y < 360; y++) {
         volatile uint16_t *r = (volatile uint16_t *)(PFA + (uint32_t)y * 640);
@@ -100,7 +103,7 @@ int main(void)
     /* line scroll: A waves by 12 pixels, B shears */
     for (y = 0; y < 360; y++) {
         volatile uint16_t *e = (volatile uint16_t *)(LSCR + (uint32_t)y * 4);
-        e[0] = (uint16_t)(640 + sin32[(y >> 2) & 31] / 10);
+        e[0] = (uint16_t)((640 + sin32[(y >> 2) & 31] / 10) % 640);   /* entries are 0-639 */
         e[1] = (uint16_t)(y / 4);
     }
     /* sprite images: a 32x32 ball (rings of shades), a 16x16 arrow (left-pointing, to see the flip) and an 8x8 dot */
@@ -118,6 +121,13 @@ int main(void)
     for (y = 0; y < 8; y++)
         for (x = 0; x < 8; x++)
             *(volatile uint8_t *)(SPRDATA + 0x500 + y * 8 + x) = (uint8_t)((x ^ y) & 1 ? 255 : 251);
+    for (y = 0; y < 24; y++)
+        for (x = 0; x < 24; x++)
+            *(volatile uint8_t *)(SPRDATA + 0x800 + y * 24 + x) = (x >= 9 && x < 15) || (y >= 9 && y < 15) ? 250 : 7;
+#endif
+#ifdef DRAWONLY
+    IO(2) = 0;
+#endif
     for (i = 0; i < 64; i++) {                          /* all off */
         IO(0x230) = (uint16_t)(i * 4 + 3);
         IO(0x232) = 0;
@@ -133,9 +143,6 @@ int main(void)
     /* blitter: a white 120x40 box into A, then a keyed copy of a red-on-key cross from scratch */
     IO(0x812) = 255;
     blit(0, PFA + 40UL * 640 + 480, 0, 640, 120, 40, 1);
-    for (y = 0; y < 24; y++)
-        for (x = 0; x < 24; x++)
-            *(volatile uint8_t *)(SPRDATA + 0x800 + y * 24 + x) = (x >= 9 && x < 15) || (y >= 9 && y < 15) ? 250 : 7;
     IO(0x810) = 7;                                      /* the key */
     blit(SPRDATA + 0x800, PFA + 48UL * 640 + 528, 24, 640, 24, 24, 2);
     blit_wait();

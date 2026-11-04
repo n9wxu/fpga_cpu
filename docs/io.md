@@ -172,9 +172,10 @@ shown and can be drawn into. The scroll registers and everything else act
 at once (the scroll at the next line).
 
 **Line scroll.** With `VID_CTRL2` bit 2 set, `VID_LSCR` points at 360
-32-bit entries, one per logical line. Entry *y* holds two 16-bit offsets:
-the low half is added to `VID_SCROLLX` and the high half to `VID_SCROLLXB`
-for line *y* (modulo 640). Parallax bands, waves and roads are a table
+32-bit entries, one per logical line. Entry *y* holds two 16-bit offsets,
+each 0–639: the low half is added to `VID_SCROLLX` and the high half to
+`VID_SCROLLXB` for line *y* (modulo 640; to move a line left by *n*, use
+640 − *n*). Parallax bands, waves and roads are a table
 write; the table can be changed while the frame is drawn (each line reads
 its entry just before it is shown).
 

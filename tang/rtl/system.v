@@ -160,6 +160,9 @@ module system #(
     wire        io  = addr[23:16] == 8'hF0;
     reg  [1:0]  src = 2'd0;                 // din from: 0 the cache, 1 I/O, 2 c_word (a line fill)
     reg         aud_s = 1'b0;               // ... I/O: the audio engine's registers
+    // ... or the video extensions' (F00220) and the blitter's (F00800), read through the same latch
+    wire        x_vsel = addr[15:5] == 11'h011, x_bsel = addr[15:5] == 11'h040;
+    wire        x_sel = x_vsel || x_bsel;
     reg  [7:0]  aud_q = 8'd0;               // the byte read from them
     reg         t1_wait = 1'b0;             // T1 waits: a line fill, or the write buffer
 
@@ -202,7 +205,7 @@ module system #(
     reg  [22:0] c_addr = 23'd0;
     reg  [7:0]  c_wd = 8'd0;
     reg  [31:0] c_word = 32'd0;             // the filled line's word T1 asked for
-    wire [3:0]  p_ack, p_wnext, p_rvalid;   // rammux: 0 T1 and the loader, 1 video, 2 audio, 3 the SDRAM self-test
+    wire [4:0]  p_ack, p_wnext, p_rvalid;   // rammux: 0 T1 and the loader, 1 video, 2 audio, 3 the SDRAM self-test, 4 the blitter
     wire [31:0] p_rdata;
     reg         f_on = 1'b0;                // a fill's words are coming back
     reg  [1:0]  f_k = 2'd0;                 // ... the next one's place in the line
@@ -233,7 +236,7 @@ module system #(
         if (lat) begin
             cycles_t1 <= cycles;            // SR0/SR1 hold still from here to T1's edge
             src   <= io ? 2'd1 : 2'd0;
-            aud_s <= addr[15:12] == 4'h1;   // F01000-F01FFF: the audio engine
+            aud_s <= addr[15:12] == 4'h1 || x_sel;   // F01000-F01FFF: the audio engine; F00220, F00800: below
             io_q2 <= io;
             m_a   <= addr[22:0];
             mem_l <= !io;
@@ -297,9 +300,16 @@ module system #(
     end
 
     // the cache's block RAM: tags (2048 x 9) and data (four byte lanes of 8K)
-    wire [8:0]  tag_wd = run ? {1'b1, m_a[22:15]} : 9'd0;
-    wire        tag_we = run ? (fill_we && f_k == 2'd3) : 1'b1;
-    wire [10:0] tag_wa = run ? m_a[14:4] : sw;
+    // A line fill writes its tag after its last word; in the other clocks a
+    // blitter write's line is invalidated (inv_ack), so T1 reads what the
+    // blitter wrote.
+    wire        fill_tag = fill_we && f_k == 2'd3;
+    wire        blt_inv, blt_inv_ack;
+    wire [10:0] blt_inv_line;
+    assign      blt_inv_ack = blt_inv && (!run || !fill_tag);
+    wire [8:0]  tag_wd = (run && fill_tag) ? {1'b1, m_a[22:15]} : 9'd0;
+    wire        tag_we = run ? (fill_tag || blt_inv) : 1'b1;
+    wire [10:0] tag_wa = !run ? sw : fill_tag ? m_a[14:4] : blt_inv_line;
     cram #(.AW(11), .DW(9)) tags (.clk(fclk), .we(tag_we), .wa(tag_wa), .wd(tag_wd),
                                   .re(lat), .ra(addr[14:4]), .q(tag_q));
     genvar gl;
@@ -355,12 +365,18 @@ module system #(
     wire [3:0]  bt_wbe;
     reg  [4:0]  bt_rlen = 5'd8;             // 'C' 8, 'D' 4, 'E' 1; 'B' 8 after byte writes
     reg         bt_bytew = 1'b0;
-    rammux #(.NP(4), .AW(21), .LW(5), .WMASK(4'b1001)) mux (
+    //   4 the blitter (blitter.v): chunks of up to 17 words, lowest priority
+    wire        blt_req, blt_we;
+    wire [20:0] blt_addr;
+    wire [4:0]  blt_len;
+    wire [31:0] blt_wd;
+    wire [3:0]  blt_wbe;
+    rammux #(.NP(5), .AW(21), .LW(5), .WMASK(5'b11001)) mux (
         .clk(fclk),
-        .p_req({bt_req, a_req, v_req, c_req}), .p_we({bt_we, 2'b00, c_we}),
-        .p_addr({bt_addr, a_addr, 3'b000, dma_addr, c_fill ? {c_addr[22:4], 2'b00} : c_addr[22:2]}),
-        .p_len({bt_len, a_len, dma_len, c_fill ? 5'd4 : 5'd1}), .p_ack(p_ack),
-        .p_wdata({bt_wd, 64'd0, {4{c_wd}}}), .p_wbe({bt_wbe, 8'h00, 4'b0001 << c_addr[1:0]}), .p_wnext(p_wnext),
+        .p_req({blt_req, bt_req, a_req, v_req, c_req}), .p_we({blt_we, bt_we, 2'b00, c_we}),
+        .p_addr({blt_addr, bt_addr, a_addr, 3'b000, dma_addr, c_fill ? {c_addr[22:4], 2'b00} : c_addr[22:2]}),
+        .p_len({blt_len, bt_len, a_len, dma_len, c_fill ? 5'd4 : 5'd1}), .p_ack(p_ack),
+        .p_wdata({blt_wd, bt_wd, 64'd0, {4{c_wd}}}), .p_wbe({blt_wbe, bt_wbe, 8'h00, 4'b0001 << c_addr[1:0]}), .p_wnext(p_wnext),
         .p_rvalid(p_rvalid), .p_rdata(p_rdata),
         .phy_cmd(phy_cmd), .phy_we(phy_we), .phy_addr(phy_addr), .phy_wdata(phy_wdata), .phy_be(phy_be),
         .phy_ready(phy_ready), .phy_rvalid(phy_rvalid), .phy_rdata(phy_rdata));
@@ -389,10 +405,18 @@ module system #(
     wire        bt_capw;
     wire [7:0]  bt_pc;
     wire        bt_pr;
+// -DSDBIST: the SDRAM self-test (serial 'C', 'D', 'E', 'B', 'K'): left out by default,
+// for room (the video extensions and the blitter)
+`ifdef SDBIST
     sdbist bist (.clk(fclk), .go(bt_go), .rlen(bt_rlen), .bytew(bt_bytew),
                  .req(bt_req), .we(bt_we), .addr(bt_addr), .len(bt_len), .wd(bt_wd), .wbe(bt_wbe),
                  .ack(p_ack[3]), .rvalid(p_rvalid[3]), .rdata(p_rdata),
                  .cap(bt_cap), .cap_we(bt_capw), .pc(bt_pc), .pv(bt_pv), .pr(bt_pr));
+`else
+    assign bt_req = 1'b0; assign bt_we = 1'b0; assign bt_addr = 21'd0; assign bt_len = 5'd0;
+    assign bt_wd = 32'd0; assign bt_wbe = 4'd0; assign bt_cap = 3'd0; assign bt_capw = 1'b0;
+    assign bt_pc = 8'd0; assign bt_pv = 1'b0;
+`endif
 
     // ---- I/O ------------------------------------------------------------------------
     reg  [1:0] s_s0 = 2'b00, s_s = 2'b00;
@@ -430,13 +454,14 @@ module system #(
     // is valid a clock after the address, which has settled by io_lat; as in
     // iosys, the low byte is read live and the word latched, and the high
     // byte comes from the latch when it follows.
-    wire [15:0] aud_rd;
+    wire [15:0] vx_rd, blt_rd, aud_rd;
+    wire [15:0] aud_or_x = x_vsel ? vx_rd : x_bsel ? blt_rd : aud_rd;
     reg  [15:0] aud_latch = 16'd0;
     reg  [15:0] aud_la = 16'hFFFF;
     always @(posedge fclk)
         if (io_lat && run && io && rd) begin
-            if (!addr[0]) begin aud_q <= aud_rd[7:0]; aud_latch <= aud_rd; aud_la <= addr[15:0]; end
-            else aud_q <= (addr[15:0] == (aud_la | 16'd1)) ? aud_latch[15:8] : aud_rd[15:8];
+            if (!addr[0]) begin aud_q <= aud_or_x[7:0]; aud_latch <= aud_or_x; aud_la <= addr[15:0]; end
+            else aud_q <= (addr[15:0] == (aud_la | 16'd1)) ? aud_latch[15:8] : aud_or_x[15:8];
         end
 
     wire        s_valid, s_ready, a_pop, a_under;
@@ -457,7 +482,28 @@ module system #(
     // ---- video ------------------------------------------------------------------------
     wire [23:0] rgb24;
     wire        hs, vs, de, v_late;
-    video #(.FONT_FILE(FONT_FILE), .TRUE_COLOR(1)) vid (
+    // the video extensions' registers (F00220) and the blitter (F00800)
+    wire [15:0] vid_ctrl2, vid_scrollxb, vid_scrollyb, spr_over, spr_wd;
+    wire [31:0] vid_bmpb, vid_lscr, vid_spr;
+    wire        spr_we, frame_latch;
+    wire [7:0]  spr_wa;
+    vidx_regs vxr (
+        .clk(fclk), .io_wr(io_lat && run && io && wr), .io_addr(addr[15:0]), .io_wdata(dout), .rd(vx_rd),
+        .vid_ctrl(vid_ctrl), .line_tgl(line_tgl), .line_top(line_top), .frame_latch(frame_latch),
+        .spr_over(spr_over), .vid_ctrl2(vid_ctrl2), .vid_bmpb(vid_bmpb), .vid_scrollxb(vid_scrollxb),
+        .vid_scrollyb(vid_scrollyb), .vid_lscr(vid_lscr), .vid_spr(vid_spr),
+        .spr_we(spr_we), .spr_wa(spr_wa), .spr_wd(spr_wd)
+    );
+    blitter #(.AW(21)) blt (
+        .clk(fclk), .io_wr(io_lat && run && io && wr), .io_addr(addr[15:0]), .io_wdata(dout), .rd(blt_rd), .busy(),
+        .p_req(blt_req), .p_we(blt_we), .p_addr(blt_addr), .p_len(blt_len), .p_ack(p_ack[4]),
+        .p_wdata(blt_wd), .p_wbe(blt_wbe), .p_wnext(p_wnext[4]), .p_rvalid(p_rvalid[4]), .p_rdata(p_rdata),
+        .inv_req(blt_inv), .inv_line(blt_inv_line), .inv_ack(blt_inv_ack)
+    );
+    video #(.FONT_FILE(FONT_FILE), .TRUE_COLOR(1), .EXT(1)) vid (
+        .vid_ctrl2(vid_ctrl2), .vid_bmpb(vid_bmpb), .vid_scrollxb(vid_scrollxb), .vid_scrollyb(vid_scrollyb),
+        .vid_lscr(vid_lscr), .vid_spr(vid_spr), .spr_we(spr_we), .spr_wa(spr_wa), .spr_wd(spr_wd),
+        .frame_latch(frame_latch), .spr_over(spr_over),
         .clk(fclk), .pclk(pclk),
         .vid_ctrl(vid_ctrl), .vid_backdrop(vid_backdrop), .vid_text(vid_text), .vid_bmp(vid_bmp),
         .vid_scrollx(vid_scrollx), .vid_scrolly(vid_scrolly), .vid_cursor(vid_cursor),
