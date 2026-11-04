@@ -44,23 +44,30 @@ static uint16_t be16(const uint8_t *p)
     return (uint16_t)((uint16_t)p[0] << 8 | p[1]);
 }
 
-static uint8_t sig_ok(const uint8_t *b)
+/* channels from the signature, 0 = not a MOD we play */
+static uint8_t sig_nch(const uint8_t *b)
 {
     const uint8_t *s = b + 1080;
-    return !memcmp(s, "M.K.", 4) || !memcmp(s, "M!K!", 4) || !memcmp(s, "FLT4", 4) || !memcmp(s, "4CHN", 4);
+    if (!memcmp(s, "M.K.", 4) || !memcmp(s, "M!K!", 4) || !memcmp(s, "FLT4", 4) || !memcmp(s, "4CHN", 4))
+        return 4;
+    if (!memcmp(s, "6CHN", 4))
+        return 6;
+    if (!memcmp(s, "8CHN", 4))
+        return 8;
+    return 0;
 }
 
 uint32_t mod_size(uint32_t base)
 {
     const uint8_t *b = (const uint8_t *)base;
     uint32_t size;
-    uint8_t i, npat = 0;
-    if (!sig_ok(b))
+    uint8_t i, npat = 0, n = sig_nch(b);
+    if (!n)
         return 0;
     for (i = 0; i < 128; i++)
         if (b[952 + i] >= npat)
             npat = (uint8_t)(b[952 + i] + 1);
-    size = 1084UL + (uint32_t)npat * 1024UL;
+    size = 1084UL + (uint32_t)npat * 256UL * n;
     for (i = 0; i < 31; i++)
         size += (uint32_t)be16(b + 20 + 30 * i + 22) * 2UL;
     return size;
@@ -71,9 +78,10 @@ int mod_parse(uint32_t base, mod_t *m)
     const uint8_t *b = (const uint8_t *)base;
     uint32_t a;
     uint8_t i;
-    if (!sig_ok(b))
+    if (!sig_nch(b))
         return 1;
     memset(m, 0, sizeof *m);
+    m->nch = sig_nch(b);
     m->base = base;
     m->size = mod_size(base);
     for (i = 0; i < 20 && b[i]; i++)
@@ -87,7 +95,7 @@ int mod_parse(uint32_t base, mod_t *m)
         if (m->order[i] >= m->npat)
             m->npat = (uint8_t)(m->order[i] + 1);
     m->pat = base + 1084;
-    a = m->pat + (uint32_t)m->npat * 1024UL;
+    a = m->pat + (uint32_t)m->npat * 256UL * m->nch;
     for (i = 1; i <= 31; i++) {
         const uint8_t *h = b + 20 + 30 * (i - 1);
         sample_t *s = &m->smp[i];
@@ -113,12 +121,13 @@ int mod_parse(uint32_t base, mod_t *m)
 
 const char *mod_err(int e)
 {
-    return e == 1 ? "NOT A 4-CHANNEL MOD" : e == 2 ? "BAD SONG LENGTH" : "?";
+    return e == 1 ? "NOT A 4, 6 OR 8-CHANNEL MOD" : e == 2 ? "BAD SONG LENGTH" : "?";
 }
 
 void mod_cell(uint8_t pattern, uint8_t row, uint8_t c, cell_t *out)
 {
-    const uint8_t *p = (const uint8_t *)(mod.pat + (uint32_t)pattern * 1024UL + (uint16_t)row * 16 + c * 4);
+    uint16_t rb = (uint16_t)mod.nch * 4;          /* bytes a row */
+    const uint8_t *p = (const uint8_t *)(mod.pat + (uint32_t)pattern * 64UL * rb + (uint32_t)row * rb + c * 4);
     out->sample = (uint8_t)((p[0] & 0xF0) | (p[2] >> 4));
     out->period = (uint16_t)((uint16_t)(p[0] & 15) << 8 | p[1]);
     out->fx = (uint8_t)(p[2] & 15);
@@ -216,7 +225,7 @@ static void trigger(uint8_t c, uint32_t offset)
 void mod_silence(void)
 {
     uint8_t c;
-    for (c = 0; c < NCH; c++) {
+    for (c = 0; c < mod.nch; c++) {
         voice_off(c);
         VREG(c, V_VOL_L) = 0;
         VREG(c, V_VOL_R) = 0;
@@ -448,7 +457,7 @@ static void read_row(void)
     uint8_t c, pat = mod.order[pl.pos];
     pl.ppos = pl.pos;
     pl.prow = pl.row;
-    for (c = 0; c < NCH; c++) {
+    for (c = 0; c < mod.nch; c++) {
         chan_t *h = &ch[c];
         cell_t x;
         mod_cell(pat, pl.row, c, &x);
@@ -498,9 +507,9 @@ void mod_tick(void)
     if (pl.tick == 0 && !in_delay)
         read_row();
     else
-        for (c = 0; c < NCH; c++)
+        for (c = 0; c < mod.nch; c++)
             tick_fx(c);
-    for (c = 0; c < NCH; c++)
+    for (c = 0; c < mod.nch; c++)
         outputs(c);
     if (++pl.tick >= pl.speed) {
         pl.tick = 0;
@@ -512,7 +521,7 @@ void mod_goto(uint8_t pos)
 {
     uint8_t c;
     mod_silence();
-    for (c = 0; c < NCH; c++) {
+    for (c = 0; c < mod.nch; c++) {
         chan_t *h = &ch[c];
         uint8_t pan = h->pan;
         memset(h, 0, sizeof *h);
@@ -535,8 +544,8 @@ void mod_start(void)
     pl.speed = 6;
     pl.bpm = 125;
     pl.ended = 0;
-    for (c = 0; c < NCH; c++)                   /* Amiga: 0 and 3 left, 1 and 2 right */
-        ch[c].pan = (uint8_t)((c == 0 || c == 3) ? 128 - pl.sep : (pl.sep >= 128 ? 255 : 128 + pl.sep));
+    for (c = 0; c < mod.nch; c++)                   /* Amiga: 0 and 3 left, 1 and 2 right */
+        ch[c].pan = (uint8_t)(((c & 3) == 0 || (c & 3) == 3) ? 128 - pl.sep : (pl.sep >= 128 ? 255 : 128 + pl.sep));
     mod_goto(0);
 }
 
