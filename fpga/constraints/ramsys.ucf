@@ -38,3 +38,11 @@ TIMESPEC "TS_iord"  = FROM "iord" TO "t1" TS_clk * 3;
 NET "i2s_bck"  LOC = "E6" | IOSTANDARD = LVCMOS33 | SLEW = SLOW | DRIVE = 8;
 NET "i2s_lrck" LOC = "D5" | IOSTANDARD = LVCMOS33 | SLEW = SLOW | DRIVE = 8;
 NET "i2s_data" LOC = "C5" | IOSTANDARD = LVCMOS33 | SLEW = SLOW | DRIVE = 8;
+
+# PS/2 (ps2.v, open drain): A on the board's connector (UG130: clock M16,
+# data M15), B on the A2 expansion connector, pin 7 PA-IO4 clock (D6), pin 8
+# PA-IO5 data (C6), through the expansion board's level shifters
+NET "ps2_clk"   LOC = "M16" | IOSTANDARD = LVCMOS33 | PULLUP;
+NET "ps2_data"  LOC = "M15" | IOSTANDARD = LVCMOS33 | PULLUP;
+NET "ps2b_clk"  LOC = "D6"  | IOSTANDARD = LVCMOS33 | PULLUP;
+NET "ps2b_data" LOC = "C6"  | IOSTANDARD = LVCMOS33 | PULLUP;

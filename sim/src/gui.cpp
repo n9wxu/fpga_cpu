@@ -71,8 +71,21 @@ static void key_event(const SDL_Event &e)
                 dev_key(&cpu.dev, (uint16_t)*p);
         return;
     }
+    if (e.type == SDL_MOUSEMOTION) {         // the PS/2 mouse (y up), while it reports (F4)
+        Uint32 b = e.motion.state;
+        ps2_mouse(e.motion.xrel, -e.motion.yrel, ((b & SDL_BUTTON_LMASK) ? 1 : 0) |
+                  ((b & SDL_BUTTON_RMASK) ? 2 : 0) | ((b & SDL_BUTTON_MMASK) ? 4 : 0));
+        return;
+    }
+    if (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEBUTTONUP) {
+        Uint32 b = SDL_GetMouseState(NULL, NULL);
+        ps2_mouse(0, 0, ((b & SDL_BUTTON_LMASK) ? 1 : 0) | ((b & SDL_BUTTON_RMASK) ? 2 : 0) |
+                  ((b & SDL_BUTTON_MMASK) ? 4 : 0));
+        return;
+    }
     if (e.type != SDL_KEYDOWN && e.type != SDL_KEYUP)
         return;
+    ps2_key(e.key.keysym.scancode, e.type == SDL_KEYDOWN);   // the PS/2 keyboard: set-2 scan codes
     SDL_Keycode k = e.key.keysym.sym;
     uint16_t mod = e.key.keysym.mod;
     int code = -1;
