@@ -45,10 +45,11 @@ interpreter built with the LLVM backend. Click the screen, then type
 - **T1 core** (`verilog/`). The smallest core of the ladder
   ([docs/t1.md](docs/t1.md)): the whole ISA on an 8-bit datapath, in
   Verilog-2001, checked instruction by instruction against the simulator.
-  It is simulated in Icarus; it has not been through the ISE build yet.
+  It runs on the Spartan-3 board at 10 MHz with the SRAM, the 720p video
+  and the I/O registers, loaded over JTAG, with a demo
+  ([fpga/README.md](fpga/README.md)).
 
-The ISE build (`fpga/`) runs end to end with a board bring-up test; the
-CPU has not been through it yet. Not started yet: the expansion board
+Not started yet: the expansion board
 (`pcb/`). The open design questions are in the
 [issues](https://github.com/n9wxu/fpga_cpu/issues).
 
@@ -106,7 +107,7 @@ make -C web serve                # http://localhost:8000
 | `web/`     | The simulator compiled to WebAssembly |
 | `docs/`    | Architecture, I/O map, measurements |
 | `verilog/` | T1 core RTL, testbenches with lockstep comparison against the simulator, transistor count ([verilog/README.md](verilog/README.md)) |
-| `fpga/`    | ISE 14.7 build, board constraints, JTAG programming through an Opella-LD ([fpga/README.md](fpga/README.md)) |
+| `fpga/`    | The board build: T1 with SRAM, video and I/O, JTAG loading through an Opella-LD, the demo ([fpga/README.md](fpga/README.md)) |
 | `pcb/`     | Expansion board: RP2350, SD, sound, I/O (to come) |
 
 Start with [docs/architecture.md](docs/architecture.md) for the design and

@@ -1,0 +1,3 @@
+# Timing for rtl/ramtest.v, added to s3starter.ucf by the Makefile: the
+# board file's PERIOD on clk carries through the DCMs (the capture and
+# write-strobe clocks get their phase-shifted copies); nothing more.

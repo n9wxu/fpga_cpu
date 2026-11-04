@@ -189,4 +189,4 @@ generation, is [scaling.md](scaling.md).
 - **Measurement:** `make -C sim measure` runs every benchmark × variant × timing configuration and checks each output. Results are in [measurements.md](measurements.md).
 - **Not built yet:**
   - RTL simulation (Icarus/Verilator in lockstep against the simulator's trace)
-  - The CPU's FPGA build (the flow itself works: ISE 14.7 on the Linux host, programmed from the Mac with OpenOCD; see `fpga/README.md`)
+  - The sprite layer, keyboard, sound, files and serial console in the FPGA build (T1, SRAM, video and the board I/O run; see `fpga/README.md`)

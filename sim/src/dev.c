@@ -283,6 +283,8 @@ uint16_t dev_read(cpu_t *c, uint32_t a)
             d->con_head = (d->con_head + 1) % CON_QLEN;
             return ch;
         }
+    case IO_INSTLO: return (uint16_t)c->st.insts;
+    case IO_INSTHI: return (uint16_t)(c->st.insts >> 16);
     case IO_FRAME: return (uint16_t)dev_frame(c->st.cycles);
     case IO_VSTAT: {
         uint32_t line = dev_line(c->st.cycles);
@@ -303,6 +305,8 @@ uint16_t dev_read(cpu_t *c, uint32_t a)
         int r = (int)(a - IO_VID) / 2;
         return r == V_PAL_DATA ? 0 : d->vid[r];
     }
+    if (!video_hicol8 && a >= IO_SND && a < IO_SND + 0x40)
+        return audlo_read(c, a);                  /* the low tier: only STR_POS reads */
     if (a >= IO_SND && a < IO_SND + 24)
         return (a & 7) < 6 ? d->snd[(a - IO_SND) / 8][(a & 7) / 2] : 0;
     switch (a) {
@@ -352,13 +356,16 @@ void dev_write(cpu_t *c, uint32_t a, uint32_t v)
     if (a >= IO_VID && a < IO_VID + 2 * V__COUNT) {
         int r = (int)(a - IO_VID) / 2;
         if (r == V_PAL_DATA) {
-            d->pal[d->vid[V_PAL_INDEX] & 0xFF] = (uint16_t)v;
+            if (video_hicol8)
+                d->pal[d->vid[V_PAL_INDEX] & 0xFF] = (uint16_t)v;
             d->vid[V_PAL_INDEX] = (uint16_t)((d->vid[V_PAL_INDEX] + 1) & 0xFF);
         } else {
             d->vid[r] = (uint16_t)v;
         }
         return;
     }
+    if (!video_hicol8 && a >= IO_SND && a < IO_SND + 0x40)
+        audlo_write(c, a, (uint16_t)v);
     if (a >= IO_SND && a < IO_SND + 24) {
         if ((a & 7) < 6)
             d->snd[(a - IO_SND) / 8][(a & 7) / 2] = (uint16_t)v;

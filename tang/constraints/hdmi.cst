@@ -1,0 +1,14 @@
+// HDMI (TMDS) on the Tang Nano 20K, from Sipeed's example: [3] clock,
+// [2] red, [1] green, [0] blue
+IO_LOC "tmds_p[3]" 33;
+IO_PORT "tmds_p[3]" IO_TYPE=LVDS25 PULL_MODE=NONE DRIVE=3.5;
+IO_LOC "tmds_p[0]" 35;
+IO_PORT "tmds_p[0]" IO_TYPE=LVDS25 PULL_MODE=NONE DRIVE=3.5;
+IO_LOC "tmds_p[1]" 37;
+IO_PORT "tmds_p[1]" IO_TYPE=LVDS25 PULL_MODE=NONE DRIVE=3.5;
+IO_LOC "tmds_p[2]" 39;
+IO_PORT "tmds_p[2]" IO_TYPE=LVDS25 PULL_MODE=NONE DRIVE=3.5;
+IO_LOC "tmds_n[3]" 34;
+IO_LOC "tmds_n[0]" 36;
+IO_LOC "tmds_n[1]" 38;
+IO_LOC "tmds_n[2]" 40;

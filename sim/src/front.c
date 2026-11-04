@@ -33,6 +33,8 @@ void opts_usage(int gui)
             "  --sym FILE        symbol file (lines of \"%%06x name\")\n"
             "  --keys STRING     preload the keyboard queue (\\n = Enter, \\e = Esc)\n"
             "  --true-color      show hi-color palette colors instead of the 3-bit dither\n"
+            "  --no-hicolor      the low tier (Spartan-3): no hi-color, no palette; its sound device\n"
+            "  --wav FILE        with --no-hicolor: write the sound (16-bit stereo, 48828 Hz)\n"
             "  --screenshot FILE write the 1280x720 display as PPM at exit\n",
             gui ? "fsim-gui" : "fsim", gui ? "none" : "2000000000");
     if (gui)
@@ -200,6 +202,8 @@ int opts_parse(opts_t *o, int argc, char **argv, int gui)
         else if (!strcmp(a, "--sym") && more) o->sym = argv[++i];
         else if (!strcmp(a, "--keys") && more) o->keys = argv[++i];
         else if (!strcmp(a, "--true-color")) o->true_color = 1;
+        else if (!strcmp(a, "--no-hicolor")) video_hicol8 = 0;
+        else if (!gui && !strcmp(a, "--wav") && more) audlo_wav(argv[++i]);
         else if (!strcmp(a, "--screenshot") && more) o->screenshot = argv[++i];
         else if (!gui && !strcmp(a, "--json") && more) o->json = argv[++i];
         else if (!gui && !strcmp(a, "--trace")) o->trace = 1;

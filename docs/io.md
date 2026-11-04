@@ -18,6 +18,7 @@ writes the low half first. There are no interrupts yet, so software polls.
 | F00008 | R | `CON_IN` | next serial input character; 0xFFFF if none is waiting, 0xFFFE when the input has ended (simulator: stdin closed). Never blocks. |
 | F0000A | R | `FRAME` | frame counter, +1 at the start of each vertical blank (60 Hz) |
 | F0000C | R | `VSTAT` | bit 0 = in vertical blank; bits 15:4 = current scan line (0–749) |
+| F00010 / F00012 | R | `INSTRET_LO/HI` | instructions retired (SR3 has only the low 16 bits). The halves are read separately: read HI, LO, HI again and retry if HI changed |
 
 ## Keyboard (F00100)
 
@@ -55,7 +56,7 @@ shown doubled in both directions. The layers, from back to front, are:
 
 | Address | R/W | Name | Function |
 |---|---|---|---|
-| F00200 | RW | `VID_CTRL` | Bit 0: text on. Bit 1: bitmap on. Bit 2: bitmap hi-color (0 = 8-color). Bit 3: sprite layer on. Bit 4: shown sprite buffer (0/1). Bit 5: text cursor on. Bit 6: sprite buffer is 8 bpp (0 = 4 bpp). |
+| F00200 | RW | `VID_CTRL` | Bit 0: text on. Bit 1: bitmap on. Bit 2: bitmap hi-color (0 = 8-color). Bit 3: sprite layer on. Bit 4: shown sprite buffer (0/1). Bit 5: text cursor on. Bit 6: sprite buffer is 8 bpp (0 = 4 bpp). Bit 7: bitmap 16-color (when bit 2 is 0). |
 | F00202 | RW | `VID_BACKDROP` | backdrop color 0–7 |
 | F00204 / F00206 | RW | `VID_TEXT` | text buffer address |
 | F00208 / F0020A | RW | `VID_BMP` | bitmap address |
@@ -88,7 +89,7 @@ sets the layout below, with text and cursor on.
 | 10:8 | foreground color |
 | 13:11 | background color |
 | 14 | 1 = background is transparent, so lower layers show through |
-| 15 | stipple: draw the background as a 50% checkerboard of the background color and transparency |
+| 15 | stipple: draw the background as a 50% checkerboard of the background color and transparency (on a true-color display, such as HDMI or the simulator's `--true-color`: a 50% blend of the background color with what is beneath) |
 
 The buffer is 4000 bytes, row-major.
 
@@ -106,6 +107,18 @@ palette. A row is 640 bytes and the buffer is 230,400 bytes.
   ordered dither. The simulator draws it the same way by default; the
   `--true-color` option shows the real palette.
 - Palette index 0 is transparent.
+
+**Bitmap, 16-color mode** (bit 7 set, bit 2 clear). 4 bits per pixel as
+in 8-color mode (left pixel in the high nibble, 320-byte rows, 115,200
+bytes), direct color with no palette: 0–7 are the eight colors, 9–15 are
+colors 1–7 at half brightness, and 8 is transparent. On the 3-bit VGA a
+half-bright pixel is a 50% checkerboard of the color and black (like a
+stippled text background); on a true-color display it is half intensity.
+
+**Video tiers.** The Spartan-3 (fpga/rtl/ramsys.v, system.v) is the low
+tier: no hi-color and no palette (bits 2 and 6 are ignored and `PAL_DATA`
+does nothing), so the bitmap is 8-color or 16-color. The Tang Nano 20K is
+the high tier, with every mode. `fsim --no-hicolor` shows the low tier.
 
 **Sprite buffer.** There are two formats, chosen by bit 6 of `VID_CTRL`:
 
@@ -130,8 +143,33 @@ There are 3 voices, each 8 bytes apart (voice n is at `F00400 + 8n`).
 | +2 | `SND_VOL` | volume 0–15 |
 | +4 | `SND_WAVE` | 0 square, 1 triangle, 2 sawtooth, 3 noise |
 
-On hardware the RP2350 generates the sound (PWM), and these writes are
-forwarded to it over the link.
+On the Tang Nano 20K these are voices 0-2 of the audio engine
+(docs/audio.md). On the Spartan-3 (the low tier, `fpga/rtl/audio_lite.v`)
+they are a small synthesizer of their own, with a streaming player beside
+it, on an I2S DAC (for example a PCM5102A) on the A2 expansion connector:
+pin 4 (E6) bit clock, pin 5 (D5) word clock, pin 6 (C5) data, 3.3 V,
+ground on pin 1. The output is 16-bit stereo at 48,828 Hz (50 MHz / 1024).
+
+- Each voice: a square (±full scale), triangle (half scale), sawtooth, or
+  noise (a 15-bit LFSR, x^15 + x^14 + 1, shifted when bit 19 of the
+  voice's 24-bit phase rises), times `VOL` × 5 / 256, so three voices at
+  full volume do not clip.
+- The streaming player plays a ring buffer of stereo frames from RAM (a
+  32-bit word a frame: the left sample in the low half, the right in the
+  high, 16-bit signed). The program keeps it filled behind `STR_POS`.
+- The mix is the three voices plus the stream × `STR_VOL` / 256, clipped
+  to 16 bits.
+- Only `STR_POS` reads back; the other registers read 0 there.
+- `fsim --no-hicolor` models this device bit for bit, and `--wav FILE`
+  writes its output.
+
+| Address | R/W | Name | Function |
+|---|---|---|---|
+| F00420 | W | `STR_CTRL` | bit 0: play (0 → 1 starts at the buffer's first frame). Bits 3:1: n − 1, each buffer frame plays for n output frames (48,828 / n Hz: 48.8, 24.4, 16.3, 12.2 ... kHz) |
+| F00422 | W | `STR_VOL` | stream volume, 0x100 = 1.0 (bits 8:0, up to 0x1FF) |
+| F00424 / F00426 | W | `STR_ADDR_LO/HI` | the buffer's byte address (a multiple of 4), bits 19:0 |
+| F00428 | W | `STR_LEN` | the buffer's length in frames, 1-65535; the player loops around it |
+| F0042A | R | `STR_POS` | the frame being fetched, 0 .. `STR_LEN` − 1 (it is heard two output frames later) |
 
 ## Files (F00500)
 

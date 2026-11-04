@@ -15,6 +15,8 @@ struct cpu;
 #define IO_GETC      0xF00008u /* R: next serial input character, 0xFFFF if none */
 #define IO_FRAME     0xF0000Au /* R: frame counter */
 #define IO_VSTAT     0xF0000Cu /* R: bit 0 vblank, bits 15:4 scan line */
+#define IO_INSTLO    0xF00010u /* R: instructions retired, bits 15:0 */
+#define IO_INSTHI    0xF00012u /* R: instructions retired, bits 31:16 */
 #define IO_KBD_DATA  0xF00100u
 #define IO_KBD_MOD   0xF00102u
 #define IO_KBD_CTRL  0xF00104u /* RW: bit 0 = also queue key releases (code | 0x8000) */
@@ -34,6 +36,7 @@ enum { V_CTRL, V_BACKDROP, V_TEXT_LO, V_TEXT_HI, V_BMP_LO, V_BMP_HI, V_SPR_LO, V
 #define VC_SPRBUF 0x10
 #define VC_CURSOR 0x20
 #define VC_SPR8   0x40 /* sprite buffer is 8 bpp through the palette */
+#define VC_C16    0x80 /* bitmap 16-color, direct: 9-15 = 1-7 at half brightness, 8 transparent */
 
 /* frame timing: 50 MHz, 750 lines of which 720 are visible, 60 frames/s */
 #define CPU_HZ        50000000u
@@ -93,6 +96,13 @@ uint32_t dev_line(uint64_t cycles);
 #define SCREEN_W 1280
 #define SCREEN_H 720
 void video_render(const struct cpu *c, uint32_t *px, int true_color, int cursor_on);
+/* the low tier's sound (audlo.c, fpga/rtl/audio_lite.v): F00400-F0043F with --no-hicolor */
+void audlo_write(struct cpu *c, uint32_t a, uint16_t v);
+uint16_t audlo_read(struct cpu *c, uint32_t a);
+void audlo_finish(const struct cpu *c);
+void audlo_wav(const char *path);
+/* 0: the low video tier, the Spartan-3 (--no-hicolor): no hi-color, no palette */
+extern int video_hicol8;
 int write_ppm(const char *path, const uint32_t *px, int w, int h);
 
 /* Sound: fill n mono float samples at the given rate from the voice registers. */

@@ -1,0 +1,6 @@
+# Timing for rtl/ramvid.v, added to s3starter.ucf by the Makefile: the
+# board file's PERIOD on clk carries through the DCMs. The video line
+# request crosses from the pixel clock by a synchronized toggle (and the
+# line number it carries is stable by then): not a timed path.
+INST "video/rq_line*" TNM = "rq_line";
+TIMESPEC "TS_rq_line" = FROM "rq_line" TO FFS TIG;

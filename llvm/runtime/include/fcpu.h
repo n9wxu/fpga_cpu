@@ -12,6 +12,14 @@
 #define CON_IN    IO16(0xF00008)
 #define FRAME     IO16(0xF0000A)
 #define VSTAT     IO16(0xF0000C)
+#define INSTRET   IO32(0xF00010)  /* instructions retired; read with fcpu_instret() */
+
+static inline uint32_t fcpu_instret(void)
+{
+    uint16_t h, l;
+    do { h = IO16(0xF00012); l = IO16(0xF00010); } while (h != IO16(0xF00012));
+    return (uint32_t)h << 16 | l;
+}
 #define KBD_DATA  IO16(0xF00100)
 #define KBD_MOD   IO16(0xF00102)
 
