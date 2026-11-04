@@ -5,7 +5,7 @@
 // of memsys.v. Programs load over JTAG as before (tools/jtagload.py).
 //
 // rammux ports, highest priority first:
-//   0 video   the line's bitmap and text rows (video.v), bursts of up to 16
+//   0 video   the line's bitmap and text rows (video_lt.v), bursts of up to 16
 //   1 CPU     T1S's data through cpumem.v: single words, a write buffer
 //             and the last word read
 //   2 fetch   T1S's instructions (t1s_fetch): single words, two out at most.
@@ -234,7 +234,7 @@ module ramsys (
         .ps2_ci({ps2b_clk, ps2_clk}), .ps2_di({ps2b_data, ps2_data}), .ps2_co(ps2_co), .ps2_do(ps2_do)
     );
 
-    video #(.HICOL8(0)) vid (                 // the Spartan-3: 16 colours at most (docs/io.md)
+    video_lt #(.HICOL8(0)) vid (                 // the Spartan-3: 16 colours at most (docs/io.md)
         .clk(clk50), .pclk(pclk),
         .vid_ctrl(vid_ctrl), .vid_backdrop(vid_backdrop), .vid_text(vid_text), .vid_bmp(vid_bmp),
         .vid_scrollx(vid_scrollx), .vid_scrolly(vid_scrolly), .vid_cursor(vid_cursor),
