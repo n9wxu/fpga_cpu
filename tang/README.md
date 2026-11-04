@@ -2,7 +2,8 @@
 
 Sipeed Tang Nano 20K (Gowin GW2AR-LV18QN88C8/I7) builds, with the open
 toolchain of the OSS CAD Suite (`OSS=` its `bin`, default `~/oss-cad-suite/bin`):
-yosys `synth_gowin`, nextpnr-himbaechel, gowin_pack, openFPGALoader.
+yosys `synth_gowin`, nextpnr-himbaechel, gowin_pack (through
+`tools/gowin_pack_elvds.py` for the HDMI output: see HDMI below), openFPGALoader.
 
     make TOP=hdmitest bit prog    # build and load (SRAM only; the flash is never written)
     make prog                     # TOP=system is the default
@@ -13,7 +14,9 @@ yosys `synth_gowin`, nextpnr-himbaechel, gowin_pack, openFPGALoader.
 |---|---|
 | `blinky` | bring-up: the LEDs |
 | `hdmitest` | 1280x720 60 Hz on the HDMI connector: colour bars, a grey ramp, a bouncing square |
-| `system` | the fpga_cpu: T1 at 16.875 MHz, 64 KB of block RAM, docs/io.md's video on HDMI, the I/O registers; programs load and talk over the USB serial port |
+| `hdmiaudio` | colour bars with a 440 Hz (left) / 660 Hz (right) tone over HDMI audio (verified on the TV) |
+| `hdmiload` | `hdmiaudio` with the SDRAM PHY under a cycling read/write load (a test bench for the HDMI link: see below) |
+| `system` | the fpga_cpu: T1F, 64 KB of block RAM, the 8 MB SDRAM, docs/io.md's video and the audio engine on HDMI, the I/O registers; programs load and talk over the USB serial port |
 
 ## HDMI
 
@@ -22,8 +25,31 @@ AVI InfoFrame once a frame (`tools/avi_packet.py`): 720p RGB, IT content,
 underscan. A PLL makes 371.25 MHz from the
 27 MHz crystal, a CLKDIV divides it by 5 to the 74.25 MHz pixel clock; three
 pipelined TMDS encoders and the clock word go through OSER10 serializers into
-TLVDS_OBUF pairs (pins 33-40, `constraints/hdmi.cst`). `make DEFS=-DMODE480`
-builds a 640x480 version for bring-up.
+the output buffers on pins 33-40. `make DEFS=-DMODE480` builds a 640x480
+version for bring-up.
+
+The output buffers are emulated differential (`ELVDS_OBUF`: two 3.3 V
+outputs at 8 mA, `constraints/hdmi_elvds.cst`), as NESTang, NanoMig and
+Sipeed's examples drive this board's HDMI with Gowin's tools. apicula's
+gowin_pack refuses `ELVDS_OBUF` on these pins (they can also be true LVDS),
+so `tools/gowin_pack_elvds.py` runs it with that check lifted and the bank
+at 3.3 V; the HDMI pins' and banks' fuses then match NESTang's Gowin-built
+bitstream exactly (as far as apicula decodes them). `make HDMI_OUT=tlvds`
+builds the true-LVDS version (`TLVDS_OBUF`, `constraints/hdmi.cst`, plain
+gowin_pack).
+
+Why: with `TLVDS_OBUF` the FPGA's own switching noise breaks the link. The
+TV checks HDMI audio packets (an error makes it mute and re-sync, blanking
+the picture too), while a wrong bit in a pixel shows nothing, so the full
+system lost picture and sound for seconds at a time once it played music
+with audio packets on, and was clean with them off. Taken apart on the board
+with a camera on the TV (`hdmiload`): the packets the system builds are
+correct (captured on the board, `-DPKTCAP` below); replayed with SDRAM traffic
+and no CPU (`hdmiload -DREPLAY`) the TV keeps them; 6144 registers switching
+with nothing connected to HDMI (`hdmiload -DLOGICLOAD`) black it out, and
+with no packets the picture drops too. With `ELVDS_OBUF` the same switching
+load and the full system playing Glass Bells give a steady picture and
+unbroken sound.
 
 If a monitor shows "No Signal", reseat the HDMI cable first: on this board it
 must be pushed fully into the connector. If the TV crops the edges
@@ -37,8 +63,46 @@ builds T1). It runs on a 67.5 MHz clock gated by a DQCE: a T1F cycle is 2
 clocks (33.75 MHz) for block RAM (000000-00FFFF), 3 for I/O, and longer
 while the SDRAM answers (everything else in the 1 MB). T1 needs 4 clocks. The SDRAM
 is on the RAM machine, as on the Spartan-3: `../fpga/rtl/rammux.v` (port 0
-T1 and the loader, port 1 video DMA in bursts of 4) in front of
-`rtl/sdram_phy.v`. Video buffers must be in the SDRAM. The video is `../fpga/rtl/video.v`, shared with the Spartan-3, in
+T1 and the loader, port 1 video DMA in bursts of 8) in front of
+`rtl/sdram_phy.v`; port 2 is the audio engine. Video buffers must be in the SDRAM.
+
+Audio: `../fpga/rtl/audio_engine.v` (docs/audio.md: 32 voices, samples and
+chip voices, ADSR, filter; registers at F01000 and F01800) on fclk, its
+samples through `rtl/hdmi_audio_cdc.v` into `dvi_tx` (`AUDIO=1`): 48 kHz
+stereo in the TV's speakers. Sample data must be in the SDRAM (the engine
+reads through rammux). `progs/audtest.c` checks the engine and plays a
+chord and a noise burst (`make run PROG=build/audtest.bin`).
+Memory: there is no block RAM main memory; everything but I/O is the SDRAM,
+behind a 32 KB direct-mapped write-through cache (16-byte lines, a one-entry
+write buffer) in block RAM. T1F's bus is sampled two fclk cycles after its
+edge (the paths from T1F to that logic are not timed and come out near one
+cycle in this design): a cache hit or an I/O access takes 4 clocks.
+
+The SDRAM pins drive 4 mA (`constraints/sdram.cst`) and the PHY holds the
+data bus at its last value between accesses (`rtl/sdram_phy.v`): both
+lowered the switching noise that upset the true-LVDS HDMI output (HDMI
+above), and are kept.
+
+Test builds (`make DEFS=...`): `-DDIAG` prints late video lines, audio FIFO
+underruns and frames once a second on the console; `-DNOAUDIO` sends no
+audio packets (a 48 kHz tick still drains the FIFO, so the load is the
+same); `-DBARS` shows `hdmiaudio`'s colour bars in place of the picture;
+`-DPKTCAP` sends no audio packets and captures the islands a copy of
+`dvi_tx` would send, 8192 words at a time, out on the console as `#P` lines
+(`tools/pktcap_check.py` checks them: ECC, layout, parity, spacing).
+`hdmiload` options: `-DLOGICLOAD` (a 6144-register switching load, 10 s on,
+10 s off), `-DNOAUDIO`, `-DREPLAY` (sends a capture's islands in place of its
+own: `tools/pktcap_rom.py` makes `build/pk/replay.hex`; `sim/replay_tb.v`
+simulates it).
+
+`sim/mock/` runs `system.v` with T1 replaced by a replay of sidplay's bus
+trace playing Glass Bells (from the instruction-set simulator; needs
+`apps/sidplay`): the cache, rammux, PHY, video and audio engine against the
+SDRAM model, with a scoreboard on every word; `+words=` dumps the HDMI words
+for `tools/hdmi_audio_check.py`.
+
+Utilisation: about 14,350 LUT4s (69%), 29 of 46 block RAMs; fclk 78.9 MHz
+(placement seed 6: the margin depends on placement). The video is `../fpga/rtl/video.v`, shared with the Spartan-3, in
 true colour; the I/O registers are `../fpga/rtl/iosys.v`. Programs link with
 `--stack 0x10000` (the Makefile does) so the stack is in block RAM.
 
@@ -51,11 +115,14 @@ true colour; the I/O registers are `../fpga/rtl/iosys.v`. Programs link with
 - `progs/sdtest.c`: SDRAM tests, then a scrolling hi-color bitmap
 - `progs/vidtest.c`: the text layer: attributes, CP437, live counters
 
-SDRAM timing, found on the board: its clock is fclk at 180 degrees and read
-data is taken at the third rising edge after the READ. Back-to-back reads
-sometimes gave the next word, so the PHY leaves a cycle between
-reads (reads stream at 135 MB/s, writes at 270 MB/s); capture at the falling edge, an earlier SDRAM clock, or the input
-register in the I/O block (nextpnr `ioreg_in_iob`) all failed.
+SDRAM timing, found on the board: reads are bursts of 8 (sequential, masked
+with DQM where unwanted; 270 MB/s) and writes single words. The SDRAM's clock
+is fclk in phase (PLL `PSDA_SEL` "0000", `SD_PSDA` in `rtl/system.v`) and read
+data is taken at the third rising edge after its slot (`cap` 3, settable
+over serial). The self-test (serial 'C' 8-word bursts, 'D' 4, 'E' single,
+'B' bursts after byte writes) passed with no errors in every mode on four
+placements; at 180 degrees, the earlier setting, burst reads failed on some
+placements (the word at the edge of the window).
 
 The loader protocol and the console are described at the top of
 `rtl/system.v`; `tools/run.py` (needs pyserial) loads an image, runs it and

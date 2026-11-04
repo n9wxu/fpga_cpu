@@ -13,6 +13,7 @@
 #   blinky     bring-up: LEDs
 #   hdmitest   1280x720 60 Hz HDMI test pattern (-D MODE480: 640x480)
 #   hdmiaudio  the same with a 440/660 Hz stereo tone in the TV's speakers
+#   hdmiload   hdmiaudio with the SDRAM PHY under a cycling read/write load
 #   system     the fpga_cpu: T1, 64 KB of block RAM, 720p video on HDMI,
 #              the I/O registers, serial loader and console
 
@@ -27,19 +28,35 @@ FAMILY := GW2A-18C
 CORE ?= t1f
 T1 := ../verilog/rtl/$(CORE)_core.v ../verilog/rtl/t1_rf.v $(if $(filter t1f,$(CORE)),../verilog/rtl/t1_dec.v)
 CDEF := $(if $(filter t1f,$(CORE)),-DT1F)
+
+# HDMI output buffer: elvds (the default: emulated differential, 3.3 V 8 mA,
+# as NESTang and Gowin's tools drive the Nano 20K's HDMI; constraints/
+# hdmi_elvds.cst, packed by tools/gowin_pack_elvds.py since apicula refuses it
+# on these pins) or tlvds (TLVDS_OBUF, LVDS25, constraints/hdmi.cst: the
+# FPGA's own switching noise breaks that link, the TV dropping picture and sound)
+HDMI_OUT ?= elvds
+HDMI_CST := $(if $(filter elvds,$(HDMI_OUT)),constraints/hdmi_elvds.cst,constraints/hdmi.cst)
+HDMI_DEF := $(if $(filter elvds,$(HDMI_OUT)),-DELVDS)
+PACK     := $(if $(filter elvds,$(HDMI_OUT)),$(OSS)/tabbypy3 tools/gowin_pack_elvds.py,$(OSS)/gowin_pack)
 SRC_blinky   :=
 SRC_hdmitest := rtl/dvi_tx.v
 SRC_hdmiaudio := rtl/dvi_tx.v rtl/hdmi_audio_cdc.v rtl/hdmi_audio_tone.v
+SRC_hdmiload := rtl/dvi_tx.v rtl/hdmi_audio_cdc.v rtl/hdmi_audio_tone.v rtl/sdram_phy.v
 SRC_system   := $(T1) rtl/dvi_tx.v ../fpga/rtl/video.v ../fpga/rtl/iosys.v ../fpga/rtl/rammux.v rtl/sdram_phy.v ../fpga/rtl/audio_engine.v ../fpga/rtl/audio_regs.v rtl/hdmi_audio_cdc.v
 SIM_system   := sim/sdram_model.v
-CST_hdmitest := constraints/hdmi.cst
-CST_hdmiaudio := constraints/hdmi.cst
-CST_system   := constraints/hdmi.cst
+CST_hdmitest := $(HDMI_CST)
+CST_hdmiaudio := $(HDMI_CST)
+CST_hdmiload := $(HDMI_CST) constraints/sdram.cst
+CST_system   := $(HDMI_CST) constraints/sdram.cst
 DATA_system  := build/font8x14.mem
 FREQ_blinky   := 27
 FREQ_hdmitest := 74.25
 FREQ_hdmiaudio := 74.25
+FREQ_hdmiload := 74.25
 FREQ_system   := 74.25
+# placement seed: with the cache and the audio engine, fclk (67.5 MHz) has little
+# margin and depends on placement (seeds 1-6: 71.3, 70.1, 66.7, 70.5, 69.5, 71.9 MHz)
+PNR_system    := --seed 6
 
 SRC := rtl/$(TOP).v $(SRC_$(TOP))
 CST := constraints/tang20k.cst $(CST_$(TOP))
@@ -59,7 +76,7 @@ build/font8x14.mem: ../sim/assets/font8x14.mem
 
 build/$(TOP).json: $(SRC) $(DATA_$(TOP))
 	@mkdir -p build
-	$(OSS)/yosys -q -l build/$(TOP)-yosys.log $(CDEF) $(DEFS) -p "read_verilog -defer $(SRC); synth_gowin -top $(TOP) -json $@ -family gw2a"
+	$(OSS)/yosys -q -l build/$(TOP)-yosys.log $(CDEF) $(HDMI_DEF) $(DEFS) -p "read_verilog -defer $(SRC); synth_gowin -top $(TOP) -json $@ -family gw2a"
 
 build/$(TOP)_pnr.json: build/$(TOP).json build/$(TOP).cst $(wildcard constraints/$(TOP).sdc)
 	$(OSS)/nextpnr-himbaechel -q -l build/$(TOP)-pnr.log --json $< --write $@ --device $(DEVICE) \
@@ -68,7 +85,7 @@ build/$(TOP)_pnr.json: build/$(TOP).json build/$(TOP).cst $(wildcard constraints
 	@grep "Max frequency" build/$(TOP)-pnr.log | tail -4
 
 build/$(TOP).fs: build/$(TOP)_pnr.json
-	$(OSS)/gowin_pack -d $(FAMILY) -o $@ $< 2>/dev/null
+	$(PACK) -d $(FAMILY) -o $@ $< 2>/dev/null
 
 prog: build/$(TOP).fs
 	$(OSS)/openFPGALoader -b tangnano20k $<

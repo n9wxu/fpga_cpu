@@ -24,7 +24,8 @@
 // 3-bit colours are given full scale.
 module dvi_tx #(
     parameter HDMI  = 0,
-    parameter AUDIO = 0
+    parameter AUDIO = 0,
+    parameter NOSER = 0                     // 1: no serializers or pins (a capture-only copy)
 ) (
     input  wire       pclk,
     input  wire       sclk,                 // 5 x pclk
@@ -36,9 +37,12 @@ module dvi_tx #(
     input  wire [15:0] a_l, a_r,            // AUDIO: the sample (signed) when a_pop is high
     output wire       a_pop,                // AUDIO: pixel-clock pulse, 48 kHz average
     output wire [3:0] tmds_p,               // {clock, data2 (red), data1 (green), data0 (blue)}
-    output wire [3:0] tmds_n
+    output wire [3:0] tmds_n,
+    output wire       isl,                  // HDMI: a data island's word (preamble, guard, packet) is out
+    output wire [29:0] wout                 // the three channels' words, {2, 1, 0}
 );
     wire [9:0] words [0:3];
+    assign wout = {words[2], words[1], words[0]};
     assign words[3] = 10'b0000011111;       // the TMDS clock: one pixel period
 
     generate if (!HDMI) begin : dvi
@@ -50,6 +54,7 @@ module dvi_tx #(
         assign words[1] = q1;
         assign words[2] = q2;
         assign a_pop = 1'b0;
+        assign isl = 1'b0;
     end else begin : hdmi
         localparam [9:0] VGB_02 = 10'b1011001100,   // video guard band, channels 0 and 2
                          GB_1   = 10'b0100110011;   // channel 1 (and 2 in a data island)
@@ -238,6 +243,10 @@ module dvi_tx #(
         end
         reg [29:0] w = 30'd0;
         always @(posedge pclk) w <= spv[0] ? sp[0] : {q2, q1, q0};
+        // a data island's pixel, delayed as its word is (4 clocks)
+        reg [3:0] isl_d = 4'd0;
+        always @(posedge pclk) isl_d <= {d_pre | d_guard | d_data, isl_d[3:1]};
+        assign isl = isl_d[0];
         assign words[0] = w[9:0];
         assign words[1] = w[19:10];
         assign words[2] = w[29:20];
@@ -259,7 +268,10 @@ module dvi_tx #(
 
     genvar i;
     generate
-        for (i = 0; i < 4; i = i + 1) begin : lane
+        if (NOSER) begin : noser
+            assign tmds_p = 4'd0;
+            assign tmds_n = 4'd0;
+        end else for (i = 0; i < 4; i = i + 1) begin : lane
             wire s;
 `ifdef SIM
             // simulation: the serial bit stream is not modelled
@@ -273,7 +285,15 @@ module dvi_tx #(
                 .D8(words[i][8]), .D9(words[i][9]),
                 .FCLK(sclk), .PCLK(pclk), .RESET(rst), .Q(s)
             );
+`ifdef ELVDS
+            // emulated differential, as NESTang drives the Nano 20K's HDMI (two
+            // 3.3 V outputs, 8 mA, the n pin the complement; Gowin's IO_TYPE
+            // PPLVDS): constraints/hdmi_elvds.cst. apicula's gowin_pack refuses
+            // it on these (true-LVDS) pins: tools/gowin_pack_elvds.py packs it
+            ELVDS_OBUF obuf (.I(s), .O(tmds_p[i]), .OB(tmds_n[i]));
+`else
             TLVDS_OBUF obuf (.I(s), .O(tmds_p[i]), .OB(tmds_n[i]));
+`endif
 `endif
         end
     endgenerate

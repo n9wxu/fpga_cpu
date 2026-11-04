@@ -43,6 +43,8 @@ module system_tb;
         $readmemh(file, prog);
         n = 0; while (n < 65536 && prog[n] !== 8'hxx) n = n + 1;
         #2000;
+        // +bist: the SDRAM self-test first ('C': three reports, about 0.5 ms)
+        if ($test$plusargs("bist")) begin send("C"); #900000; end
         send("L"); send(base >> 16); send(base >> 8); send(base);
         send(n >> 16); send(n >> 8); send(n);
         for (k = 0; k < n; k = k + 1) send(prog[k]);
@@ -94,6 +96,18 @@ module system_tb;
             end
         end
     end
+
+    // +words=FILE: dvi_tx's three 10-bit channel words, one line a pixel clock
+    // ("ch0 ch1 ch2", hex), from when the bitmap layer is on, for
+    // tools/hdmi_audio_check.py (NOTONE=1)
+    reg [1023:0] wfile;
+    integer wf = 0, wn = 0;
+    initial if ($value$plusargs("words=%s", wfile)) wf = $fopen(wfile, "w");
+    always @(posedge dut.pclk)
+        if (wf != 0 && dut.vid_ctrl[1]) begin
+            $fwrite(wf, "%h %h %h\n", dut.tx.words[0], dut.tx.words[1], dut.tx.words[2]);
+            wn = wn + 1;
+        end
 
     initial begin #3000000000; $display("\n[system_tb] timeout"); $finish; end
 endmodule

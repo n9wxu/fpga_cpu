@@ -74,6 +74,11 @@ def tone_model(n):
     return sine(pl >> 22), sine(pr >> 22)
 
 
+# NOTONE=1 in the environment: the samples are not the test tone (a dump that
+# starts mid-stream, from tang/sim/system_tb.v +words=FILE): check only the protocol
+TONE = not os.environ.get("NOTONE")
+
+
 def main(path):
     ch = [[], [], []]
     for line in open(path):
@@ -228,7 +233,7 @@ def main(path):
                                 + (bits >> 3)) & 1:
                             err("parity wrong (%s, frame %d) at %d" % (side, frame, p))
                     frame = (frame + 1) % 192
-                else:
+                elif TONE:
                     err("a sample before the first B flag at %d" % p)
                 sg = lambda v: v - 65536 if v & 0x8000 else v
                 samples.append((p, sg(l), sg(r)))
@@ -238,7 +243,9 @@ def main(path):
     # ---- the tone: no sample lost or repeated -------------------------------------
     first = next((k for k, s in enumerate(samples) if s[1] or s[2]), None)
     nz = 0
-    if first is None:
+    if not TONE:
+        pass                            # NOTONE=1: any samples (a dump from the system)
+    elif first is None:
         err("only silence")
     else:
         nz = first

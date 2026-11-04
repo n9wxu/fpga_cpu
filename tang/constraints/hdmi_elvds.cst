@@ -1,0 +1,15 @@
+// HDMI (TMDS) on the Tang Nano 20K as NESTang constrains it: ELVDS_OBUF
+// (rtl/dvi_tx.v -DELVDS), 8 mA, bank at 3.3 V. [3] clock, [2] red, [1]
+// green, [0] blue. Packed by tools/gowin_pack_elvds.py.
+IO_LOC "tmds_p[3]" 33;
+IO_LOC "tmds_n[3]" 34;
+IO_PORT "tmds_p[3]" PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC "tmds_p[0]" 35;
+IO_LOC "tmds_n[0]" 36;
+IO_PORT "tmds_p[0]" PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC "tmds_p[1]" 37;
+IO_LOC "tmds_n[1]" 38;
+IO_PORT "tmds_p[1]" PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC "tmds_p[2]" 39;
+IO_LOC "tmds_n[2]" 40;
+IO_PORT "tmds_p[2]" PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;

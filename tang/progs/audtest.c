@@ -71,7 +71,8 @@ int main(void)
     V(1, LOOP_LO) = 0; V(1, LOOP_HI) = 0; V(1, END_LO) = SLEN; V(1, END_HI) = 0;
     V(1, STEP_LO) = 0; V(1, STEP_HI) = 1;   /* 1.0: 48 kHz */
     V(1, VOL_L) = 0x80; V(1, VOL_R) = 0x80;
-    V(1, POS_F) = 0; V(1, POS_L) = 0; V(1, POS_H) = 0;
+    V(1, POS_F) = 0; V(1, POS_L) = 0; V(1, POS_H) = 0;   /* arms it: the first words are fetched */
+    wait_frames(2);                         /* (a gate at once would hold a frame: an underrun) */
     V(1, CTRL) = 1;                         /* sample, gate, no envelope, one-shot */
     wait_frames(SLEN / 2);
     uint16_t pos = V(1, POS_L);
@@ -84,7 +85,9 @@ int main(void)
     chip(2, 2, 277, 0x60, 0x20);            /* triangle, left */
     chip(3, 3, 330, 0x20, 0x60);            /* saw, right */
     wait_frames(48000 * 2);
-    V(1, POS_F) = 0; V(1, POS_L) = 0; V(1, POS_H) = 0; V(1, CTRL) = 0; V(1, CTRL) = 1;
+    V(1, CTRL) = 0; V(1, POS_F) = 0; V(1, POS_L) = 0; V(1, POS_H) = 0;
+    wait_frames(2);
+    V(1, CTRL) = 1;
     wait_frames(48000);
     for (int v = 0; v < 4; v++) V(v, CTRL) = V(v, CTRL) & ~1;   /* release */
     wait_frames(48000);
