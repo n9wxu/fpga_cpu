@@ -75,8 +75,9 @@ module t1s_core #(
     input  wire [31:0] i_data,
     output wire [1:0]  sr_sel,       // which of SR1-SR3 MFSR is reading
     input  wire [15:0] sr_in,        // SR1-SR3 (cycle and instruction counters) live outside the core
+    input  wire        irq,          // the interrupt line (docs/t1.md "Interrupts")
     output reg         halted,
-    output reg  [7:0]  halt_code,    // SYS imm; FF RETI, FE illegal, FD address out of range
+    output reg  [7:0]  halt_code,    // SYS imm; FE illegal, FD address out of range
     output reg         retire        // an instruction completed at the last clock edge
 );
 
@@ -106,6 +107,9 @@ module t1s_core #(
     reg        accz;           // multiply accumulator still zero
     reg        swp;            // multiply operands swapped; in a store, its data is in the temporaries
     reg        pcx;            // the PC has run past 0x0FFFFF (reads as 0x100000: no memory there)
+    // interrupts: EPC (the PC an interrupt replaced, folded as pcf) and IE
+    reg [20:0] epc;
+    reg        ie;
 
     // ---------------------------------------------------------------- decode
 
@@ -338,6 +342,8 @@ module t1s_core #(
     reg [4:0]  cnt_n;
     reg [2:0]  tag_n;
     reg        tagv_n, tag_set, halted_n;
+    reg [20:0] epc_n;
+    reg        ie_n;
     reg [7:0]  halt_code_n;
     reg        pf_ok, done, jump, bad;
     reg [7:0]  arb;                    // byte going into AR or PC bits 23:16
@@ -370,6 +376,7 @@ module t1s_core #(
         pf_ok = 1'b0; done = 1'b0; jump = 1'b0; bad = 1'b0; arb = 8'h00; pcx_n = pcx;
         start = 1'b0; flush = 1'b0; smc_n = smc; pp = 2'd0;
         dnb = 1'b0; wd_m = 1'b0; wd_d = 1'b0; mop_n = mop; prod_n = prod;
+        epc_n = epc; ie_n = ie;
 
         case (state)
         // waiting for the next instruction to be whole in the queue (it is
@@ -586,9 +593,10 @@ module t1s_core #(
             if (k == 4'd0) k_n = 4'd1; else done = 1'b1;
         end
 
-        C_MTSR: begin
+        C_MTSR: begin                                      // SR0 the flags, SR6 bit 0 IE
             pf_ok = 1'b1; ra = rbyte(rd_r, 2'd0);
             if (sr == 3'd0) begin fN_n = rfa[3]; fZ_n = rfa[2]; fC_n = rfa[1]; fV_n = rfa[0]; end
+            if (sr == 3'd6) ie_n = rfa[0];
             done = 1'b1;
         end
 
@@ -635,7 +643,12 @@ module t1s_core #(
             end
         end
 
-        default: begin halted_n = 1'b1; halt_code_n = tcode; state_n = S_HALT; end   // SYS, RETI, illegal
+        default:
+            if (cls == C_TRAP && ir == 16'hA300) begin     // RETI: back to EPC, IE set
+                pcf_n = epc; ie_n = 1'b1; jump = 1'b1;
+            end else begin                                 // SYS, illegal
+                halted_n = 1'b1; halt_code_n = tcode; state_n = S_HALT;
+            end
         endcase
 
         S_DATA: begin                                      // one byte per cycle at AR
@@ -678,6 +691,15 @@ module t1s_core #(
             if (!pcf[20] && pcf_n[20]) pcx_n = 1'b1;   // 0x0FFFFF + 1: no wrap into I/O
             k_n = 4'd0; state_n = S_EX;
         end
+        // an interrupt instead of that instruction (IE as this step leaves it:
+        // an MTSR that sets it lets one in before the next instruction). It
+        // overrides the start's next state only: start, and the decode it
+        // feeds (dnb, kir), stay off the interrupt's logic (their path is the
+        // 50 MHz clock's longest); the decode made for it goes unused.
+        if (start && ie_n && irq) begin
+            epc_n = pcf; ie_n = 1'b0; pp = 2'd0;
+            pcf_n = 21'h000010; pcx_n = 1'b0; flush = 1'b1; k_n = 4'd0; state_n = S_FETCH;
+        end
         if (jump) begin k_n = 4'd0; flush = 1'b1; state_n = S_FETCH; pcx_n = 1'b0; end
         if (done | jump) begin swp_n = 1'b0; smc_n = 1'b0; end
         if (bad) begin halted_n = 1'b1; halt_code_n = 8'hFD; state_n = S_HALT; end
@@ -706,6 +728,7 @@ module t1s_core #(
             fN <= 1'b0; fZ <= 1'b0; fC <= 1'b0; fV <= 1'b0;
             cy <= 1'b0; zacc <= 1'b0; l1 <= 1'b0; l2 <= 2'd0; sgn <= 1'b0; cst <= 1'b0; cnt <= 5'd0;
             tag <= 3'd0; tagv <= 1'b0; accz <= 1'b0; swp <= 1'b0;
+            epc <= 21'd0; ie <= 1'b0;
             halted <= rbad; halt_code <= rbad ? 8'hFD : 8'd0; retire <= 1'b0;
         end else begin
             state <= state_n; k <= k_n; pcf <= pcf_n; ar <= ar_n;
@@ -715,6 +738,7 @@ module t1s_core #(
             cy <= cy_n; zacc <= zacc_n; l1 <= l1_n; l2 <= l2_n; sgn <= sgn_n; cst <= cst_n; cnt <= cnt_n;
             tag <= tag_n; tagv <= tagv_n; accz <= accz_n; swp <= swp_n; pcx <= pcx_n;
             halted <= halted_n; halt_code <= halt_code_n;
+            epc <= epc_n; ie <= ie_n;
             retire <= done | jump;
             mop <= mop_n; prod <= prod_n;
         end

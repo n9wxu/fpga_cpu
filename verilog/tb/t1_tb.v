@@ -68,8 +68,22 @@ module t1_tb;
         i_pv[7] <= 1'b0;
         if (i_ack) begin i_pv[ilat - 1] <= 1'b1; i_pd[ilat - 1] <= i_word; end
     end
+    // the interrupt controller (docs/io.md F00700), software source only: a
+    // write in flight at this step counts, as it reaches iosys before T1S's
+    // step on the board, so an interrupt is taken where fsim takes it
+    reg  [7:0] irq_pend = 8'd0, irq_en = 8'd0, irq_lo = 8'd0;
+    wire       w_io = mem_wr && addr[23:16] == 8'hF0;
+    wire [7:0] irq_pend_now = (w_io && addr[15:0] == 16'h0705) ? (irq_pend | irq_lo) :
+                              (w_io && addr[15:0] == 16'h0701) ? (irq_pend & ~irq_lo) : irq_pend;
+    wire [7:0] irq_en_now = (w_io && addr[15:0] == 16'h0703) ? irq_lo : irq_en;
+    wire       irq = (irq_pend_now & irq_en_now) != 8'd0;
+    always @(posedge clk) if (ce && !rst && w_io) begin
+        if (addr[15:0] == 16'h0700 || addr[15:0] == 16'h0702 || addr[15:0] == 16'h0704) irq_lo <= dout;
+        irq_pend <= irq_pend_now;
+        irq_en <= irq_en_now;
+    end
     t1s_core #(.EXT_X(EXT_X)) core (.clk(clk), .ce(ce), .rst(rst), .reset_pc(reset_pc), .addr(addr), .mem_rd(mem_rd), .mem_wr(mem_wr),
-                  .i_req(i_req), .i_addr(i_addr), .i_ack(i_ack), .i_valid(i_valid), .i_data(i_data),
+                  .i_req(i_req), .i_addr(i_addr), .i_ack(i_ack), .i_valid(i_valid), .i_data(i_data), .irq(irq),
 `elsif T1F
     t1f_core #(.EXT_X(EXT_X)) core (.clk(clk), .ce(1'b1), .rst(rst), .reset_pc(reset_pc), .addr(addr), .mem_rd(mem_rd), .mem_wr(mem_wr),
 `else
@@ -98,6 +112,10 @@ module t1_tb;
             16'h0007: din = cycles[31:24];
             16'h0008: din = 8'hFE;          // CON_IN: input has ended
             16'h0009: din = 8'hFF;
+`ifdef T1S
+            16'h0700: din = irq_pend;
+            16'h0702: din = irq_en;
+`endif
             default:  din = 8'h00;
             endcase
         case (sr_sel)

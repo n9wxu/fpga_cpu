@@ -25,6 +25,9 @@ struct cpu;
 #define IO_SND       0xF00400u /* 3 voices x 8 bytes */
 #define IO_FS        0xF00500u /* file service F00500-F0051B */
 #define IO_BOARD     0xF00600u /* board I/O F00600-F00609 */
+#define IO_IRQ       0xF00700u /* interrupts: +0 IRQ_PEND (R; W 1s clear), +2 IRQ_EN, +4 IRQ_SET (W) */
+#define IRQ_VBLANK   0x0001u   /* vertical blank started (FRAME moved) */
+#define IRQ_SOFT     0x0080u   /* set by IRQ_SET only (the controller is 8 bits) */
 
 /* video register indices (word offset from IO_VID) */
 enum { V_CTRL, V_BACKDROP, V_TEXT_LO, V_TEXT_HI, V_BMP_LO, V_BMP_HI, V_SPR_LO, V_SPR_HI,
@@ -63,6 +66,9 @@ typedef struct iodev {
     uint16_t kbd_ctrl;
     /* video */
     uint16_t vid[V__COUNT];
+    /* interrupts */
+    uint16_t irq_pend, irq_en;
+    uint32_t irq_frame;        /* the frame the vertical-blank source last saw */
     uint16_t pal[256];
     /* sound */
     volatile uint16_t snd[3][4];
@@ -90,6 +96,8 @@ void dev_key(iodev_t *d, uint16_t code);   /* push a key into the keyboard queue
 void dev_key_up(iodev_t *d, uint16_t code); /* a key was released: queued only if KBD_CTRL bit 0 */
 void dev_con_in(iodev_t *d, uint16_t ch);  /* push a character into CON_IN */
 uint32_t dev_frame(uint64_t cycles);
+/* the interrupt line now (pending and enabled sources), updating the sources */
+int dev_irq(struct cpu *c);
 uint32_t dev_line(uint64_t cycles);
 
 /* Video: render the composed 1280x720 frame as 0x00RRGGBB pixels. */

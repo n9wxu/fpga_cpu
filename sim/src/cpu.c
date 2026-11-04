@@ -107,6 +107,11 @@ void cpu_trap(cpu_t *c, int code)
 {
     if (c->halted)
         return;
+    if (code == -1) {                       /* RETI: back to EPC, IE set */
+        c->npc = c->epc;
+        c->ie = 1;
+        return;
+    }
     c->halted = 1;
     c->exit_code = 128 + (code & 0x7F);
     if (code >= 0)
@@ -333,6 +338,7 @@ void sr_write(cpu_t *c, int n, uint16_t v)
         c->cf = v >> 1 & 1;
         c->v = v & 1;
     }
+    else if (n == 6) c->ie = v & 1;
 }
 
 void cpu_sync(cpu_t *c)
@@ -737,6 +743,17 @@ int cpu_step(cpu_t *c)
     char buf[96];
     if (c->halted)
         return 0;
+    /* an interrupt is taken between instructions: EPC = the instruction it
+     * displaces, IE cleared, to 0x000010; the handler saves the rest */
+    if (c->ie && dev_irq(c)) {
+        c->epc = c->pc;
+        c->ie = 0;
+        c->pc = 0x000010;
+        c->irqs++;
+        c->st.cycles += 2;                  /* as a taken jump */
+        if (c->trace)
+            fprintf(stderr, "irq    epc %06x\n", c->epc);
+    }
     uint32_t pc = c->pc;
     if (pc & 1) {
         fault(c, "odd PC", pc);
@@ -806,6 +823,7 @@ void cpu_reset(cpu_t *c)
     memset(c->r, 0, sizeof c->r);
     c->n = c->z = c->cf = c->v = 0;
     c->pc = c->npc = 0;
+    c->epc = 0; c->ie = 0; c->irqs = 0;
     c->taken = c->halted = c->exit_code = 0;
     c->halt_reason[0] = 0;
     uint64_t *form = c->st.form;

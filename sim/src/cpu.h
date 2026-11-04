@@ -80,6 +80,10 @@ typedef struct cpu {
     int n, z, cf, v;
     uint32_t pc, npc;
     int taken;
+    /* interrupts: EPC (the PC an interrupt replaced) and IE (SR6 bit 0, write only) */
+    uint32_t epc;
+    int ie;
+    uint64_t irqs;         /* interrupts taken */
     int halted, exit_code;
     char halt_reason[96];
     const variant_t *var;
