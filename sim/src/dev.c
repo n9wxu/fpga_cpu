@@ -320,6 +320,8 @@ uint16_t dev_read(cpu_t *c, uint32_t a)
         int r = (int)(a - IO_VID) / 2;
         return r == V_PAL_DATA ? 0 : d->vid[r];
     }
+    if ((a >= IO_VIDX && a < IO_VIDX + 0x20) || (a >= IO_BLT && a < IO_BLT + 0x20))
+        return vidx_read(c, a);
     if (!video_hicol8 && a >= IO_SND && a < IO_SND + 0x40)
         return audlo_read(c, a);                  /* the low tier: only STR_POS reads */
     if (a >= IO_SND && a < IO_SND + 24)
@@ -375,6 +377,10 @@ void dev_write(cpu_t *c, uint32_t a, uint32_t v)
                 d->pal[d->vid[V_PAL_INDEX] & 0xFF] = (uint16_t)v;
             d->vid[V_PAL_INDEX] = (uint16_t)((d->vid[V_PAL_INDEX] + 1) & 0xFF);
         } else {
+            /* the buffer registers take effect at the next frame (VID_STAT bit 0) */
+            if (r == V_BMP_LO || r == V_BMP_HI || r == V_SPR_LO || r == V_SPR_HI ||
+                (r == V_CTRL && ((v ^ d->vid[V_CTRL]) & VC_SPRBUF)))
+                vidx_buffer_written(c);
             d->vid[r] = (uint16_t)v;
         }
         return;
@@ -382,6 +388,8 @@ void dev_write(cpu_t *c, uint32_t a, uint32_t v)
     if (a == IO_IRQ + 0) { dev_irq(c); d->irq_pend &= (uint16_t)~v; return; }
     if (a == IO_IRQ + 2) { dev_irq(c); d->irq_en = (uint16_t)(v & 0xFF); return; }
     if (a == IO_IRQ + 4) { d->irq_pend |= (uint16_t)(v & 0xFF); return; }
+    if (vidx_write(c, a, (uint16_t)v))
+        return;
     if (!video_hicol8 && a >= IO_SND && a < IO_SND + 0x40)
         audlo_write(c, a, (uint16_t)v);
     if (a >= IO_SND && a < IO_SND + 24) {

@@ -129,9 +129,101 @@ the high tier, with every mode. `fsim --no-hicolor` shows the low tier.
   230,400 bytes. This mode works whatever the bitmap's mode, so sprites
   can use the full palette over an 8-color bitmap too.
 
-Buffer 1 starts right after buffer 0. The CPU (later the blitter) draws
-sprites into the hidden buffer, then flips bit 4 of `VID_CTRL` during
-vertical blank.
+Buffer 1 starts right after buffer 0. The CPU or the blitter draws
+sprites into the hidden buffer, then flips bit 4 of `VID_CTRL` (it takes
+effect at the next frame, see "Double buffering").
+
+### Video extensions (F00220, high tier only)
+
+The Tang Nano 20K adds a second playfield, a per-line scroll table,
+hardware sprites and a blitter. On the low tier these registers do nothing
+and read 0. The layers, back to front:
+
+1. Backdrop
+2. Playfield B when it is behind (`VID_CTRL2` bit 1 = 0), else playfield A
+3. The other playfield
+4. Sprite buffer (`VID_CTRL` bit 3)
+5. Hardware sprites (`VID_CTRL2` bit 3), unless bit 4 puts them behind the sprite buffer
+6. Text
+
+| Address | R/W | Name | Function |
+|---|---|---|---|
+| F00220 | RW | `VID_CTRL2` | Bit 0: playfield B on. Bit 1: playfield B in front of playfield A. Bit 2: line scroll on. Bit 3: hardware sprites on. Bit 4: hardware sprites behind the sprite buffer. |
+| F00222 | R | `VID_STAT` | Bit 0: a flip is pending (a buffer register was written and has not yet taken effect). Bit 1: vertical blank. |
+| F00224 / F00226 | RW | `VID_BMPB` | playfield B address (a multiple of 4) |
+| F00228 | RW | `VID_SCROLLXB` | playfield B horizontal scroll, pixels (wraps at 640) |
+| F0022A | RW | `VID_SCROLLYB` | playfield B vertical scroll, lines (wraps at 360) |
+| F0022C / F0022E | RW | `VID_LSCR` | line-scroll table address (a multiple of 4) |
+| F00230 | RW | `SPR_INDEX` | sprite attribute word for `SPR_DATA`: sprite × 4 + word (0–255) |
+| F00232 | RW | `SPR_DATA` | the attribute word at `SPR_INDEX`; a write increments `SPR_INDEX` |
+| F00234 | R | `SPR_OVER` | lines in the last frame that had more than 16 sprites |
+
+**Playfield A** is the bitmap of the "Video" section: `VID_BMP`,
+`VID_SCROLLX`, `VID_SCROLLY`, in any bitmap mode. **Playfield B** is
+always 8 bpp through the palette (the hi-color format: 640-byte rows,
+230,400 bytes) with index 0 transparent, whatever playfield A's mode is.
+
+**Double buffering.** `VID_BMP`, `VID_BMPB`, `VID_SPR`, `VID_LSCR` and
+`VID_CTRL` bit 4 (the shown sprite buffer) are taken at the start of each
+frame, during vertical blank: a write takes effect at the next frame,
+never part way down the screen. `VID_STAT` bit 0 is 1 from the write until
+the frame that uses it starts; when it is 0 the old buffer is no longer
+shown and can be drawn into. The scroll registers and everything else act
+at once (the scroll at the next line).
+
+**Line scroll.** With `VID_CTRL2` bit 2 set, `VID_LSCR` points at 360
+32-bit entries, one per logical line. Entry *y* holds two 16-bit offsets:
+the low half is added to `VID_SCROLLX` and the high half to `VID_SCROLLXB`
+for line *y* (modulo 640). Parallax bands, waves and roads are a table
+write; the table can be changed while the frame is drawn (each line reads
+its entry just before it is shown).
+
+**Hardware sprites.** 64 sprites, each 8, 16 or 32 pixels wide and 1–32
+lines tall, 8 bpp through the palette with index 0 transparent. A lower
+sprite number is in front of a higher one. Up to 16 sprites can be on one
+line: the 16 lowest-numbered there are shown and the others are not on
+that line (`SPR_OVER` counts such lines). Each sprite has four attribute
+words, read and written through `SPR_INDEX` / `SPR_DATA`:
+
+| Word | Bits | Meaning |
+|---|---|---|
+| 0 | 9:0 | X: the sprite's left column is X − 32 (so 0–31 is partly off the left edge) |
+| 1 | 8:0 | Y: its top line is Y − 32 |
+| 1 | 15:11 | height − 1 (1–32 lines) |
+| 2 | 15:0 | pixel data address, bits 15:0 (a multiple of 4) |
+| 3 | 3:0 | pixel data address, bits 19:16 |
+| 3 | 12 | flip horizontally |
+| 3 | 14:13 | width: 0 = 8, 1 = 16, 2 = 32 pixels |
+| 3 | 15 | on |
+
+The pixel data is rows of width bytes, top to bottom. Moving a sprite is
+a write of word 0 or 1; the change shows from the next line drawn.
+
+### Blitter (F00800, high tier only)
+
+The blitter copies or fills a rectangle of bytes in memory while the CPU
+runs: a row of `BLT_W` bytes, `BLT_H` times, stepping each address by its
+stride after each row. It works on any bytes, so it draws into every bitmap
+format (8 bpp: one byte a pixel; 4 bpp: two pixels a byte).
+
+| Address | R/W | Name | Function |
+|---|---|---|---|
+| F00800 / F00802 | RW | `BLT_SRC` | source byte address |
+| F00804 / F00806 | RW | `BLT_DST` | destination byte address |
+| F00808 | RW | `BLT_SSTRIDE` | source row step in bytes (signed) |
+| F0080A | RW | `BLT_DSTRIDE` | destination row step in bytes (signed) |
+| F0080C | RW | `BLT_W` | bytes in a row, 1–4095 |
+| F0080E | RW | `BLT_H` | rows, 1–65535 |
+| F00810 | RW | `BLT_KEY` | bits 7:0: the colour key |
+| F00812 | RW | `BLT_FILL` | bits 7:0: the fill byte |
+| F00814 | W | `BLT_CMD` | starts a blit: bit 0: 0 copy, 1 fill; bit 1: keyed (a copy leaves the destination byte alone where the source byte equals `BLT_KEY`) |
+| F00816 | R | `BLT_STAT` | bit 0: busy |
+
+Rows are done in order, left to right: a copy whose destination overlaps
+its source must have the destination before the source (or use a stride
+that walks away from it). Writing `BLT_CMD` while busy does nothing; wait
+for bit 0 of `BLT_STAT` to clear. The CPU's cache sees the blitter's
+writes, so the CPU can read what was blitted once the blit is done.
 
 ## Sound (F00400)
 

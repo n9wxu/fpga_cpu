@@ -22,6 +22,8 @@ struct cpu;
 #define IO_KBD_CTRL  0xF00104u /* RW: bit 0 = also queue key releases (code | 0x8000) */
 #define KBD_RELEASE  0x8000u
 #define IO_VID       0xF00200u /* video registers F00200-F0021F */
+#define IO_VIDX      0xF00220u /* video extensions F00220-F00235 (high tier) */
+#define IO_BLT       0xF00800u /* blitter F00800-F00817 (high tier) */
 #define IO_SND       0xF00400u /* 3 voices x 8 bytes */
 #define IO_FS        0xF00500u /* file service F00500-F0051B */
 #define IO_BOARD     0xF00600u /* board I/O F00600-F00609 */
@@ -40,6 +42,18 @@ enum { V_CTRL, V_BACKDROP, V_TEXT_LO, V_TEXT_HI, V_BMP_LO, V_BMP_HI, V_SPR_LO, V
 #define VC_CURSOR 0x20
 #define VC_SPR8   0x40 /* sprite buffer is 8 bpp through the palette */
 #define VC_C16    0x80 /* bitmap 16-color, direct: 9-15 = 1-7 at half brightness, 8 transparent */
+
+/* video extension register indices (word offset from IO_VIDX) */
+enum { VX_CTRL2, VX_STAT, VX_BMPB_LO, VX_BMPB_HI, VX_SCROLLXB, VX_SCROLLYB, VX_LSCR_LO, VX_LSCR_HI,
+       VX_SPR_INDEX, VX_SPR_DATA, VX_SPR_OVER, VX__COUNT };
+#define VC2_PFB    0x01 /* playfield B on */
+#define VC2_BFRONT 0x02 /* playfield B in front of A */
+#define VC2_LSCR   0x04 /* line scroll */
+#define VC2_HWSPR  0x08 /* hardware sprites */
+#define VC2_SPRBEH 0x10 /* hardware sprites behind the sprite buffer */
+/* blitter register indices (word offset from IO_BLT) */
+enum { BL_SRC_LO, BL_SRC_HI, BL_DST_LO, BL_DST_HI, BL_SSTRIDE, BL_DSTRIDE, BL_W, BL_H, BL_KEY, BL_FILL,
+       BL_CMD, BL_STAT, BL__COUNT };
 
 /* frame timing: 50 MHz, 750 lines of which 720 are visible, 60 frames/s */
 #define CPU_HZ        50000000u
@@ -70,6 +84,9 @@ typedef struct iodev {
     uint16_t irq_pend, irq_en;
     uint32_t irq_frame;        /* the frame the vertical-blank source last saw */
     uint16_t pal[256];
+    uint16_t vidx[VX__COUNT];     /* video extensions (high tier) */
+    uint16_t spr_attr[256];       /* hardware sprites: 64 x 4 words */
+    uint16_t blt[BL__COUNT];      /* blitter */
     /* sound */
     volatile uint16_t snd[3][4];
     double snd_phase[3];
@@ -99,6 +116,11 @@ uint32_t dev_frame(uint64_t cycles);
 /* the interrupt line now (pending and enabled sources), updating the sources */
 int dev_irq(struct cpu *c);
 uint32_t dev_line(uint64_t cycles);
+/* vidx.c: the high tier's video extensions and blitter */
+uint16_t vidx_read(struct cpu *c, uint32_t a);
+int vidx_write(struct cpu *c, uint32_t a, uint16_t v);
+void vidx_buffer_written(const struct cpu *c);
+int vidx_flip_pending(const struct cpu *c);
 
 /* Video: render the composed 1280x720 frame as 0x00RRGGBB pixels. */
 #define SCREEN_W 1280
