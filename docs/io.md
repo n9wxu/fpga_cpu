@@ -39,8 +39,9 @@ Key codes are ASCII for printable keys. Others:
 | 27 | Esc | 0x90–0x9B | F1–F12 |
 | 0x7F | Delete | 1–26 | Ctrl-A … Ctrl-Z |
 
-On hardware, PS/2 scan codes are translated into this queue by FPGA
-logic; a release is the PS/2 break code. A release carries the code its
+On the Spartan-3 these registers read "no key". Software reads the PS/2
+ports (F00300) instead, and `fpga/lib/ps2.c` decodes them into these
+codes (`kbd_get()`, `kbd_mod()`). A release is the PS/2 break code. A release carries the code its
 press had (Ctrl-A released is 1 | 0x8000), and printable keys are released
 as their unshifted character.
 
@@ -345,11 +346,54 @@ unconditional long branch is the two parcels `0xF700 | offset[22:16]`,
 | Bit | Source |
 |---|---|
 | 0 | vertical blank started (`FRAME` moved) |
+| 1 | PS/2 port A: a byte arrived |
+| 2 | PS/2 port B: a byte arrived |
 | 7 | software only (`IRQ_SET`) |
 
 The registers are 8 bits (bits 15:8 read 0). A source stays pending until
-cleared, so a handler clears what it handled. Sources for the keyboard,
-mouse, serial, SD/WiFi and sound will take bits 1-6 as they are added.
+cleared, so a handler clears what it handled. Sources for serial, SD/WiFi
+and sound will take bits 3-6 as they are added. `fpga/lib/irq.c` has an
+entry stub (flags and registers saved) and a handler for each source.
+
+## PS/2 ports (F00300)
+
+Two PS/2 ports, A and B, for a keyboard and a mouse in either. The
+hardware (`fpga/rtl/ps2.v`) moves whole bytes each way; resetting,
+identifying and decoding the devices is software's (`fpga/lib/ps2.c`).
+On the Spartan-3, A is the board's connector and B is on the A2
+expansion connector (pin 7 clock, pin 8 data).
+
+| Address | R/W | Name | Function |
+|---|---|---|---|
+| F00300 | RW | `PS2A_DATA` | read: the received byte, 0xFFFF if none (reading takes it); write: send a byte to the device |
+| F00302 | R | `PS2A_STAT` | bit 0: a byte waits; bit 1: sending; bit 2: the last send failed (no device clocked it) |
+| F00304 | RW | `PS2B_DATA` | port B, as `PS2A_DATA` |
+| F00306 | R | `PS2B_STAT` | port B, as `PS2A_STAT` |
+
+- **Receiving:** a port holds one byte, and it holds the clock line low
+  until the byte is read. The device waits to send its next byte, so
+  bytes are never overrun. Frames with a bad parity or stop bit are
+  dropped. Each byte raises the port's interrupt source (bit 1 for A,
+  bit 2 for B).
+- **Sending:** a write starts the host-to-device transfer. The port holds
+  the clock low for about 155 µs, then clocks the byte out on the
+  device's clock and takes the device's acknowledge. A send that the
+  device never clocks ends after 17–33 ms with bit 2 set: nothing is
+  plugged in. A write while a byte waits discards that byte. The device's
+  reply (FA, then any data) arrives as received bytes.
+- **Detecting a device:** reset it (`FF`): it answers FA, then AA after
+  its self-test (a mouse adds its ID, 00). Then identify it (`F2`): a
+  keyboard answers FA AB 83 and a mouse FA 00 (03 or 04 for a wheel
+  mouse). A device plugged in later sends AA by itself.
+
+`ps2_init()` in `fpga/lib/ps2.c` does this for both ports. It turns on
+the mouse's reporting (`F4`), and it decodes set-2 scan codes into the
+`KBD_DATA` key codes (`kbd_get()`) and mouse packets into movement
+(`ps2_mouse_get()`), from the interrupts.
+
+The simulator plugs a keyboard into A and a mouse into B (`--ps2 A,B`
+with `kbd`, `mouse` or `none`). The GUI's keyboard and mouse drive them;
+headless, `--ps2keys` types and `--ps2mouse "dx,dy,buttons;..."` moves.
 
 ## Memory layout (C runtime convention)
 

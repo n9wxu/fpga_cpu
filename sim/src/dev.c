@@ -52,6 +52,7 @@ void dev_reset(iodev_t *d)
     d->leds = d->seg7 = d->seg7_ctrl = 0;
     d->kbd_head = d->kbd_tail = 0;
     d->kbd_ctrl = 0;
+    ps2_reset();
 }
 
 void dev_free(iodev_t *d)
@@ -90,6 +91,7 @@ uint32_t dev_line(uint64_t cycles) { return (uint32_t)(total_lines(cycles) % FRA
 int dev_irq(cpu_t *c)
 {
     iodev_t *d = &c->dev;
+    ps2_poll(c);
     uint32_t f = dev_frame(c->st.cycles);
     if (f != d->irq_frame) {
         d->irq_frame = f;
@@ -270,6 +272,8 @@ uint16_t dev_read(cpu_t *c, uint32_t a)
 {
     iodev_t *d = &c->dev;
     a &= ~1u;
+    if (ps2_handles(a))
+        return ps2_read(c, a);
     switch (a) {
     case IO_CYCLO: return (uint16_t)c->st.cycles;
     case IO_CYCHI: return (uint16_t)(c->st.cycles >> 16);
@@ -385,6 +389,7 @@ void dev_write(cpu_t *c, uint32_t a, uint32_t v)
         }
         return;
     }
+    if (ps2_handles(a)) { ps2_write(c, a, (uint16_t)v); return; }
     if (a == IO_IRQ + 0) { dev_irq(c); d->irq_pend &= (uint16_t)~v; return; }
     if (a == IO_IRQ + 2) { dev_irq(c); d->irq_en = (uint16_t)(v & 0xFF); return; }
     if (a == IO_IRQ + 4) { d->irq_pend |= (uint16_t)(v & 0xFF); return; }
