@@ -20,6 +20,14 @@ FSIM = os.path.join(ROOT, "sim", "build", "fsim")
 BUILD = os.path.join(ROOT, "verilog", "build")
 # T1_CORE=t1f runs everything on T1F (verilog/rtl/t1f_core.v) instead of T1
 CORE = os.environ.get("T1_CORE", "t1")
+# T1_AW24=1 builds T1F with 24-bit addresses; T1_XRAM=N gives the testbench N MB of RAM above the
+# first and runs fsim with --xram N (RAM then ends at (N + 1) MB on both)
+AW24 = os.environ.get("T1_AW24", "0") == "1"
+XRAM = int(os.environ.get("T1_XRAM", "0"))
+
+
+def fsim_mem():
+    return ["--xram", str(XRAM)] if XRAM else []
 # T1_CORE=fc: the pipelined core (verilog/rtl/fc_core.v, its own testbench fc_tb.v)
 RTL = os.path.join(ROOT, "verilog", "rtl")
 if CORE == "fc":
@@ -36,13 +44,14 @@ TB = "fc_tb" if CORE == "fc" else "t1_tb"
 
 def build(ext_x=1):
     os.makedirs(BUILD, exist_ok=True)
-    tag = "" if CORE == "t1" else f"_{CORE}"
+    tag = ("" if CORE == "t1" else f"_{CORE}") + ("_a24" if AW24 else "") + (f"_m{XRAM}" if XRAM else "")
     vvp = os.path.join(BUILD, f"t1_tb{tag}_x{ext_x}.vvp")
     if os.path.exists(vvp) and all(os.path.getmtime(vvp) > os.path.getmtime(s) for s in SRCS):
         return vvp
     defs = {"t1f": ["-DT1F"], "t1s": ["-DT1S", "-I", RTL]}.get(CORE, [])
     srcs = [s for s in SRCS if s.endswith(".v")]
-    r = subprocess.run(["iverilog", "-g2001", *defs, f"-P{TB}.EXT_X={ext_x}", "-o", vvp, *srcs],
+    r = subprocess.run(["iverilog", "-g2001", *defs, f"-P{TB}.EXT_X={ext_x}", f"-P{TB}.AW24={int(AW24)}",
+                        f"-P{TB}.RAMTOP={(XRAM + 1) << 20}", "-o", vvp, *srcs],
                        capture_output=True, text=True)
     if r.returncode:
         sys.exit(r.stderr)
@@ -78,7 +87,7 @@ def convert(src, dst):
 
 def fsim_run(image, max_cycles, ext_x=1, entry=None):
     """-> (console output, fsim exit code)"""
-    cmd = [FSIM, "-q", "-v", "A", "--max-cycles", str(max_cycles)] + (["--ext"] if ext_x else [])
+    cmd = [FSIM, "-q", "-v", "A", "--max-cycles", str(max_cycles)] + (["--ext"] if ext_x else []) + fsim_mem()
     if entry is not None:
         cmd += ["--entry", hex(entry)]
     r = subprocess.run(cmd + [image], capture_output=True, text=True, stdin=subprocess.DEVNULL)
@@ -111,7 +120,7 @@ def run(image, lockstep=False, max_cycles=4_000_000_000, ext_x=1, entry=None):
             fifo = os.path.join(td, "trace")
             os.mkfifo(fifo)
             fs = subprocess.Popen([FSIM, "-q", "-v", "A", "--trace", "--max-cycles", str(max_cycles)]
-                                  + (["--ext"] if ext_x else []) + (["--entry", hex(entry)] if entry is not None else []) + [image],
+                                  + (["--ext"] if ext_x else []) + fsim_mem() + (["--entry", hex(entry)] if entry is not None else []) + [image],
                                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
                                   text=True, bufsize=1 << 20)
             def feed():

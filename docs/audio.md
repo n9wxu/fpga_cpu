@@ -245,8 +245,9 @@ change (the engine plays from SDRAM addresses).
   is its own controller).
 - HDMI: `s_valid`, `s_l`, `s_r`, `s_ready` to `hdmi_audio_cdc.v` (the FIFO's
   write side, on fclk); `s_ready` = the FIFO has room.
-- `irq` (any interrupt flag) is not used by T1F yet; the flags are polled
-  through `IRQ_LO/HI` or `STATUS`.
+- `irq` (any interrupt flag) is interrupt source 3 of iosys's controller
+  (docs/io.md, F00700): a handler clears the voice's flag (`IRQ_LO/HI`),
+  then the source's pending bit. The flags can still be polled.
 
 ## Size and speed
 

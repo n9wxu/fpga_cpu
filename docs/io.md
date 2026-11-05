@@ -348,11 +348,12 @@ unconditional long branch is the two parcels `0xF700 | offset[22:16]`,
 | 0 | vertical blank started (`FRAME` moved) |
 | 1 | PS/2 port A: a byte arrived |
 | 2 | PS/2 port B: a byte arrived |
+| 3 | Tang Nano 20K: an audio engine voice raised its interrupt flag (docs/audio.md `IRQ_LO/HI`); pending while any flag is set |
 | 7 | software only (`IRQ_SET`) |
 
 The registers are 8 bits (bits 15:8 read 0). A source stays pending until
-cleared, so a handler clears what it handled. Sources for serial, SD/WiFi
-and sound will take bits 3-6 as they are added. `fpga/lib/irq.c` has an
+cleared, so a handler clears what it handled. Sources for serial and SD/WiFi
+will take bits 4-6 as they are added. `fpga/lib/irq.c` has an
 entry stub (flags and registers saved) and a handler for each source.
 
 ## PS/2 ports (F00300)
@@ -406,3 +407,4 @@ headless, `--ps2keys` types and `--ps2mouse "dx,dy,buttons;..."` moves.
 | 0C3C00–0FBFFF | bitmap (230,400 bytes; 8-color mode uses the first 115,200) |
 | 0FC000–0FCF9F | text buffer (4,000 bytes) |
 | 0FD000–0FFFFF | free |
+| 100000–7FFFFF | Tang Nano 20K with T1F: the rest of the 8 MB SDRAM, free (docs/t1f.md, `AW24`); fsim `--xram 7` |

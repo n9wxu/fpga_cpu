@@ -14,7 +14,8 @@
 // fclk cycles, so it is taken at the second edge of the period (lat):
 //   - block RAM (000000-00FFFF) and I/O: read or written at that edge, and
 //     T1's edge two cycles later: 4 cycles, 16.875 MHz;
-//   - the SDRAM (the rest, repeating every 8 MB), through rammux port 0: a
+//   - the SDRAM (the rest, repeating every 8 MB; T1F has 24-bit addresses,
+//     AW24, and reaches all of it, T1 the first 1 MB), through rammux port 0: a
 //     write is done when its command goes out, a read when its word is back
 //     (rvalid), and T1's edge follows: 4 cycles for a write to an open row,
 //     7 for a read, longer behind a video burst.
@@ -106,6 +107,7 @@ module system #(
     // ---- T1 -------------------------------------------------------------------
     wire [23:0] addr;
     wire        rd, wr, halted, retire;
+    wire        t1_irq, aud_irq;                // the interrupt line (iosys); the audio engine's flags
     wire [7:0]  dout, halt_code;
     wire [1:0]  sr_sel;
     reg  [7:0]  din;
@@ -117,8 +119,10 @@ module system #(
     always @(posedge cpu_clk) t1_rst <= !run;
 
 `ifdef T1F
-    t1f_core #(.EXT_X(0)) cpu (
-        .clk(cpu_clk), .ce(1'b1), .rst(t1_rst), .reset_pc(entry),
+    // 24-bit addresses: T1F reaches all 8 MB of the SDRAM (T1 folds its addresses to 1 MB);
+    // interrupts from iosys's controller (F00700): the vertical blank, the audio engine
+    t1f_core #(.EXT_X(0), .AW24(1), .IRQ(1)) cpu (
+        .clk(cpu_clk), .ce(1'b1), .rst(t1_rst), .reset_pc(entry), .irq(t1_irq),
 `else
     t1_core #(.EXT_X(0)) cpu (
         .clk(cpu_clk), .rst(t1_rst), .reset_pc(entry),
@@ -436,7 +440,7 @@ module system #(
             default: din = c_q;
         endcase
 
-    iosys ios (
+    iosys #(.IRQ(1)) ios (
         .clk(fclk), .io_wr(io_lat && run && io && wr), .io_rd(io_lat && run && io && rd),
         .io_addr(addr[15:0]), .io_wdata(dout), .cpu_lat(io_lat), .cur_rd(run && io && rd),
         .cur_addr(addr[15:0]), .io_rdata(io_q), .cycles(cycles), .insts(insts),
@@ -445,7 +449,8 @@ module system #(
         .vid_scrollx(vid_scrollx), .vid_scrolly(vid_scrolly), .vid_cursor(vid_cursor),
         .pal_we(pal_we), .pal_windex(pal_windex), .pal_wdata(pal_wdata),
         .switches(8'd0), .buttons({2'b00, s_s}), .leds(leds), .seg7(), .seg7_ctrl(),
-        .con_in(con_in), .con_take(con_take), .con_we(con_we), .exit_we(exit_we), .wvalue(wvalue)
+        .con_in(con_in), .con_take(con_take), .con_we(con_we), .exit_we(exit_we), .wvalue(wvalue),
+        .irq_src({3'd0, aud_irq, 3'd0}), .irq(t1_irq)   // source 3: an audio engine voice's interrupt flag
     );
 
     // ---- audio ---------------------------------------------------------------------------
@@ -469,7 +474,7 @@ module system #(
     audio_engine #(.AW(21)) aud (
         .clk(fclk),
         .io_wr(io_lat && run && io && wr), .io_addr(addr[15:0]), .io_wdata(dout),
-        .rd_addr(addr[15:0]), .rd_data(aud_rd), .irq(),
+        .rd_addr(addr[15:0]), .rd_data(aud_rd), .irq(aud_irq),
         .p_req(a_req), .p_we(), .p_addr(a_addr), .p_len(a_len),
         .p_ack(p_ack[2]), .p_rvalid(p_rvalid[2]), .p_rdata(p_rdata),
         .s_valid(s_valid), .s_l(s_l), .s_r(s_r), .s_ready(s_ready)

@@ -11,6 +11,9 @@ illegal instruction, address fault).  Header comments in a test select:
   ; ext: yes                 uses extension X; also runs without it
                               (EXT_X=0 core, fsim without --ext), where it
                               must trap as illegal in both
+  ; xram: N                  needs N MB of RAM above the first: runs only on
+                              T1F with 24-bit addresses (T1_CORE=t1f T1_AW24=1),
+                              with that RAM on the testbench and fsim --xram N
 
   t1test.py [-k SUBSTRING] [--keep] [--ext-x 0]
 """
@@ -70,6 +73,10 @@ def main():
             cores = re.search(r"^;\s*cores:\s*(.*)$", open(src).read(), re.M).group(1).split()
             if os.environ.get("T1_CORE", "t1") not in cores:
                 continue
+        xm = re.search(r"^;\s*xram:\s*(\d+)", open(src).read(), re.M)
+        if xm and not (os.environ.get("T1_CORE", "t1") == "t1f" and t1run.AW24):
+            continue
+        t1run.XRAM = int(xm.group(1)) if xm else int(os.environ.get("T1_XRAM", "0"))
         img = assemble(src)
         ents, ext = header(src)
         runs = [(e, 1) for e in ents] + ([(e, 0) for e in ents] if ext else [])

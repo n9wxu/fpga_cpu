@@ -16,7 +16,7 @@
 #define IRQ_EN   IO16(0xF00702)
 #define IRQ_SET  IO16(0xF00704)
 
-enum { IRQ_VBLANK = 0, IRQ_PS2A = 1, IRQ_PS2B = 2, IRQ_SOFT = 7 };
+enum { IRQ_VBLANK = 0, IRQ_PS2A = 1, IRQ_PS2B = 2, IRQ_AUDIO = 3, IRQ_SOFT = 7 };   /* AUDIO: the Tang's engine */
 
 void irq_on(int src, void (*handler)(void));
 void irq_off(int src);

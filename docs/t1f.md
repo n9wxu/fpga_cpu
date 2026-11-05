@@ -27,6 +27,28 @@ stays the transistor-count model. The changes:
   were a clock earlier, and `sr_in` has a whole cycle.
 - **Clock enable** (`ce`): low holds every register, for a design that
   stalls the core instead of gating its clock.
+- **24-bit addresses** (parameter `AW24`, on in the Tang system). T1 folds
+  its PC and data address into 21 bits (docs/t1.md, "Addresses"): RAM to
+  0x0FFFFF, I/O and ROM from 0xF00000, and an address between them halts
+  with FD. With `AW24 = 1` PC and AR are 24 bits and the pins carry all of
+  them: no fold, no range check (the system decides what is at every
+  address), and fetch and data steps wrap from 0xFFFFFF to 0, as fsim's
+  addresses do. Only an odd address for a word or pair, or an odd
+  `reset_pc`, halts with FD. On the Tang Nano 20K this gives T1F the whole
+  8 MB SDRAM (0x000000-0x7FFFFF; it repeats every 8 MB up to the I/O at
+  0xF00000). The cycles are the same: the top address byte was always a
+  pass of its own. `AW24 = 0`, the default, is the folded core, for the
+  Spartan-3, whose 1 MB SRAM and full XC3S200 need no more.
+- **Interrupts** (parameter `IRQ`, on in the Tang system), as on T1S
+  (docs/t1.md, "Interrupts"): an `irq` input, EPC and IE. At an
+  instruction's end (its `done` or `jump`), with IE set and the line high,
+  the next instruction does not start: EPC takes its address (past a jump
+  the target, else the PC less the bytes already prefetched), IE clears and
+  fetching restarts at 0x000010. `RETI` jumps to EPC and sets IE; `MTSR SR6`
+  sets IE. With `IRQ = 0` the line is ignored and `RETI` halts (FF), as
+  before. On the Tang the line comes from iosys's controller (F00700): the
+  vertical blank (source 0) and the audio engine's voice flags (source 3);
+  `fpga/lib/irq.c` installs handlers.
 
 Costs: decoding a second instruction (the NB decoder) and the decode
 registers, about 200 LUTs and 240 flip-flops more than T1, and one
@@ -145,4 +167,10 @@ vary the fetch timing in the test suites.
 
 The T1 suites run on T1F with `T1_CORE=t1f`: `verilog/tb/t1test.py` (61
 runs), `t1fuzz.py` (with and without extension X), `t1bench.py`, all in
-lockstep with fsim.
+lockstep with fsim. `T1_AW24=1` builds the 24-bit core; the directed tests
+then also run `tests/xram.s` (`; xram: 7`: the testbench and fsim `--xram 7`
+have 8 MB of RAM), which uses data across 0x100000 and at the top of the
+8 MB and runs code from 0x600000 and over 0x100000. `tests/irq.s` runs on
+T1F too (the testbench's controller has the software source). `T1_XRAM=N` gives every
+run N MB of RAM above the first. On the board, `tang/progs/xramtest.c` tests
+every word of 0x100000-0x7FFFFF.
