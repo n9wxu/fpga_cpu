@@ -141,7 +141,7 @@ int main(void)
         case 's': case 'S': {
             uint8_t c;
             pl.sep = pl.sep == 64 ? 128 : pl.sep == 128 ? 0 : 64;
-            for (c = 0; c < NCH; c++)
+            for (c = 0; c < mod.nch; c++)
                 ch[c].pan = (uint8_t)((c == 0 || c == 3) ? 128 - pl.sep : (pl.sep >= 128 ? 255 : 128 + pl.sep));
             break;
         }

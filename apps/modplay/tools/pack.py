@@ -11,10 +11,12 @@ BASE, LIMIT = 0x040000, 0x0C3C00
 
 
 def mod_size(d):
-    if d[1080:1084] not in (b"M.K.", b"M!K!", b"FLT4", b"4CHN"):
-        raise SystemExit("not a 4-channel MOD (signature %r)" % d[1080:1084])
+    sig = d[1080:1084]
+    nch = 4 if sig in (b"M.K.", b"M!K!", b"FLT4", b"4CHN") else 6 if sig == b"6CHN" else 8 if sig == b"8CHN" else 0
+    if not nch:
+        raise SystemExit("not a 4, 6 or 8-channel MOD (signature %r)" % sig)
     npat = max(d[952:1080]) + 1
-    return 1084 + npat * 1024 + sum(int.from_bytes(d[20 + 30 * i + 22:20 + 30 * i + 24], "big") * 2 for i in range(31))
+    return 1084 + npat * 256 * nch + sum(int.from_bytes(d[20 + 30 * i + 22:20 + 30 * i + 24], "big") * 2 for i in range(31))
 
 
 def place(files):
