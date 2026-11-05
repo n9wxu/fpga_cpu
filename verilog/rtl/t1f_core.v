@@ -41,6 +41,15 @@
 // back to EPC and sets IE, and MTSR SR6 sets IE from bit 0. With IRQ = 0
 // the line is ignored, RETI halts (FF) and MTSR SR6 does nothing.
 //
+// SYNC = 1: a step takes two enabled clocks, so every path is one clock
+// long and the core runs on the system clock with ce, not a gated clock.
+// The first clock (sph = 0) latches the register file's two read bytes; the
+// second (sph = 1, `step`) does the step from them: the ALU pass and every
+// state register, the register-file write, mem_rd/mem_wr (addr is valid
+// from the first clock; read data is taken at the second's edge, a write
+// happens there). ce low holds either clock (a stall). SYNC = 0: one clock
+// a step, the register file read and the step in the same clock.
+//
 // Faults: halted with halt_code FD for an odd address in a word or pair
 // access, and (AW24 = 0) an access or fetch at 0x100000 (stepping over the
 // end of RAM, or an address in 0x100000-0xEFFFFF), and a reset_pc that is
@@ -55,7 +64,8 @@
 module t1f_core #(
     parameter EXT_X = 1,              // extension X: MULPU, FSHR, FSHL, CLZ, DSTEP (else they trap as illegal)
     parameter AW24 = 0,               // 1: 24-bit addresses, unfolded (else 21 bits: RAM to 0x0FFFFF, I/O and ROM from 0xF00000)
-    parameter IRQ = 0                 // 1: the interrupt line, EPC and IE, RETI
+    parameter IRQ = 0,                // 1: the interrupt line, EPC and IE, RETI
+    parameter SYNC = 0                // 1: fully synchronous, two clocks a step (below)
 ) (
     input  wire        clk,
     input  wire        ce,           // clock enable: low holds everything (a stall)
@@ -71,12 +81,13 @@ module t1f_core #(
     input  wire [15:0] sr_in,        // SR1-SR3 (cycle and instruction counters) live outside the core
     output reg         halted,
     output reg  [7:0]  halt_code,    // SYS imm; FF RETI, FE illegal, FD address out of range
-    output reg         retire        // an instruction completed at the last clock edge
+    output reg         retire,       // an instruction completed at the last clock edge
+    output wire        step_clk      // SYNC: this clock is a step's (the second; its ce makes the step)
 );
 
     // ---------------------------------------------------------------- state
 
-    localparam S_FETCH = 3'd0, S_P2 = 3'd1, S_EX = 3'd2, S_DATA = 3'd3, S_HALT = 3'd4, S_DEC = 3'd5;
+    localparam S_FETCH = 3'd0, S_P2 = 3'd1, S_EX = 3'd2, S_DATA = 3'd3, S_HALT = 3'd4, S_DEC = 3'd5, S_IRQ = 3'd6;
 
     reg [2:0]  state;
     reg [3:0]  k;              // step within the state
@@ -266,7 +277,13 @@ module t1f_core #(
     t1f_dec #(.EXT_X(EXT_X)) dec_b (.ir(np), .p2(16'd0), .cls(cls_b), .fn(fn_b), .ra_r(ra_r_b), .rb_r(rb_r_b), .rd_r(rd_r_b), .xr(xr_b), .sh_n(sh_n_b), .cc(cc_b), .fsh(fsh_b), .mp(mp_b), .b_imm(b_imm_b), .mld(mld_b), .sfill(sfill_b), .zx(zx_b), .sh_reg(sh_reg_b), .pstop(pstop_b), .mw(mw_b), .msig(msig_b), .narrow(narrow_b), .ifill(ifill_b), .corr(corr_b), .imm(imm_b), .pn(pn_b), .sr(sr_b), .msz(msz_b), .mmode(mmode_b), .sc(sc_b), .shk(shk_b), .pa_src(pa_src_b), .pb_src(pb_src_b), .tcode(tcode_b));
     reg        dnb;                // this edge starts the instruction in NB
 
-    always @(posedge clk) if (ce) begin
+    // SYNC: the clock of the step (sph = 1); before it, the register file is read (sph = 0)
+    reg        sph = 1'b0;
+    wire       step = ce & (SYNC ? sph : 1'b1);
+    assign     step_clk = SYNC ? sph : 1'b1;
+    always @(posedge clk) if (ce) sph <= SYNC ? ~sph : 1'b0;   // (reset, too, happens at a step)
+
+    always @(posedge clk) if (step) begin
         cls_qi <= cls_i; cls_qb <= cls_b;
         fn_qi <= fn_i; fn_qb <= fn_b;
         ra_r_qi <= ra_r_i; ra_r_qb <= ra_r_b;
@@ -326,10 +343,15 @@ module t1f_core #(
     localparam B_RF = 3'd0, B_DIN = 3'd1, B_IMM = 3'd2, B_ZERO = 3'd3, B_SCALE = 3'd4, B_SR = 3'd5, B_FILL = 3'd6, B_M4 = 3'd7;
     localparam OP_ADD = 3'd0, OP_AND = 3'd1, OP_OR = 3'd2, OP_XOR = 3'd3, OP_PA = 3'd4, OP_PB = 3'd5, OP_SH = 3'd6;
 
-    wire [7:0] rfa, rfb;
+    wire [7:0] rfa_w, rfb_w;   // the register file's read ports
+    reg  [7:0] rfa_q = 8'd0, rfb_q = 8'd0;
     reg  [7:0] wd;
 
-    t1_rf rf (.clk(clk), .ra(ra), .rb(rb), .qa(rfa), .qb(rfb), .we(we & ~rst & ce), .wa(wa), .wd(wd));
+    t1_rf rf (.clk(clk), .ra(ra), .rb(rb), .qa(rfa_w), .qb(rfb_w), .we(we & ~rst & step), .wa(wa), .wd(wd));
+    // SYNC: the bytes read in the first clock; the step works from them
+    always @(posedge clk) if (ce && !sph) begin rfa_q <= rfa_w; rfb_q <= rfb_w; end
+    wire [7:0] rfa = SYNC ? rfa_q : rfa_w;
+    wire [7:0] rfb = SYNC ? rfb_q : rfb_w;
 
     wire [7:0] pc_hi;          // PC bits 23:16
     generate if (AW24) begin : g_pchi24
@@ -344,44 +366,54 @@ module t1f_core #(
     // SR1-SR3 are registered here, so MFSR reads the counters as they were
     // at the last clock edge (a clock old) and sr_in has a whole cycle
     reg  [15:0] sr_q;
-    always @(posedge clk) if (ce) sr_q <= sr_in;
+    always @(posedge clk) if (step) sr_q <= sr_in;
     wire [15:0] srv = (sr == 3'd0) ? {12'd0, fN, fZ, fC, fV} : (sr <= 3'd3) ? sr_q : 16'd0;
     assign sr_sel = sr[1:0] - 2'd1;
 
     // scaled index byte: rX (or its fill) times 1, 2 or 4
-    wire [7:0] sbase = sbase_fill ? (zx ? 8'h00 : {8{sgn}}) : rfb;
+    wire [7:0] sbase = sbase_fill ? (zx ? 8'h00 : {8{sgn}}) : rfb_w;
     wire [1:0] l2in = (k == 4'd0) ? 2'b00 : l2;
     wire [7:0] scaled = (sc == 2'd0) ? sbase : (sc == 2'd1) ? {sbase[6:0], l2in[1]} : {sbase[5:0], l2in};
 
-    reg [7:0] a_in, b_in;
+    // the ALU's operands, from the register file's read ports (SYNC: chosen in the first clock and
+    // registered, so the step's clock starts at the adder)
+    reg [7:0] a_in_c, b_in_c;
     always @* begin
         case (asel)
-        A_PC:    a_in = pc_byte;
-        A_ZERO:  a_in = 8'h00;
-        default: a_in = rfa;
+        A_PC:    a_in_c = pc_byte;
+        A_ZERO:  a_in_c = 8'h00;
+        default: a_in_c = rfa_w;
         endcase
         case (bsel)
-        B_IMM:   b_in = imm_byte;
-        B_ZERO:  b_in = 8'h00;
-        B_SCALE: b_in = scaled;
-        B_SR:    b_in = bk[0] ? srv[15:8] : srv[7:0];
-        B_FILL:  b_in = {8{sgn & sfill}};
-        B_M4:    b_in = (bk == 2'd0) ? 8'hFC : 8'hFF;
-        default: b_in = rfb;
+        B_IMM:   b_in_c = imm_byte;
+        B_ZERO:  b_in_c = 8'h00;
+        B_SCALE: b_in_c = scaled;
+        B_SR:    b_in_c = bk[0] ? srv[15:8] : srv[7:0];
+        B_FILL:  b_in_c = {8{sgn & sfill}};
+        B_M4:    b_in_c = (bk == 2'd0) ? 8'hFC : 8'hFF;
+        default: b_in_c = rfb_w;
         endcase
     end
-
-    wire [7:0] a_eff = a_shl ? {a_in[6:0], shl_in} : a_in;
-    wire [7:0] b_eff = b_inv ? ~b_in : b_in;
+    wire [7:0] a_eff_c = a_shl ? {a_in_c[6:0], shl_in} : a_in_c;
+    wire [7:0] b_eff_c = b_inv ? ~b_in_c : b_in_c;
+    wire [7:0] sh_fb = {8{f_bit}};
+    wire [7:0] sh_x_c = (sxs == 2'd1) ? 8'h00 : (sxs == 2'd2) ? sh_fb : rfa_w;
+    wire [7:0] sh_y_c = (sys == 2'd1) ? 8'h00 : (sys == 2'd2) ? sh_fb : rfb_w;
+    reg  [7:0] a_in_q = 8'd0, a_eff_q = 8'd0, b_eff_q = 8'd0, sh_x_q = 8'd0, sh_y_q = 8'd0;
+    always @(posedge clk) if (ce && !sph) begin
+        a_in_q <= a_in_c; a_eff_q <= a_eff_c; b_eff_q <= b_eff_c; sh_x_q <= sh_x_c; sh_y_q <= sh_y_c;
+    end
+    wire [7:0] a_in  = SYNC ? a_in_q  : a_in_c;
+    wire [7:0] a_eff = SYNC ? a_eff_q : a_eff_c;
+    wire [7:0] b_eff = SYNC ? b_eff_q : b_eff_c;
     wire [8:0] sum = {1'b0, a_eff} + {1'b0, b_eff} + {8'd0, cin};
     wire       cout = sum[8];
     wire       ovf = (a_eff[7] == b_eff[7]) && (sum[7] != a_eff[7]);
 
     // funnel: w = {X, Y, 0} >> shamt; the byte is w[8:1], w[9] is the bit
     // above it (left shifts' carry) and w[0] the bit below (right shifts')
-    wire [7:0]  sh_fb = {8{f_bit}};
-    wire [7:0]  sh_x = (sxs == 2'd1) ? 8'h00 : (sxs == 2'd2) ? sh_fb : rfa;
-    wire [7:0]  sh_y = (sys == 2'd1) ? 8'h00 : (sys == 2'd2) ? sh_fb : rfb;
+    wire [7:0]  sh_x = SYNC ? sh_x_q : sh_x_c;
+    wire [7:0]  sh_y = SYNC ? sh_y_q : sh_y_c;
     wire [17:0] sh_w = {1'b0, sh_x, sh_y, 1'b0} >> shamt;
 
     reg [7:0] res;
@@ -443,8 +475,8 @@ module t1f_core #(
         assign addr = {{4{baddr[20]}}, baddr[19:0]};
     end endgenerate
     assign dout = rfb;
-    assign mem_rd = mem_rd_c & ~rst;     // nothing leaves the core while in reset
-    assign mem_wr = mem_wr_c & ~rst;
+    assign mem_rd = mem_rd_c & ~rst & (SYNC ? sph : 1'b1);   // nothing leaves the core while in reset;
+    assign mem_wr = mem_wr_c & ~rst & (SYNC ? sph : 1'b1);   // SYNC: the step's clock (addr from the first)
 
     // ---------------------------------------------------------------- sequencer
 
@@ -458,6 +490,7 @@ module t1f_core #(
     reg        fN_n, fZ_n, fC_n, fV_n, cy_n, zacc_n, l1_n, sgn_n, cst_n, accz_n, swp_n, pcx_n, pinc, ie_n;
     reg [AWI-1:0] epc_n;
     reg [1:0]  nbn_pre;
+    reg        irq_take;           // this step's end takes an interrupt (S_IRQ next)
     reg [4:0]  cnt_n;
     reg [2:0]  tag_n;
     reg        tagv_n, tag_set, halted_n;
@@ -492,7 +525,7 @@ module t1f_core #(
         asel = A_RF; bsel = B_RF; aop = OP_ADD; a_shl = 1'b0; shl_in = 1'b0; b_inv = 1'b0; cin = 1'b0;
         bk = k[1:0]; mbyte = 2'd0; sxs = 2'd0; sys = 2'd0; shamt = 4'd0; f_bit = 1'b0; sbase_fill = 1'b0;
         mem_rd_c = 1'b0; mem_wr_c = 1'b0; bus_ar = 1'b0;
-        state_n = state; k_n = k; pcf_n = pcf; ar_n = ar; epc_n = epc; ie_n = ie; nbn_pre = nbn; ir_n = ir; p2_n = p2; nb_n = nb; nbn_n = nbn;
+        state_n = state; k_n = k; pcf_n = pcf; ar_n = ar; epc_n = epc; ie_n = ie; nbn_pre = nbn; irq_take = 1'b0; ir_n = ir; p2_n = p2; nb_n = nb; nbn_n = nbn;
         fN_n = fN; fZ_n = fZ; fC_n = fC; fV_n = fV; cy_n = cy; zacc_n = zacc; l1_n = l1; l2_n = l2;
         sgn_n = sgn; cst_n = cst; cnt_n = cnt; tag_n = tag; tagv_n = tagv; tag_set = 1'b0;
         accz_n = accz; swp_n = swp; halted_n = halted; halt_code_n = halt_code;
@@ -812,6 +845,11 @@ module t1f_core #(
             end
         end
 
+        S_IRQ: begin                                       // EPC = the next instruction's address: the PC
+            epc_n = pcf - nbn;                             // less what was prefetched; on at 0x000010
+            pcf_n = 'h10; nbn_n = 2'd0; k_n = 4'd0; pcx_n = 1'b0; state_n = S_FETCH;
+        end
+
         default: ;                                         // S_HALT
         endcase
 
@@ -831,18 +869,19 @@ module t1f_core #(
             end else
                 state_n = S_FETCH;
         end
-        // an interrupt, between this instruction and the next: EPC = the next one's address (past
-        // a jump, its target; else the PC less what was prefetched), IE cleared, on at 0x000010
-        if (IRQ && (done || jump) && !bad && ie_n && irq) begin
-            epc_n = jump ? pcf_n : pcf_n - nbn_pre;
-            ie_n = 1'b0; pcf_n = 'h10; jump = 1'b1;
-        end
         if (jump) begin k_n = 4'd0; nbn_n = 2'd0; state_n = S_FETCH; pcx_n = 1'b0; end
         else if (!AW24 && pinc && !pcf[20] && binc[20]) pcx_n = 1'b1;   // 0x0FFFFF + 1: no wrap into I/O
+        // an interrupt, between this instruction and the next: the next one does not start (its
+        // prefetched bytes stay unused) and S_IRQ, a step of its own, enters the handler
+        irq_take = IRQ && (done || jump) && !bad && ie_n && irq;
+        if (irq_take) begin
+            ie_n = 1'b0; state_n = S_IRQ; k_n = 4'd0;
+            if (!jump) nbn_n = nbn_pre;
+        end
         if (done | jump) swp_n = 1'b0;
         if (bad) begin halted_n = 1'b1; halt_code_n = 8'hFD; state_n = S_HALT; end
         // IR loads from np at this edge: the next clock's decode is np's
-        dnb = !bad && !jump && (dnb || (state == S_FETCH && nbn != 2'd0));
+        dnb = !bad && !jump && !irq_take && (dnb || (state == S_FETCH && nbn != 2'd0));
 
         // a write to bytes 1-2 of the tagged pair makes AR stale
         if (!tag_set && we && !wa[5] && wa[4:2] == tag && (wa[1:0] == 2'd1 || wa[1:0] == 2'd2))
@@ -859,7 +898,7 @@ module t1f_core #(
         assign pc_rst = {reset_pc[23:20] == 4'hF, reset_pc[19:0]};
     end endgenerate
 
-    always @(posedge clk) if (!ce) retire <= 1'b0;    // a stall retires nothing
+    always @(posedge clk) if (!step) retire <= 1'b0;  // a stall (or SYNC's first clock) retires nothing
     else begin
         if (rst) begin
             state <= rbad ? S_HALT : S_FETCH; k <= 4'd0; pcx <= 1'b0;

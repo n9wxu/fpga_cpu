@@ -23,6 +23,7 @@ CORE = os.environ.get("T1_CORE", "t1")
 # T1_AW24=1 builds T1F with 24-bit addresses; T1_XRAM=N gives the testbench N MB of RAM above the
 # first and runs fsim with --xram N (RAM then ends at (N + 1) MB on both)
 AW24 = os.environ.get("T1_AW24", "0") == "1"
+SYNC = os.environ.get("T1_SYNC", "0") == "1"      # T1F: SYNC = 1 (two clocks a step)
 XRAM = int(os.environ.get("T1_XRAM", "0"))
 
 
@@ -44,13 +45,13 @@ TB = "fc_tb" if CORE == "fc" else "t1_tb"
 
 def build(ext_x=1):
     os.makedirs(BUILD, exist_ok=True)
-    tag = ("" if CORE == "t1" else f"_{CORE}") + ("_a24" if AW24 else "") + (f"_m{XRAM}" if XRAM else "")
+    tag = ("" if CORE == "t1" else f"_{CORE}") + ("_a24" if AW24 else "") + ("_sync" if SYNC else "") + (f"_m{XRAM}" if XRAM else "")
     vvp = os.path.join(BUILD, f"t1_tb{tag}_x{ext_x}.vvp")
     if os.path.exists(vvp) and all(os.path.getmtime(vvp) > os.path.getmtime(s) for s in SRCS):
         return vvp
     defs = {"t1f": ["-DT1F"], "t1s": ["-DT1S", "-I", RTL]}.get(CORE, [])
     srcs = [s for s in SRCS if s.endswith(".v")]
-    r = subprocess.run(["iverilog", "-g2001", *defs, f"-P{TB}.EXT_X={ext_x}", f"-P{TB}.AW24={int(AW24)}",
+    r = subprocess.run(["iverilog", "-g2001", *defs, f"-P{TB}.EXT_X={ext_x}", f"-P{TB}.AW24={int(AW24)}", f"-P{TB}.SYNC={int(SYNC)}",
                         f"-P{TB}.RAMTOP={(XRAM + 1) << 20}", "-o", vvp, *srcs],
                        capture_output=True, text=True)
     if r.returncode:
