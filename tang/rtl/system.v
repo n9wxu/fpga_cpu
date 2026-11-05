@@ -14,7 +14,8 @@
 // fclk cycles, so it is taken at the second edge of the period (lat):
 //   - block RAM (000000-00FFFF) and I/O: read or written at that edge, and
 //     T1's edge two cycles later: 4 cycles, 16.875 MHz;
-//   - the SDRAM (the rest, repeating every 8 MB), through rammux port 0: a
+//   - the SDRAM (the rest, repeating every 8 MB; T1F has 24-bit addresses,
+//     AW24, and reaches all of it, T1 the first 1 MB), through rammux port 0: a
 //     write is done when its command goes out, a read when its word is back
 //     (rvalid), and T1's edge follows: 4 cycles for a write to an open row,
 //     7 for a read, longer behind a video burst.
@@ -117,7 +118,8 @@ module system #(
     always @(posedge cpu_clk) t1_rst <= !run;
 
 `ifdef T1F
-    t1f_core #(.EXT_X(0)) cpu (
+    // 24-bit addresses: T1F reaches all 8 MB of the SDRAM (T1 folds its addresses to 1 MB)
+    t1f_core #(.EXT_X(0), .AW24(1)) cpu (
         .clk(cpu_clk), .ce(1'b1), .rst(t1_rst), .reset_pc(entry),
 `else
     t1_core #(.EXT_X(0)) cpu (

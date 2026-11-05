@@ -406,3 +406,4 @@ headless, `--ps2keys` types and `--ps2mouse "dx,dy,buttons;..."` moves.
 | 0C3C00–0FBFFF | bitmap (230,400 bytes; 8-color mode uses the first 115,200) |
 | 0FC000–0FCF9F | text buffer (4,000 bytes) |
 | 0FD000–0FFFFF | free |
+| 100000–7FFFFF | Tang Nano 20K with T1F: the rest of the 8 MB SDRAM, free (docs/t1f.md, `AW24`); fsim `--xram 7` |

@@ -1,4 +1,4 @@
-// Testbench for t1_core: 1 MB of RAM, the console, EXIT and cycle-counter
+// Testbench for t1_core: RAMTOP bytes of RAM (1 MB; more for T1F with AW24), the console, EXIT and cycle-counter
 // I/O registers (docs/io.md), and an optional lockstep check against fsim.
 //
 //   +image=FILE   hex bytes, one per line, loaded at +load (default 1000)
@@ -20,6 +20,8 @@
 
 module t1_tb;
     parameter EXT_X = 1;
+    parameter AW24 = 0;                 // T1F: 24-bit addresses
+    parameter RAMTOP = 24'h100000;      // RAM is 0 to RAMTOP - 1 (fsim --xram for more than 1 MB)
     reg clk = 1'b0, rst = 1'b1;
     always #5 clk = ~clk;
 
@@ -31,7 +33,7 @@ module t1_tb;
     reg  [15:0] sr_in;
     reg  [23:0] reset_pc;
 
-    reg [7:0] ram [0:20'hFFFFF];
+    reg [7:0] ram [0:RAMTOP-1];
 
     // T1S steps when ce is high: one clock in +per=N (default 2; its register
     // file reads a clock ahead). The others step every clock (ce = 1).
@@ -59,7 +61,7 @@ module t1_tb;
     reg         irand = 1'b0;
     reg  [15:0] lfsr = 16'hACE1;
     wire [23:0] ia = {i_addr, 2'b00};
-    wire [31:0] i_word = (ia < 24'h100000) ? {ram[ia[19:0] + 3], ram[ia[19:0] + 2], ram[ia[19:0] + 1], ram[ia[19:0]]} : 32'h0;
+    wire [31:0] i_word = (ia < RAMTOP) ? {ram[ia + 3], ram[ia + 2], ram[ia + 1], ram[ia]} : 32'h0;
     integer     j;
     always @(posedge clk) begin
         lfsr <= {lfsr[14:0], lfsr[15] ^ lfsr[13] ^ lfsr[12] ^ lfsr[10]};
@@ -85,7 +87,7 @@ module t1_tb;
     t1s_core #(.EXT_X(EXT_X)) core (.clk(clk), .ce(ce), .rst(rst), .reset_pc(reset_pc), .addr(addr), .mem_rd(mem_rd), .mem_wr(mem_wr),
                   .i_req(i_req), .i_addr(i_addr), .i_ack(i_ack), .i_valid(i_valid), .i_data(i_data), .irq(irq),
 `elsif T1F
-    t1f_core #(.EXT_X(EXT_X)) core (.clk(clk), .ce(1'b1), .rst(rst), .reset_pc(reset_pc), .addr(addr), .mem_rd(mem_rd), .mem_wr(mem_wr),
+    t1f_core #(.EXT_X(EXT_X), .AW24(AW24)) core (.clk(clk), .ce(1'b1), .rst(rst), .reset_pc(reset_pc), .addr(addr), .mem_rd(mem_rd), .mem_wr(mem_wr),
 `else
     t1_core #(.EXT_X(EXT_X)) core (.clk(clk), .rst(rst), .reset_pc(reset_pc), .addr(addr), .mem_rd(mem_rd), .mem_wr(mem_wr),
 `endif
@@ -99,10 +101,10 @@ module t1_tb;
     reg [23:0] cur_pc;          // address of the instruction executing
 
     // memory and I/O: reads are combinational, writes at the clock edge
-    wire [7:0] ram_q = ram[addr[19:0]];
+    wire [7:0] ram_q = ram[addr];
     always @* begin
         din = 8'h00;
-        if (addr < 24'h100000)
+        if (addr < RAMTOP)
             din = ram_q;
         else if (addr[23:16] == 8'hF0)
             case (addr[15:0])
@@ -192,8 +194,8 @@ module t1_tb;
     always @(posedge clk) if (ce && !rst) begin
         cycles <= cycles + 1;
         if (mem_wr) begin
-            if (addr < 24'h100000)
-                ram[addr[19:0]] <= dout;
+            if (addr < RAMTOP)
+                ram[addr] <= dout;
             else if (addr == 24'hF00000)
                 $write("%c", dout);
             else if (addr == 24'hF00002) begin
@@ -207,7 +209,7 @@ module t1_tb;
                 $finish;
             end
         end
-        if (mem_rd && addr >= 24'h100000 && addr[23:16] != 8'hF0 && addr[23:16] != 8'hFF) begin
+        if (mem_rd && addr >= RAMTOP && addr[23:16] != 8'hF0 && addr[23:16] != 8'hFF) begin
             $display("\n(bus error: read from unmapped %06x, pc near %06x)", addr, cur_pc);
             $display("T1 cycles=%0d insts=%0d halt=253", cycles, insts);           // as fsim: a fault
             $finish;
@@ -276,14 +278,15 @@ module t1_tb;
             cur_pc = core.pcx ? {4'h1, core.pcf[19:0]} : {{4{core.pcf[20]}}, core.pcf[19:0]};
 `else
         if ((core.state == 3'd0 && core.nbn == 2'd1) || (core.done && core.state_n != 3'd0))
-            cur_pc = (core.pcx_n ? {4'h1, core.pcf_n[19:0]} : {{4{core.pcf_n[20]}}, core.pcf_n[19:0]}) - 24'd2;
+            cur_pc = (AW24 ? core.pcf_n[23:0] :
+                      core.pcx_n ? {4'h1, core.pcf_n[19:0]} : {{4{core.pcf_n[20]}}, core.pcf_n[19:0]}) - 24'd2;
 `endif
     end
 
     reg [8*512-1:0] path;
     reg [23:0] load;
     initial begin
-        for (i = 0; i < 32'h100000; i = i + 1) ram[i] = 8'h00;
+        for (i = 0; i < RAMTOP; i = i + 1) ram[i] = 8'h00;
         if (!$value$plusargs("load=%h", load)) load = 24'h001000;
         if (!$value$plusargs("max=%d", maxc)) maxc = 64'd4000000000;
         if (!$value$plusargs("marker=%h", marker)) marker = 24'hFFFFFF;

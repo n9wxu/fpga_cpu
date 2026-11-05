@@ -30,10 +30,15 @@
 // same byte ALU, funnel shifter and multiply sequencer. With EXT_X = 0 they
 // trap as illegal instructions, as fsim does without --ext.
 //
+// AW24 = 1: PC and AR are 24 bits and the pins carry all of them, with no
+// fold and no range check: the system decides what is at every address (the
+// Tang Nano 20K's 8 MB of SDRAM). Fetching and data steps wrap from 0xFFFFFF
+// to 0, as fsim's addresses do.
+//
 // Faults: halted with halt_code FD for an odd address in a word or pair
-// access, an access or fetch at 0x100000 (stepping over the end of RAM, or
-// an address in 0x100000-0xEFFFFF), and a reset_pc that is odd or in that
-// range. Reserved encodings, including odd pair numbers, halt with FE.
+// access, and (AW24 = 0) an access or fetch at 0x100000 (stepping over the
+// end of RAM, or an address in 0x100000-0xEFFFFF), and a reset_pc that is
+// odd or (AW24 = 0) in that range. Reserved encodings, including odd pair numbers, halt with FE.
 //
 // Bus: one access per cycle. addr, mem_rd, mem_wr and dout are combinational
 // from the current state; din is sampled at the clock edge.
@@ -42,7 +47,8 @@
 `default_nettype none
 
 module t1f_core #(
-    parameter EXT_X = 1               // extension X: MULPU, FSHR, FSHL, CLZ, DSTEP (else they trap as illegal)
+    parameter EXT_X = 1,              // extension X: MULPU, FSHR, FSHL, CLZ, DSTEP (else they trap as illegal)
+    parameter AW24 = 0                // 1: 24-bit addresses, unfolded (else 21 bits: RAM to 0x0FFFFF, I/O and ROM from 0xF00000)
 ) (
     input  wire        clk,
     input  wire        ce,           // clock enable: low holds everything (a stall)
@@ -66,8 +72,9 @@ module t1f_core #(
 
     reg [2:0]  state;
     reg [3:0]  k;              // step within the state
-    reg [20:0] pcf;            // next byte to fetch (folded 21-bit address)
-    reg [20:0] ar;             // data address; the multiplier during MUL
+    localparam AWI = AW24 ? 24 : 21;   // address register width
+    reg [AWI-1:0] pcf;         // next byte to fetch (21 bits: folded, bit 20 for 23:20 all ones)
+    reg [AWI-1:0] ar;          // data address; the multiplier during MUL
     reg [15:0] ir, p2;         // first and second parcel
     reg [15:0] nb;             // prefetched next parcel
     reg [1:0]  nbn;            // bytes in nb
@@ -79,7 +86,7 @@ module t1f_core #(
     reg        sgn;            // index sign, loaded byte's sign, multiplicand's sign
     reg        cst;            // saved carry-stop / fold result
     reg [4:0]  cnt;            // shift count; multiply steps left
-    reg [2:0]  tag;            // the pair whose bytes 1-2 AR[20:8] holds
+    reg [2:0]  tag;            // the pair whose bytes 1-2 AR[AWI-1:8] holds
     reg        tagv;
     reg        accz;           // multiply accumulator still zero
     reg        swp;            // multiply operands swapped; in a store, its data is in the temporaries
@@ -314,8 +321,14 @@ module t1f_core #(
 
     t1_rf rf (.clk(clk), .ra(ra), .rb(rb), .qa(rfa), .qb(rfb), .we(we & ~rst & ce), .wa(wa), .wd(wd));
 
+    wire [7:0] pc_hi;          // PC bits 23:16
+    generate if (AW24) begin : g_pchi24
+        assign pc_hi = pcf[23:16];
+    end else begin : g_pchi21
+        assign pc_hi = pcx ? 8'h10 : {{4{pcf[20]}}, pcf[19:16]};
+    end endgenerate
     wire [7:0] pc_byte = (bk == 2'd0) ? pcf[7:0] : (bk == 2'd1) ? pcf[15:8] :
-                         (bk == 2'd2) ? (pcx ? 8'h10 : {{4{pcf[20]}}, pcf[19:16]}) : 8'h00;
+                         (bk == 2'd2) ? pc_hi : 8'h00;
     wire [7:0] imm_byte = (bk == 2'd0) ? imm[7:0] : (bk == 2'd1) ? imm[15:8] :
                           (bk == 2'd2) ? imm[23:16] : {8{ifill}};
     // SR1-SR3 are registered here, so MFSR reads the counters as they were
@@ -412,9 +425,13 @@ module t1f_core #(
 
     // bus address: PC (fetch) or AR (data), and the shared incrementer
     reg         bus_ar;
-    wire [20:0] baddr = bus_ar ? ar : pcf;
-    wire [20:0] binc = baddr + 21'd1;
-    assign addr = {{4{baddr[20]}}, baddr[19:0]};
+    wire [AWI-1:0] baddr = bus_ar ? ar : pcf;
+    wire [AWI-1:0] binc = baddr + 1'b1;
+    generate if (AW24) begin : g_addr24
+        assign addr = baddr;
+    end else begin : g_addr21
+        assign addr = {{4{baddr[20]}}, baddr[19:0]};
+    end endgenerate
     assign dout = rfb;
     assign mem_rd = mem_rd_c & ~rst;     // nothing leaves the core while in reset
     assign mem_wr = mem_wr_c & ~rst;
@@ -425,7 +442,7 @@ module t1f_core #(
     // S_DEC with a 16-bit instruction is its first execute clock
     wire [2:0] st = (state == S_DEC && !is32(ir)) ? S_EX : state;
     reg [3:0]  k_n;
-    reg [20:0] pcf_n, ar_n;
+    reg [AWI-1:0] pcf_n, ar_n;
     reg [15:0] ir_n, p2_n, nb_n;
     reg [1:0]  nbn_n, l2_n;
     reg        fN_n, fZ_n, fC_n, fV_n, cy_n, zacc_n, l1_n, sgn_n, cst_n, accz_n, swp_n, pcx_n, pinc;
@@ -449,8 +466,14 @@ module t1f_core #(
     wire [1:0] fxr = 2'd1 + {1'b0, nbig}, fyr = {1'b0, nbig}, fxl = 2'd2 - {1'b0, nbig}, fyl = 2'd1 - {1'b0, nbig};
     wire [3:0] kk = corr ? {k[3], ~k[2], k[1:0]} : k;      // branch stage order
     wire [1:0] j = k[1:0] - 2'd2;                          // multiply: byte of this pass
-    wire       fold_ok = (arb[7:4] == 4'h0) || (arb[7:4] == 4'hF);
-    wire [4:0] fold = {arb[7:4] == 4'hF, arb[3:0]};
+    // the byte for address bits 23:16: folded to 5 bits (AW24 = 0), or as it is
+    wire       fold_ok = AW24 || (arb[7:4] == 4'h0) || (arb[7:4] == 4'hF);
+    wire [AWI-17:0] fold;
+    generate if (AW24) begin : g_fold24
+        assign fold = arb;
+    end else begin : g_fold21
+        assign fold = {arb[7:4] == 4'hF, arb[3:0]};
+    end endgenerate
 
     always @* begin
         ra = 6'd0; rb = 6'd0; wa = 6'd0; we = 1'b0; wd_a = 1'b0;
@@ -624,7 +647,7 @@ module t1f_core #(
             end
             4'd1: begin ar_n[15:8] = arb; if (mmode == M_X) sgn_n = rfb[7]; k_n = 4'd2; end
             4'd2: begin
-                ar_n[20:16] = fold; bad = !fold_ok;
+                ar_n[AWI-1:16] = fold; bad = !fold_ok;
                 tag_n = pn; tagv_n = cst && (mmode != M_X); tag_set = 1'b1;
                 if (mmode[1]) k_n = 4'd3; else begin state_n = S_DATA; k_n = 4'd0; end
             end
@@ -648,7 +671,7 @@ module t1f_core #(
             case (k)
             4'd0: begin ar_n[7:0] = res; if (pstop && cstop) done = 1'b1; else k_n = 4'd1; end
             4'd1: begin ar_n[15:8] = res; if (pb_src == 2'd2) sgn_n = rfb[7]; k_n = 4'd2; end
-            4'd2: begin ar_n[20:16] = fold; cst_n = fold_ok; k_n = 4'd3; end
+            4'd2: begin ar_n[AWI-1:16] = fold; cst_n = fold_ok; k_n = 4'd3; end
             4'd3: begin
                 tag_n = rd_r[3:1]; tagv_n = cst && !corr; tag_set = 1'b1;
                 if (corr) k_n = 4'd4; else done = 1'b1;
@@ -674,12 +697,12 @@ module t1f_core #(
             end else if (kk[2]) case (kk[1:0])
             2'd0: begin pcf_n[7:0] = res; if (cout && cls != C_JAL) k_n = 4'd4; else k_n = k + 4'd1; end
             2'd1: begin pcf_n[15:8] = res; if (cout && cls != C_JAL) k_n = 4'd4; else k_n = k + 4'd1; end
-            2'd2: begin pcf_n[20:16] = fold; pcx_n = 1'b0; k_n = (cls == C_JAL) ? 4'd3 : 4'd4; end
+            2'd2: begin pcf_n[AWI-1:16] = fold; pcx_n = 1'b0; k_n = (cls == C_JAL) ? 4'd3 : 4'd4; end
             default: begin asel = A_ZERO; k_n = 4'd4; end  // JAL: lr bits 31:24 = 0
             endcase else case (kk[1:0])
             2'd0: begin pcf_n[7:0] = res; if (!corr && cstop) jump = 1'b1; else k_n = k + 4'd1; end
             2'd1: begin pcf_n[15:8] = res; k_n = k + 4'd1; end
-            default: begin pcf_n[20:16] = fold; bad = !fold_ok; jump = 1'b1; end
+            default: begin pcf_n[AWI-1:16] = fold; bad = !fold_ok; jump = 1'b1; end
             endcase
         end
 
@@ -690,7 +713,7 @@ module t1f_core #(
             case (k)
             4'd0: begin pcf_n[7:0] = {res[7:1], 1'b0}; k_n = 4'd1; end
             4'd1: begin pcf_n[15:8] = res; k_n = 4'd2; end
-            4'd2: begin pcf_n[20:16] = fold; bad = !fold_ok; if (cls == C_JR) jump = 1'b1; else k_n = 4'd3; end
+            4'd2: begin pcf_n[AWI-1:16] = fold; bad = !fold_ok; if (cls == C_JR) jump = 1'b1; else k_n = 4'd3; end
             default: jump = 1'b1;
             endcase
         end
@@ -768,7 +791,7 @@ module t1f_core #(
                     if (mld && msz == 2'd0) k_n = 4'd4; else done = 1'b1;
                 end else begin
                     ar_n = binc; k_n = k + 4'd1;
-                    if (!ar[20] && binc[20]) bad = 1'b1;   // 0x0FFFFF + 1: no memory at 0x100000
+                    if (!AW24 && !ar[20] && binc[20]) bad = 1'b1;   // 0x0FFFFF + 1: no memory at 0x100000
                     if (ar[7:0] == 8'hFF) begin tagv_n = 1'b0; tag_set = 1'b1; end
                 end
             end
@@ -793,7 +816,7 @@ module t1f_core #(
                 state_n = S_FETCH;
         end
         if (jump) begin k_n = 4'd0; nbn_n = 2'd0; state_n = S_FETCH; pcx_n = 1'b0; end
-        else if (pinc && !pcf[20] && binc[20]) pcx_n = 1'b1;   // 0x0FFFFF + 1: no wrap into I/O
+        else if (!AW24 && pinc && !pcf[20] && binc[20]) pcx_n = 1'b1;   // 0x0FFFFF + 1: no wrap into I/O
         if (done | jump) swp_n = 1'b0;
         if (bad) begin halted_n = 1'b1; halt_code_n = 8'hFD; state_n = S_HALT; end
         // IR loads from np at this edge: the next clock's decode is np's
@@ -804,15 +827,21 @@ module t1f_core #(
             tagv_n = 1'b0;
     end
 
-    // reset_pc must be an even address in RAM (0-0x0FFFFF) or I/O and ROM (0xF00000 up): the core
-    // cannot represent 0x100000-0xEFFFFF, so it halts with FD rather than fold it
-    wire rbad = reset_pc[0] || (reset_pc[23:20] != 4'h0 && reset_pc[23:20] != 4'hF);
+    // reset_pc must be even and (AW24 = 0) in RAM (0-0x0FFFFF) or I/O and ROM (0xF00000 up): the
+    // folded core cannot represent 0x100000-0xEFFFFF, so it halts with FD rather than fold it
+    wire rbad = reset_pc[0] || (!AW24 && reset_pc[23:20] != 4'h0 && reset_pc[23:20] != 4'hF);
+    wire [AWI-1:0] pc_rst;
+    generate if (AW24) begin : g_rst24
+        assign pc_rst = reset_pc;
+    end else begin : g_rst21
+        assign pc_rst = {reset_pc[23:20] == 4'hF, reset_pc[19:0]};
+    end endgenerate
 
     always @(posedge clk) if (!ce) retire <= 1'b0;    // a stall retires nothing
     else begin
         if (rst) begin
             state <= rbad ? S_HALT : S_FETCH; k <= 4'd0; pcx <= 1'b0;
-            pcf <= {reset_pc[23:20] == 4'hF, reset_pc[19:0]}; ar <= 21'd0;
+            pcf <= pc_rst; ar <= {AWI{1'b0}};
             ir <= 16'd0; p2 <= 16'd0; nb <= 16'd0; nbn <= 2'd0;
             fN <= 1'b0; fZ <= 1'b0; fC <= 1'b0; fV <= 1'b0;
             cy <= 1'b0; zacc <= 1'b0; l1 <= 1'b0; l2 <= 2'd0; sgn <= 1'b0; cst <= 1'b0; cnt <= 5'd0;
