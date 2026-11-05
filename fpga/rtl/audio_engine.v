@@ -61,8 +61,10 @@ module audio_engine #(
     wire [31:0] ev_clr_mask;
     wire [15:0] master, fcut, fres;
     wire [2:0]  fmode, envdiv;
-    reg  [31:0] v_run = 0, v_arm = 0, v_lg = 0, v_dir = 0, v_half = 0, v_done = 0, v_irq = 0,
-                v_under = 0, v_pw = 0, v_fh = 0, v_hok = 0, v_hneed = 0, v_inf = 0, v_stale = 0, v_cmp = 0, v_fd = 0, v_msb = 0, v_wrap = 0;
+    // per-voice flags others see or set (the CPU's status and events, the fetch unit, the voice
+    // after): one flip-flop a voice. The sequencer's own flags are in m_fl (below).
+    reg  [31:0] v_run = 0, v_arm = 0, v_half = 0, v_done = 0, v_irq = 0,
+                v_under = 0, v_pw = 0, v_cmp = 0, v_msb = 0, v_wrap = 0;
     reg  [31:0] scount = 32'd0;
     reg  [15:0] ucount = 16'd0;
     reg         sn_we = 1'b0;
@@ -90,13 +92,17 @@ module audio_engine #(
     reg [21:0] m_vlo [0:31];
     reg [21:0] m_vhi [0:31];
     reg [31:0] m_last [0:31];
+    // the sequencer's own per-voice flags, in a LUT RAM like the rest of the voice's state: read
+    // with it (fl_q), worked on in fl from state 6, written back at K17
+    localparam FL_LG = 0, FL_DIR = 1, FL_FH = 2, FL_HOK = 3, FL_HNEED = 4, FL_INF = 5, FL_STALE = 6, FL_FD = 7;
+    reg [7:0]  m_fl [0:31];
     integer ii;
     initial begin
         for (ii = 0; ii < 512; ii = ii + 1) begin cfge[ii] = 16'd0; cfgo[ii] = 16'd0; ring[ii] = 32'd0; end
         for (ii = 0; ii < 256; ii = ii + 1) hring[ii] = 32'd0;
         for (ii = 0; ii < 32; ii = ii + 1) begin
             m_pos[ii] = 40'd0; m_env[ii] = 27'd0; m_lfsr[ii] = 23'h7FFFFF;
-            m_hdt[ii] = 22'd0; m_vlo[ii] = 22'd0; m_vhi[ii] = 22'd0; m_last[ii] = 32'd0;
+            m_hdt[ii] = 22'd0; m_vlo[ii] = 22'd0; m_vhi[ii] = 22'd0; m_last[ii] = 32'd0; m_fl[ii] = 8'd0;
         end
     end
     always @(posedge clk) begin
@@ -152,8 +158,9 @@ module audio_engine #(
     reg [21:0] vlo_q, vhi_q;
     reg [31:0] last_q;
     reg [21:0] hdt_q;
+    reg [7:0]  fl_q, fl = 8'd0;
     always @(posedge clk) begin
-        hdt_q <= m_hdt[vi];
+        hdt_q <= m_hdt[vi]; fl_q <= m_fl[vi];
         pos_q <= m_pos[vi]; env_q <= m_env[vi]; lfsr_q <= m_lfsr[vi];
         vlo_q <= m_vlo[vi]; vhi_q <= m_vhi[vi]; last_q <= m_last[vi];
     end
@@ -257,10 +264,10 @@ module audio_engine #(
     // window
     wire [21:0] wbot = w0r;
     wire [21:0] wtop = interp ? w1r : w0r;
-    wire [21:0] top1 = wtop + 22'd1;
+    reg  [21:0] top1 = 22'd0;                // wtop + 1, registered at K4 (w1r is set at K3): off K5's path
     wire [21:0] anchor = w_dir ? top1 : wbot;
     wire        inwin = w_dir ? ((w_vlo <= top1) && (top1 <= w_vhi)) : ((w_vlo <= wbot) && (wbot <= w_vhi));
-    wire        hok_now = v_hok[vi] && (hdt_q == lsw);
+    wire        hok_now = fl[FL_HOK] && (hdt_q == lsw);
     wire        in_m0 = (w_vlo <= w0r) && (w0r < w_vhi);
     wire        in_m1 = (w_vlo <= w1r) && (w1r < w_vhi);
     wire        in_h0 = hok_now && (hoff0 < 22'd8);
@@ -321,7 +328,7 @@ module audio_engine #(
     wire signed [41:0] lsfx  = {2'b00, c_ls, 16'd0};
     wire signed [41:0] pnow  = (w_dir ? posS - stepS : posS + stepS);
 
-    wire        dead = !gate && !v_lg[vi] && (env_q[23:0] == 24'd0) && !v_pw[vi] && !v_arm[vi] && !v_run[vi];
+    wire        dead = !gate && !fl_q[FL_LG] && (env_q[23:0] == 24'd0) && !v_pw[vi] && !v_arm[vi] && !v_run[vi];
 
     integer q;
     always @(posedge clk) begin
@@ -350,15 +357,16 @@ module audio_engine #(
         end
         6'd6: begin
             pw_s <= v_pw[vi]; v_pw[vi] <= 1'b0;
+            fl <= fl_q;
             st <= st + 6'd1;
         end
         // ---- K0: gate edge, position
         K0: begin
             w_pos <= pw_s ? ((src != 3'd0) ? {16'd0, c_pl[7:0], c_pf} : {c_ph[7:0], c_pl, c_pf}) :
                      (src != 3'd0) ? {16'd0, pos_q[23:0]} : pos_q;
-            w_stage <= (gate & ~v_lg[vi]) ? S_ATK : (~gate & v_lg[vi] & enven) ? S_REL : env_q[26:24];
-            w_run <= (gate & ~v_lg[vi]) ? 1'b1 : v_run[vi];
-            w_dir <= (pw_s ? 1'b0 : v_dir[vi]) & (loopm == 2'd2);
+            w_stage <= (gate & ~fl[FL_LG]) ? S_ATK : (~gate & fl[FL_LG] & enven) ? S_REL : env_q[26:24];
+            w_run <= (gate & ~fl[FL_LG]) ? 1'b1 : v_run[vi];
+            w_dir <= (pw_s ? 1'b0 : fl[FL_DIR]) & (loopm == 2'd2);
             w_env <= env_q[23:0];
             st <= st + 6'd1;
         end
@@ -396,15 +404,16 @@ module audio_engine #(
         end
         // ---- K4: a finished fetch joins the window
         K0 + 6'd4: begin
+            top1 <= wtop + 22'd1;
             audible <= enven ? (w_env != 24'd0) : gate;
-            inf_now <= v_inf[vi] & ~v_cmp[vi];
+            inf_now <= fl[FL_INF] & ~v_cmp[vi];
             w_vlo <= vlo_q; w_vhi <= vhi_q;
             if (v_cmp[vi]) begin
-                v_cmp[vi] <= 1'b0; v_inf[vi] <= 1'b0; v_stale[vi] <= 1'b0;
-                if (v_fh[vi]) begin
-                    v_hok[vi] <= 1'b1; v_hneed[vi] <= 1'b0; m_hdt[vi] <= lsw;
-                end else if (!v_stale[vi]) begin
-                    if (!v_fd[vi]) begin
+                v_cmp[vi] <= 1'b0; fl[FL_INF] <= 1'b0; fl[FL_STALE] <= 1'b0;
+                if (fl[FL_FH]) begin
+                    fl[FL_HOK] <= 1'b1; fl[FL_HNEED] <= 1'b0; m_hdt[vi] <= lsw;
+                end else if (!fl[FL_STALE]) begin
+                    if (!fl[FL_FD]) begin
                         w_vhi <= vhi_q + 22'd8;
                         w_vlo <= (vhi_q + 22'd8 - vlo_q > 22'd16) ? vhi_q - 22'd8 : vlo_q;
                     end else begin
@@ -419,9 +428,9 @@ module audio_engine #(
         K0 + 6'd5: begin
             if (isamp && (pw_s || !inwin)) begin
                 w_vlo <= anchor; w_vhi <= anchor;
-                if (inf_now && !v_fh[vi]) v_stale[vi] <= 1'b1;
+                if (inf_now && !fl[FL_FH]) fl[FL_STALE] <= 1'b1;
             end
-            if (isamp && pw_s) begin v_hok[vi] <= 1'b0; v_hneed[vi] <= 1'b1; end
+            if (isamp && pw_s) begin fl[FL_HOK] <= 1'b0; fl[FL_HNEED] <= 1'b1; end
             st <= st + 6'd1;
         end
         // ---- K6: is the frame there; fetch more?
@@ -430,11 +439,11 @@ module audio_engine #(
             sel0m <= in_m0; sel1m <= in_m1;
             act <= w_run & audible;
             launch = isamp && (w_run | v_arm[vi] | pw_s | gate) && !inf_now && !fbusy;
-            headl = launch && !need && loopm == 2'd1 && v_hneed[vi] && (ew >= w0r) && (ew - w0r <= 22'd12);
+            headl = launch && !need && loopm == 2'd1 && fl[FL_HNEED] && (ew >= w0r) && (ew - w0r <= 22'd12);
             if (launch && (need || headl)) begin
                 fq_go <= 1'b1; fq_v <= vi; fq_h <= headl;
                 fq_a <= headl ? lsw : w_dir ? (w_vlo - 22'd8) : w_vhi;
-                v_inf[vi] <= 1'b1; v_fd[vi] <= w_dir; v_fh[vi] <= headl;
+                fl[FL_INF] <= 1'b1; fl[FL_FD] <= w_dir; fl[FL_FH] <= headl;
             end
             st <= st + 6'd1;
         end
@@ -541,10 +550,8 @@ module audio_engine #(
             m_vlo[vi] <= w_vlo; m_vhi[vi] <= w_vhi;
             if (isamp && act) m_last[vi] <= {hR, hL};
             else if (pw_s) m_last[vi] <= 32'd0;       // a new start begins from silence
-            v_lg[vi] <= gate;
-            if (isamp && wrapev) v_hneed[vi] <= 1'b1;
+            m_fl[vi] <= {fl[FL_FD], fl[FL_STALE], fl[FL_INF], fl[FL_HNEED] | (isamp && wrapev), fl[FL_HOK], fl[FL_FH], n_dir, gate};
             v_run[vi] <= n_run;
-            v_dir[vi] <= n_dir;
             v_arm[vi] <= n_armed;
             v_wrap[vi] <= isamp ? 1'b0 : wrap_n;
             v_msb[vi] <= isamp ? 1'b0 : msb_n;
