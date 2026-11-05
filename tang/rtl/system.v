@@ -341,7 +341,7 @@ module system #(
     //     the lowest priority is enough.
     localparam VLEN = 8;                    // an SDRAM burst (rows are multiples of 8 words)
     wire        dma_req, dma_valid;
-    wire [17:0] dma_addr;
+    wire [20:0] dma_addr;                   // a word address anywhere in the 8 MB (video.v AW = 23)
     wire [8:0]  dma_left;
     // video.v advances its address by dma_take a clock after rammux's ack
     // (registered: off the grant -> ready -> ack path), and its request is
@@ -378,7 +378,7 @@ module system #(
     rammux #(.NP(5), .AW(21), .LW(5), .WMASK(5'b11001)) mux (
         .clk(fclk),
         .p_req({blt_req, bt_req, a_req, v_req, c_req}), .p_we({blt_we, bt_we, 2'b00, c_we}),
-        .p_addr({blt_addr, bt_addr, a_addr, 3'b000, dma_addr, c_fill ? {c_addr[22:4], 2'b00} : c_addr[22:2]}),
+        .p_addr({blt_addr, bt_addr, a_addr, dma_addr, c_fill ? {c_addr[22:4], 2'b00} : c_addr[22:2]}),
         .p_len({blt_len, bt_len, a_len, dma_len, c_fill ? 5'd4 : 5'd1}), .p_ack(p_ack),
         .p_wdata({blt_wd, bt_wd, 64'd0, {4{c_wd}}}), .p_wbe({blt_wbe, bt_wbe, 8'h00, 4'b0001 << c_addr[1:0]}), .p_wnext(p_wnext),
         .p_rvalid(p_rvalid), .p_rdata(p_rdata),
@@ -505,7 +505,7 @@ module system #(
         .p_wdata(blt_wd), .p_wbe(blt_wbe), .p_wnext(p_wnext[4]), .p_rvalid(p_rvalid[4]), .p_rdata(p_rdata),
         .inv_req(blt_inv), .inv_line(blt_inv_line), .inv_ack(blt_inv_ack)
     );
-    video #(.FONT_FILE(FONT_FILE), .TRUE_COLOR(1), .EXT(1)) vid (
+    video #(.FONT_FILE(FONT_FILE), .TRUE_COLOR(1), .EXT(1), .AW(23)) vid (
         .vid_ctrl2(vid_ctrl2), .vid_bmpb(vid_bmpb), .vid_scrollxb(vid_scrollxb), .vid_scrollyb(vid_scrollyb),
         .vid_lscr(vid_lscr), .vid_spr(vid_spr), .spr_we(spr_we), .spr_wa(spr_wa), .spr_wd(spr_wd),
         .frame_latch(frame_latch), .spr_over(spr_over),

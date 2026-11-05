@@ -30,11 +30,11 @@ static void blit(cpu_t *c)
                 v = fill;
             else {
                 uint32_t s = (src + x) & 0xFFFFFF;
-                v = s < SRAM_SIZE ? c->sram[s] : 0;
+                v = s < c->ram_size ? c->sram[s] : 0;      /* all of RAM, as the Tang's blitter */
                 if (keyed && v == key)
                     continue;
             }
-            if (d < SRAM_SIZE)
+            if (d < c->ram_size)
                 c->sram[d] = v;
         }
         src += (uint32_t)ss;

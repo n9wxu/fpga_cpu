@@ -28,12 +28,15 @@
 //   pclk (74.25)    timing, the line buffers' read side, palette, font,
 //                   dither and composition.
 //
-// Buffer addresses (VID_BMP, VID_TEXT) must be multiples of 4.
+// Buffer addresses (VID_BMP, VID_TEXT) must be multiples of 4; AW bits of them are used (20: the
+// first 1 MB; the Tang's 23: anywhere in its 8 MB SDRAM, a hardware sprite's address bits 22:16 in
+// bits 6:0 of its attribute word 3).
 module video #(
     parameter FONT_FILE = "font8x14.mem",
     parameter TRUE_COLOR = 0,
     parameter HICOL8 = 1,
-    parameter EXT = 0
+    parameter EXT = 0,
+    parameter AW = 20                       // buffer address bits: 20 (1 MB); the Tang 23 (its 8 MB SDRAM)
 ) (
     input  wire        clk,
     input  wire        pclk,
@@ -62,7 +65,7 @@ module video #(
     output reg  [15:0] spr_over = 16'd0,    // last frame's lines with more than 16 sprites
     // DMA through memsys (clk domain)
     output wire        dma_req,
-    output reg  [17:0] dma_addr = 18'd0,
+    output reg  [AW-3:0] dma_addr = 0,    // word address
     output reg  [8:0]  dma_left = 9'd0,
     input  wire [4:0]  dma_take,            // words taken now (memsys: up to 4; rammux: up to 16)
     input  wire        dma_valid,
@@ -196,13 +199,13 @@ module video #(
     reg  [8:0] wi = 9'd0;                    // words back from memory
     reg  [2:0] seg = 3'd0;                    // the segment being asked for
     reg  [8:0] len0 = 0, len1 = 0, len2 = 0, len3 = 0, len4 = 0;
-    reg [19:0] adr1 = 0, adr2 = 0, adr3 = 0, adr4 = 0;
+    reg [AW-1:0] adr1 = 0, adr2 = 0, adr3 = 0, adr4 = 0;
     wire [8:0] c1 = len0, c2 = len0 + len1, c3 = c2 + len2, c4 = c3 + len3, ctot = c4 + len4;
-    wire [19:0] boff  = c_hicol ? ({by, 9'd0} + {by, 7'd0}) : ({by, 8'd0} + {by, 6'd0});   // by * 640 or 320
-    wire [19:0] bboff = {byb, 9'd0} + {byb, 7'd0};                                        // byb * 640
-    wire [19:0] soff  = x_s8 ? ({ln, 9'd0} + {ln, 7'd0}) : ({ln, 8'd0} + {ln, 6'd0});     // ln * 640 or 320
-    wire [19:0] toff  = {tr, 7'd0} + {tr, 5'd0};                                          // tr * 160
-    wire [19:0] sbuf  = !vid_ctrl[4] ? 20'd0 : x_s8 ? 20'd230400 : 20'd115200;           // the shown sprite buffer
+    wire [AW-1:0] boff  = c_hicol ? ({by, 9'd0} + {by, 7'd0}) : ({by, 8'd0} + {by, 6'd0});   // by * 640 or 320
+    wire [AW-1:0] bboff = {byb, 9'd0} + {byb, 7'd0};                                        // byb * 640
+    wire [AW-1:0] soff  = x_s8 ? ({ln, 9'd0} + {ln, 7'd0}) : ({ln, 8'd0} + {ln, 6'd0});     // ln * 640 or 320
+    wire [AW-1:0] toff  = {tr, 7'd0} + {tr, 5'd0};                                          // tr * 160
+    wire [AW-1:0] sbuf  = !vid_ctrl[4] ? 0 : x_s8 ? 230400 : 115200;           // the shown sprite buffer
 
     // EXT line scroll: this line's horizontal offsets (the scroll register mod 640,
     // plus the entry, 0-639), kept per buffer for the pixel side
@@ -293,11 +296,11 @@ module video #(
                 len2 <= x_pfb ? 9'd160 : 9'd0;
                 len3 <= x_sl ? (x_s8 ? 9'd160 : 9'd80) : 9'd0;
                 len4 <= (c_text && ln < TROWS * CELL_H) ? 9'd40 : 9'd0;
-                adr1 <= bmp_a[19:0] + boff;
-                adr2 <= bmpb_f[19:0] + bboff;
-                adr3 <= spr_f[19:0] + sbuf + soff;
-                adr4 <= vid_text[19:0] + toff;
-                dma_addr <= (lscr_f[19:0] + {9'd0, ln, 2'b00}) >> 2;
+                adr1 <= bmp_a[AW-1:0] + boff;
+                adr2 <= bmpb_f[AW-1:0] + bboff;
+                adr3 <= spr_f[AW-1:0] + sbuf + soff;
+                adr4 <= vid_text[AW-1:0] + toff;
+                dma_addr <= (lscr_f[AW-1:0] + {9'd0, ln, 2'b00}) >> 2;
                 dma_left <= x_lscr ? 9'd1 : 9'd0;
                 seg <= 3'd0;
                 st <= 3'd2;
@@ -310,10 +313,10 @@ module video #(
                     if (seg != 3'd4) begin
                         seg <= seg + 1'b1;
                         case (seg)
-                            3'd0: begin dma_addr <= adr1[19:2]; dma_left <= len1; end
-                            3'd1: begin dma_addr <= adr2[19:2]; dma_left <= len2; end
-                            3'd2: begin dma_addr <= adr3[19:2]; dma_left <= len3; end
-                            default: begin dma_addr <= adr4[19:2]; dma_left <= len4; end
+                            3'd0: begin dma_addr <= adr1[AW-1:2]; dma_left <= len1; end
+                            3'd1: begin dma_addr <= adr2[AW-1:2]; dma_left <= len2; end
+                            3'd2: begin dma_addr <= adr3[AW-1:2]; dma_left <= len3; end
+                            default: begin dma_addr <= adr4[AW-1:2]; dma_left <= len4; end
                         endcase
                     end else if (wi == ctot)
                         st <= x_hws ? 3'd3 : 3'd0;
@@ -332,7 +335,7 @@ module video #(
                         sw_got <= 4'd0;
                         sflip  <= aq3[12];
                         sx0    <= {1'b0, aq0[9:0]} - 11'd32;
-                        dma_addr <= ({aq3[3:0], aq2} + ({15'd0, sl_r[sk]} << ({1'b0, aq3[14:13]} + 3'd3))) >> 2;   // row x width
+                        dma_addr <= ({aq3[AW-17:0], aq2} + ({15'd0, sl_r[sk]} << ({1'b0, aq3[14:13]} + 3'd3))) >> 2;   // row x width
                         dma_left <= {5'd0, nw_k};
                     end else if (dma_take != 0) begin
                         dma_addr <= dma_addr + dma_take;

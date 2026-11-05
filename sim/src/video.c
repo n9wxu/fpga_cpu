@@ -20,10 +20,12 @@ static const uint32_t rgb8[8] = {
     0x000000, 0x0000FF, 0x00FF00, 0x00FFFF, 0xFF0000, 0xFF00FF, 0xFFFF00, 0xFFFFFF,
 };
 
+/* what video reads: the high tier (the Tang, 23 address bits) anywhere in RAM, the low tier the
+ * first 1 MB */
 static uint8_t rd8(const cpu_t *c, uint32_t a)
 {
     a &= 0xFFFFFF;
-    return a < SRAM_SIZE ? c->sram[a] : 0;
+    return a < (video_hicol8 ? c->ram_size : SRAM_SIZE) ? c->sram[a] : 0;
 }
 
 int video_hicol8 = 1;
@@ -108,7 +110,7 @@ static void sprite_line(const cpu_t *c, int y, uint8_t *line)
         if (w > 32)
             continue;                           /* width code 3 is not defined */
         int x0 = (a[0] & 0x3FF) - 32, row = y - ((a[1] & 0x1FF) - 32);
-        uint32_t base = (a[2] | (uint32_t)(a[3] & 15) << 16) + (uint32_t)(row * w);
+        uint32_t base = (a[2] | (uint32_t)(a[3] & 127) << 16) + (uint32_t)(row * w);   /* bits 22:16 in word 3 */
         for (int i = 0; i < w; i++) {
             int x = x0 + i;
             uint8_t p = rd8(c, base + (uint32_t)(flip ? w - 1 - i : i));

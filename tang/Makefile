@@ -55,8 +55,9 @@ FREQ_hdmiaudio := 74.25
 FREQ_hdmiload := 74.25
 FREQ_system   := 74.25
 # placement seed: with the cache and the audio engine, fclk (67.5 MHz) has little
-# margin and depends on placement (seeds 1-6: 71.3, 70.1, 66.7, 70.5, 69.5, 71.9 MHz)
-PNR_system    := --seed 6
+# margin and depends on placement. With 23-bit video addresses (video.v AW) seeds 1-9
+# gave 65.7, 64.8, 66.0, -, 68.7, 55.6, 65.2, 64.9, 57.0 MHz: 5 passes
+PNR_system    := --seed 5
 
 SRC := rtl/$(TOP).v $(SRC_$(TOP))
 CST := constraints/tang20k.cst $(CST_$(TOP))

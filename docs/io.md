@@ -159,6 +159,11 @@ and read 0. The layers, back to front:
 | F00232 | RW | `SPR_DATA` | the attribute word at `SPR_INDEX`; a write increments `SPR_INDEX` |
 | F00234 | R | `SPR_OVER` | lines in the last frame that had more than 16 sprites |
 
+**Buffer addresses.** The video reads every buffer (`VID_TEXT`, `VID_BMP`, `VID_SPR`, `VID_BMPB`,
+`VID_LSCR`, a hardware sprite's pixel data) from wherever its address register points, a multiple of
+4. On the Tang Nano 20K the video takes 23 bits of each address: a buffer can be anywhere in the 8 MB
+SDRAM. The Spartan-3's video takes 20 bits: the first 1 MB, its SRAM.
+
 **Playfield A** is the bitmap of the "Video" section: `VID_BMP`,
 `VID_SCROLLX`, `VID_SCROLLY`, in any bitmap mode. **Playfield B** is
 always 8 bpp through the palette (the hi-color format: 640-byte rows,
@@ -193,7 +198,7 @@ words, read and written through `SPR_INDEX` / `SPR_DATA`:
 | 1 | 8:0 | Y: its top line is Y − 32 |
 | 1 | 15:11 | height − 1 (1–32 lines) |
 | 2 | 15:0 | pixel data address, bits 15:0 (a multiple of 4) |
-| 3 | 3:0 | pixel data address, bits 19:16 |
+| 3 | 6:0 | pixel data address, bits 22:16 (the Tang; bits 19:16 where video addresses are 20 bits) |
 | 3 | 12 | flip horizontally |
 | 3 | 14:13 | width: 0 = 8, 1 = 16, 2 = 32 pixels |
 | 3 | 15 | on |
