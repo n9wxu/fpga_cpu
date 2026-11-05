@@ -1,6 +1,8 @@
 /* fpga_cpu simulator: the low tier's sound (fpga/rtl/audio_lite.v, the
- * Spartan-3), bit exact: the 3-voice device at F00400 and the streaming
- * player at F00420, an output frame every 1024 cycles of 50 MHz.
+ * Spartan-3), bit exact: the streaming player at F00420, an output frame
+ * every 1024 cycles of 50 MHz. The Spartan-3 builds it without the 3-voice
+ * device (VOICES = 0: software synthesizes into the stream instead), so
+ * the voices here are off too (AUDLO_VOICES).
  *
  * Frames are made lazily, up to the current cycle, whenever the program
  * touches the device and at exit. The registers a frame uses are those
@@ -11,6 +13,7 @@
 #include <string.h>
 
 #define FRAME_CYCLES 1024u
+#define AUDLO_VOICES 0         /* audio_lite.v's VOICES, as ramsys.v sets it */
 
 static struct {
     uint16_t regs[32];         /* words 0x400-0x43E */
@@ -73,7 +76,7 @@ static void frame(const cpu_t *c)
     }
     A.wordh = A.word;
     int32_t acc = 0;
-    for (int v = 0; v < 3; v++) {
+    for (int v = 0; v < (AUDLO_VOICES ? 3 : 0); v++) {
         uint16_t freq = A.regs[4 * v], vol = A.regs[4 * v + 1] & 15, wave = A.regs[4 * v + 2] & 3;
         uint32_t step = (uint32_t)(((uint64_t)freq * 21990) >> 6) & 0xFFFFFF;
         uint32_t old = A.ph[v];

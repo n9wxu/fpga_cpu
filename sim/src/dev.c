@@ -55,6 +55,7 @@ void dev_reset(iodev_t *d)
     d->kbd_head = d->kbd_tail = 0;
     d->kbd_ctrl = 0;
     ps2_reset();
+    pads_reset();
 }
 
 void dev_free(iodev_t *d)
@@ -281,6 +282,8 @@ uint16_t dev_read(cpu_t *c, uint32_t a)
     a &= ~1u;
     if (ps2_handles(a))
         return ps2_read(c, a);
+    if (pads_handles(a))
+        return pads_read(c, a);
     switch (a) {
     case IO_CYCLO: return (uint16_t)c->st.cycles;
     case IO_CYCHI: return (uint16_t)(c->st.cycles >> 16);
@@ -397,6 +400,7 @@ void dev_write(cpu_t *c, uint32_t a, uint32_t v)
         return;
     }
     if (ps2_handles(a)) { ps2_write(c, a, (uint16_t)v); return; }
+    if (pads_handles(a)) { pads_write(c, a, (uint16_t)v); return; }
     if (a == IO_IRQ + 0) { dev_irq(c); d->irq_pend &= (uint16_t)~v; return; }
     if (a == IO_IRQ + 2) { dev_irq(c); d->irq_en = (uint16_t)(v & 0xFF); return; }
     if (a == IO_IRQ + 4) { d->irq_pend |= (uint16_t)(v & 0xFF); return; }

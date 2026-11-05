@@ -25,6 +25,9 @@ module system_tb;
 
 `ifdef RAMSYS
     wire ps2a_c, ps2a_d, ps2b_c, ps2b_d;
+    wire flash_ce_n, flash_a18;
+    wire pad_sel;
+    wire [11:0] pad_in;
 `endif
 `ifdef FCSYS
     fcsys dut (
@@ -39,6 +42,8 @@ module system_tb;
         .sram_ce_n(sram_ce_n), .sram_be_n(sram_be_n)
 `ifdef RAMSYS
         , .ps2_clk(ps2a_c), .ps2_data(ps2a_d), .ps2b_clk(ps2b_c), .ps2b_data(ps2b_d)
+        , .flash_ce_n(flash_ce_n), .flash_a18(flash_a18)
+        , .pad_sel(pad_sel), .pad_in(pad_in)
 `endif
     );
 `ifdef RAMSYS
@@ -46,6 +51,21 @@ module system_tb;
     pullup (ps2a_c); pullup (ps2a_d); pullup (ps2b_c); pullup (ps2b_d);
     ps2_dev #(.MOUSE(0)) kbd   (.clk(ps2a_c), .dat(ps2a_d));
     ps2_dev #(.MOUSE(1)) mouse (.clk(ps2b_c), .dat(ps2b_d));
+    // game pads (genesis_pad.v): a 6-button pad with A, Start and X held in
+    // pad 1, a 3-button pad with Right and C in pad 2; PADS_NONE: none (the
+    // FPGA's pull-ups)
+`ifdef PADS_NONE
+    assign pad_in = 12'hFFF;
+`else
+    genesis_pad #(.SIX(1), .BUTTONS(12'h4C0)) pad1 (.th(pad_sel), .lines(pad_in[5:0]));
+    genesis_pad #(.SIX(0), .BUTTONS(12'h028)) pad2 (.th(pad_sel), .lines(pad_in[11:6]));
+`endif
+    // the flash ROM on A1 (sst39vf.v): the SRAM's address, OE#, WE# and data
+    // bits 7:0; DQ15-DQ8 pulled up (not on the connector); A19 low
+    wire [7:0] flash_hi;
+    pullup p_fh [7:0] (flash_hi);
+    sst39vf flash (.a({1'b0, flash_a18, sram_a}), .dq({flash_hi, sram_d[7:0]}),
+                   .ce_n(flash_ce_n), .oe_n(sram_oe_n), .we_n(sram_we_n));
 `endif
     sram_model sram (.a(sram_a), .d(sram_d), .oe_n(sram_oe_n), .we_n(sram_we_n),
                      .ce_n(sram_ce_n), .be_n(sram_be_n));

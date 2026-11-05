@@ -143,6 +143,12 @@ void ps2_poll(struct cpu *c);             /* bytes arrive, sends end (interrupt 
 void ps2_reset(void);
 int ps2_config(const char *s);            /* --ps2 A,B: kbd, mouse or none each */
 void ps2_script(int mouse, const char *s); /* --ps2keys, --ps2mouse */
+/* the game pads (pads.c, the Spartan-3's PADS at F00900) */
+int pads_handles(uint32_t a);
+uint16_t pads_read(struct cpu *c, uint32_t a);
+void pads_write(struct cpu *c, uint32_t a, uint16_t v);
+void pads_reset(void);
+int pads_config(const char *s);           /* --pad N,TYPE,BUTTONS */
 void ps2_key(int usage, int down);        /* a key (USB HID usage = SDL scancode) */
 void ps2_mouse(int dx, int dy, int buttons);
 /* 0: the low video tier, the Spartan-3 (--no-hicolor): no hi-color, no palette */

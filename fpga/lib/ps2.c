@@ -9,11 +9,65 @@ static volatile uint8_t replug[2];      /* BAT (AA) arrived: a device was plugge
 
 /* ---- polled ---- */
 
+/* ---- sending: the host's side of the PS/2 line protocol ----
+ * Request to send: the clock held low 120 us, then the data line low and the
+ * clock released. The device then clocks eleven times (10-17 kHz): at each
+ * of its first ten falling edges the next bit goes on the data line (data
+ * 0-7, odd parity, the stop bit: released), which it takes at the rising
+ * edge; at the eleventh it pulls the data line low (the acknowledge). The
+ * clock's low half is 30-50 us, so each edge is polled for with the device
+ * interrupts held off (IRQ_EN 0; IE cannot be read back). A device that has
+ * not clocked within 20 ms is not there. */
+
+#define T16 IO16(0xF00004)                /* CYCLE's low half: 10 MHz */
+
+/* the clock line reaches level (PS2_CLK or 0) within us microseconds */
+static int wait_clk(int port, uint16_t level, uint16_t us)
+{
+    uint16_t t0 = T16, ticks = (uint16_t)(us * 10);
+    while ((PS2_STAT(port) & PS2_CLK) != level)
+        if ((uint16_t)(T16 - t0) > ticks)
+            return -1;
+    return 0;
+}
+
 int ps2_send(int port, uint8_t b)
 {
-    PS2_DATA(port) = b;
-    while (PS2_STAT(port) & PS2_SENDING) ;
-    return (PS2_STAT(port) & PS2_NODEV) ? -1 : 0;
+    uint16_t en = IRQ_EN;
+    IRQ_EN = 0;
+    PS2_STAT(port) = PS2_RX_OFF | PS2_CLK_LO;
+    uint16_t t0 = T16;
+    while ((uint16_t)(T16 - t0) < 1200) ;
+    PS2_STAT(port) = PS2_RX_OFF | PS2_CLK_LO | PS2_DAT_LO;
+    PS2_STAT(port) = PS2_RX_OFF | PS2_DAT_LO;             /* the start bit */
+    /* the clock reads high first: the port's filter (three samples, ~4 us)
+     * still shows the host's own low for a moment */
+    int r = wait_clk(port, PS2_CLK, 100);
+    if (r == 0) {
+        r = -1;
+        for (int i = 0; i < 4 && r; i++)                   /* its first clock: up to 20 ms */
+            r = wait_clk(port, 0, 5000);
+    }
+    if (r == 0) {
+        uint8_t x = (uint8_t)(b ^ b >> 4);
+        x ^= (uint8_t)(x >> 2);
+        x ^= (uint8_t)(x >> 1);
+        uint16_t f = (uint16_t)(b | (x & 1 ? 0 : 0x100) | 0x200);   /* odd parity, the stop bit */
+        for (int i = 0; i < 10 && r == 0; i++) {
+            PS2_STAT(port) = (uint16_t)(PS2_RX_OFF | (f & 1 ? 0 : PS2_DAT_LO));
+            f >>= 1;
+            r = wait_clk(port, PS2_CLK, 1000);
+            if (r == 0) r = wait_clk(port, 0, 1000);
+        }
+        /* the acknowledge: data low with the eleventh clock, then both high */
+        if (r == 0) r = wait_clk(port, PS2_CLK, 1000);
+        uint16_t t1 = T16;
+        while ((PS2_STAT(port) & (PS2_CLK | PS2_DAT)) != (PS2_CLK | PS2_DAT))
+            if ((uint16_t)(T16 - t1) > 10000) { r = -1; break; }
+    }
+    PS2_STAT(port) = 0;
+    IRQ_EN = en;
+    return r;
 }
 
 int ps2_recv(int port, uint16_t frames)
