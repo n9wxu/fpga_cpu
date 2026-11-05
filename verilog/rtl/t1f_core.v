@@ -35,6 +35,12 @@
 // Tang Nano 20K's 8 MB of SDRAM). Fetching and data steps wrap from 0xFFFFFF
 // to 0, as fsim's addresses do.
 //
+// IRQ = 1: interrupts (docs/t1.md "Interrupts"), as on T1S. Between
+// instructions, with IE set and the irq line high, the core keeps the next
+// instruction's address in EPC, clears IE and jumps to 0x000010; RETI jumps
+// back to EPC and sets IE, and MTSR SR6 sets IE from bit 0. With IRQ = 0
+// the line is ignored, RETI halts (FF) and MTSR SR6 does nothing.
+//
 // Faults: halted with halt_code FD for an odd address in a word or pair
 // access, and (AW24 = 0) an access or fetch at 0x100000 (stepping over the
 // end of RAM, or an address in 0x100000-0xEFFFFF), and a reset_pc that is
@@ -48,7 +54,8 @@
 
 module t1f_core #(
     parameter EXT_X = 1,              // extension X: MULPU, FSHR, FSHL, CLZ, DSTEP (else they trap as illegal)
-    parameter AW24 = 0                // 1: 24-bit addresses, unfolded (else 21 bits: RAM to 0x0FFFFF, I/O and ROM from 0xF00000)
+    parameter AW24 = 0,               // 1: 24-bit addresses, unfolded (else 21 bits: RAM to 0x0FFFFF, I/O and ROM from 0xF00000)
+    parameter IRQ = 0                 // 1: the interrupt line, EPC and IE, RETI
 ) (
     input  wire        clk,
     input  wire        ce,           // clock enable: low holds everything (a stall)
@@ -59,6 +66,7 @@ module t1f_core #(
     output wire        mem_wr,
     output wire [7:0]  dout,
     input  wire [7:0]  din,
+    input  wire        irq,          // the interrupt line (with IRQ = 1)
     output wire [1:0]  sr_sel,       // which of SR1-SR3 MFSR is reading
     input  wire [15:0] sr_in,        // SR1-SR3 (cycle and instruction counters) live outside the core
     output reg         halted,
@@ -90,6 +98,8 @@ module t1f_core #(
     reg        tagv;
     reg        accz;           // multiply accumulator still zero
     reg        swp;            // multiply operands swapped; in a store, its data is in the temporaries
+    reg [AWI-1:0] epc;         // interrupts: the address to return to
+    reg        ie;             // ... and the enable
     reg        pcx;            // the fetch pointer has run past 0x0FFFFF (reads as 0x100000: no memory there)
 
     // ---------------------------------------------------------------- decode
@@ -445,7 +455,9 @@ module t1f_core #(
     reg [AWI-1:0] pcf_n, ar_n;
     reg [15:0] ir_n, p2_n, nb_n;
     reg [1:0]  nbn_n, l2_n;
-    reg        fN_n, fZ_n, fC_n, fV_n, cy_n, zacc_n, l1_n, sgn_n, cst_n, accz_n, swp_n, pcx_n, pinc;
+    reg        fN_n, fZ_n, fC_n, fV_n, cy_n, zacc_n, l1_n, sgn_n, cst_n, accz_n, swp_n, pcx_n, pinc, ie_n;
+    reg [AWI-1:0] epc_n;
+    reg [1:0]  nbn_pre;
     reg [4:0]  cnt_n;
     reg [2:0]  tag_n;
     reg        tagv_n, tag_set, halted_n;
@@ -480,7 +492,7 @@ module t1f_core #(
         asel = A_RF; bsel = B_RF; aop = OP_ADD; a_shl = 1'b0; shl_in = 1'b0; b_inv = 1'b0; cin = 1'b0;
         bk = k[1:0]; mbyte = 2'd0; sxs = 2'd0; sys = 2'd0; shamt = 4'd0; f_bit = 1'b0; sbase_fill = 1'b0;
         mem_rd_c = 1'b0; mem_wr_c = 1'b0; bus_ar = 1'b0;
-        state_n = state; k_n = k; pcf_n = pcf; ar_n = ar; ir_n = ir; p2_n = p2; nb_n = nb; nbn_n = nbn;
+        state_n = state; k_n = k; pcf_n = pcf; ar_n = ar; epc_n = epc; ie_n = ie; nbn_pre = nbn; ir_n = ir; p2_n = p2; nb_n = nb; nbn_n = nbn;
         fN_n = fN; fZ_n = fZ; fC_n = fC; fV_n = fV; cy_n = cy; zacc_n = zacc; l1_n = l1; l2_n = l2;
         sgn_n = sgn; cst_n = cst; cnt_n = cnt; tag_n = tag; tagv_n = tagv; tag_set = 1'b0;
         accz_n = accz; swp_n = swp; halted_n = halted; halt_code_n = halt_code;
@@ -726,6 +738,7 @@ module t1f_core #(
         C_MTSR: begin
             pf_ok = 1'b1; ra = rbyte(rd_r, 2'd0);
             if (sr == 3'd0) begin fN_n = rfa[3]; fZ_n = rfa[2]; fC_n = rfa[1]; fV_n = rfa[0]; end
+            if (IRQ && sr == 3'd6) ie_n = rfa[0];
             done = 1'b1;
         end
 
@@ -772,7 +785,9 @@ module t1f_core #(
             end
         end
 
-        default: begin halted_n = 1'b1; halt_code_n = tcode; state_n = S_HALT; end   // SYS, RETI, illegal
+        default:
+            if (IRQ && cls == C_TRAP && ir == 16'hA300) begin pcf_n = epc; ie_n = 1'b1; jump = 1'b1; end   // RETI: back to EPC, IE set
+            else begin halted_n = 1'b1; halt_code_n = tcode; state_n = S_HALT; end         // SYS, illegal (and RETI with IRQ = 0)
         endcase
 
         S_DATA: begin                                      // one byte per cycle at AR
@@ -807,6 +822,7 @@ module t1f_core #(
             nbn_n = nbn + 2'd1;
         end
 
+        nbn_pre = nbn_n;                                   // prefetched bytes of the next instruction
         if (done) begin
             k_n = 4'd0;
             if (nbn_n == 2'd2) begin
@@ -814,6 +830,12 @@ module t1f_core #(
                 state_n = (nbn != 2'd2) ? S_DEC : is32(nb) ? S_P2 : S_EX;   // not from din: S_DEC sees is32
             end else
                 state_n = S_FETCH;
+        end
+        // an interrupt, between this instruction and the next: EPC = the next one's address (past
+        // a jump, its target; else the PC less what was prefetched), IE cleared, on at 0x000010
+        if (IRQ && (done || jump) && !bad && ie_n && irq) begin
+            epc_n = jump ? pcf_n : pcf_n - nbn_pre;
+            ie_n = 1'b0; pcf_n = 'h10; jump = 1'b1;
         end
         if (jump) begin k_n = 4'd0; nbn_n = 2'd0; state_n = S_FETCH; pcx_n = 1'b0; end
         else if (!AW24 && pinc && !pcf[20] && binc[20]) pcx_n = 1'b1;   // 0x0FFFFF + 1: no wrap into I/O
@@ -845,14 +867,14 @@ module t1f_core #(
             ir <= 16'd0; p2 <= 16'd0; nb <= 16'd0; nbn <= 2'd0;
             fN <= 1'b0; fZ <= 1'b0; fC <= 1'b0; fV <= 1'b0;
             cy <= 1'b0; zacc <= 1'b0; l1 <= 1'b0; l2 <= 2'd0; sgn <= 1'b0; cst <= 1'b0; cnt <= 5'd0;
-            tag <= 3'd0; tagv <= 1'b0; accz <= 1'b0; swp <= 1'b0;
+            tag <= 3'd0; tagv <= 1'b0; accz <= 1'b0; swp <= 1'b0; epc <= {AWI{1'b0}}; ie <= 1'b0;
             halted <= rbad; halt_code <= rbad ? 8'hFD : 8'd0; retire <= 1'b0;
         end else begin
             state <= state_n; k <= k_n; pcf <= pcf_n; ar <= ar_n;
             ir <= ir_n; p2 <= p2_n; nb <= nb_n; nbn <= nbn_n;
             fN <= fN_n; fZ <= fZ_n; fC <= fC_n; fV <= fV_n;
             cy <= cy_n; zacc <= zacc_n; l1 <= l1_n; l2 <= l2_n; sgn <= sgn_n; cst <= cst_n; cnt <= cnt_n;
-            tag <= tag_n; tagv <= tagv_n; accz <= accz_n; swp <= swp_n; pcx <= pcx_n;
+            tag <= tag_n; tagv <= tagv_n; accz <= accz_n; swp <= swp_n; pcx <= pcx_n; epc <= epc_n; ie <= ie_n;
             halted <= halted_n; halt_code <= halt_code_n;
             retire <= done | jump;
             mop <= mop_n; prod <= prod_n;

@@ -2,7 +2,7 @@
 ; software source of the controller at F00700, entry (EPC, IE cleared, to
 ; 0x000010), RETI (back, IE set), IE as MTSR leaves it, no nesting with IE
 ; clear, and a handler that keeps the flags itself (MFSR/MTSR SR0).
-; cores: t1s
+; cores: t1s t1f
         .org    0x1000
 start:  LA      sp, 0x0F0000
         ; the vector: a long branch to the handler at 0x000010
