@@ -41,11 +41,14 @@ static void scroll_a(uint16_t x, uint16_t y) { IO(0x214) = x; IO(0x216) = y; }
 static void scroll_b(uint16_t x, uint16_t y) { IO(0x228) = x; IO(0x22A) = y; }
 static void backdrop(uint8_t c) { IO(0x202) = c; }
 
+static void spr_flush(void);
+/* the start of vertical blank (FRAME counts there); the sprites' shadow goes out at once */
 static void vsync(void)
 {
     uint16_t f = FRAME;
     while (FRAME == f)
         poll();
+    spr_flush();
 }
 #ifdef FPS
 /* -DFPS: frames drawn a second, on the console every 2 s ("A 30" = section A, 30 frames a second) */
@@ -64,10 +67,11 @@ static void fps_count(char sec)
 #else
 #define fps_count(s)
 #endif
-static void wait_flip(void)
+static void wait_flip(void)                     /* a buffer write taken: the new frame (in its blank) */
 {
     while (IO(0x222) & 1)
         poll();
+    spr_flush();
 }
 
 /* ---------------------------------------------------------------- palette */
@@ -225,30 +229,59 @@ static void tstr(int col, int row, const char *s, uint16_t attr)
 }
 
 /* ---------------------------------------------------------------- hardware sprites */
+/* The attribute words go to a shadow in RAM; vsync() and wait_flip() copy the words that changed to the
+ * hardware at the start of vertical blank, so a sprite never moves part way down the screen (the
+ * hardware takes a write from the next line). */
+static uint16_t spr_sh[256];
+static uint8_t spr_lo = 255, spr_hi;            /* the attribute words changed since the last copy */
+static void spr_mark(uint8_t lo, uint8_t hi)
+{
+    if (lo < spr_lo) spr_lo = lo;
+    if (hi > spr_hi) spr_hi = hi;
+}
+static void spr_flush(void)
+{
+    uint16_t i, n;
+    const uint16_t *p;
+    if (spr_lo > spr_hi) return;
+    IO(0x230) = spr_lo;
+    p = spr_sh + spr_lo;
+    n = (uint16_t)(spr_hi - spr_lo + 1);
+    for (i = 0; i < n; i++) IO(0x232) = *p++;
+    spr_lo = 255; spr_hi = 0;
+}
 static void spr_set(uint8_t n, int x, int y, uint8_t h, uint32_t a, uint8_t wc, uint8_t flip)
 {
+    uint16_t *s = spr_sh + n * 4;
     if (y < -32) y = -32;
     if (x < -32) x = -32;
-    IO(0x230) = (uint16_t)(n * 4);
-    IO(0x232) = (uint16_t)(x + 32);
-    IO(0x232) = (uint16_t)((y + 32) | (h - 1) << 11);
-    IO(0x232) = (uint16_t)a;
-    IO(0x232) = (uint16_t)(0x8000 | wc << 13 | flip << 12 | ((a >> 16) & 15));
+    s[0] = (uint16_t)(x + 32);
+    s[1] = (uint16_t)((y + 32) | (h - 1) << 11);
+    s[2] = (uint16_t)a;
+    s[3] = (uint16_t)(0x8000 | wc << 13 | flip << 12 | ((a >> 16) & 15));
+    spr_mark((uint8_t)(n * 4), (uint8_t)(n * 4 + 3));
 }
 static void spr_xy(uint8_t n, int x, int y, uint8_t h)          /* a move: words 0 and 1 */
 {
+    uint16_t *s = spr_sh + n * 4;
     if (y < -32) y = -32;
     if (x < -32) x = -32;
     if (x > 990) x = 990;
-    IO(0x230) = (uint16_t)(n * 4);
-    IO(0x232) = (uint16_t)(x + 32);
-    IO(0x232) = (uint16_t)((y + 32) | (h - 1) << 11);
+    s[0] = (uint16_t)(x + 32);
+    s[1] = (uint16_t)((y + 32) | (h - 1) << 11);
+    spr_mark((uint8_t)(n * 4), (uint8_t)(n * 4 + 1));
 }
-static void spr_off(uint8_t n) { IO(0x230) = (uint16_t)(n * 4 + 3); IO(0x232) = 0; }
-static void spr_alloff(void)
+static void spr_off(uint8_t n)
+{
+    if (!spr_sh[n * 4 + 3]) return;
+    spr_sh[n * 4 + 3] = 0;
+    spr_mark((uint8_t)(n * 4 + 3), (uint8_t)(n * 4 + 3));
+}
+static void spr_alloff(void)                    /* at once, and in the shadow */
 {
     uint8_t i;
-    for (i = 0; i < 64; i++) spr_off(i);
+    for (i = 0; i < 64; i++) { spr_sh[i * 4 + 3] = 0; IO(0x230) = (uint16_t)(i * 4 + 3); IO(0x232) = 0; }
+    spr_lo = 255; spr_hi = 0;
 }
 
 /* ---------------------------------------------------------------- misc */
