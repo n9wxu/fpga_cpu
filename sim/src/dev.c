@@ -17,6 +17,8 @@ void dev_init(iodev_t *d)
     d->con_out = stdout;
     d->con_stdin = 1;
     snprintf(d->disk, sizeof d->disk, "disk");
+    vidx_reset();
+    audlo_reset();
     dev_reset(d);
 }
 
@@ -84,9 +86,14 @@ void dev_con_in(iodev_t *d, uint16_t ch)
     d->con_tail = n;
 }
 
-/* Frame timing.  A line is 50e6 / (60 * 750) = 1111.1 cycles, so
- * lines = cycles * 9 / 10000. */
-static uint64_t total_lines(uint64_t cycles) { return cycles * 9 / 10000; }
+/* Frame timing: 60 frames of 750 lines a second.  At 50 MHz a line is
+ * 1111.1 cycles, so lines = cycles * 9 / 10000; another clock (fsim --hw)
+ * scales it. */
+uint32_t dev_cpu_hz = CPU_HZ;
+static uint64_t total_lines(uint64_t cycles)
+{
+    return dev_cpu_hz == CPU_HZ ? cycles * 9 / 10000 : cycles * (60u * FRAME_LINES) / dev_cpu_hz;
+}
 uint32_t dev_line(uint64_t cycles) { return (uint32_t)(total_lines(cycles) % FRAME_LINES); }
 int dev_irq(cpu_t *c)
 {

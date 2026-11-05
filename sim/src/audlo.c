@@ -25,6 +25,17 @@ static struct {
     uint32_t wav_frames;
 } A = { .nz = { 1, 1, 1 } };
 
+/* a new machine: the player stopped and its time back to 0 (the --wav file stays) */
+void audlo_reset(void)
+{
+    FILE *w = A.wav;
+    uint32_t wf = A.wav_frames;
+    memset(&A, 0, sizeof A);
+    A.nz[0] = A.nz[1] = A.nz[2] = 1;
+    A.wav = w;
+    A.wav_frames = wf;
+}
+
 static void wav_header(FILE *f, uint32_t frames)
 {
     uint32_t rate = 48828, bytes = frames * 4;
@@ -110,7 +121,9 @@ static void frame(const cpu_t *c)
 
 void audlo_sync(const cpu_t *c)
 {
-    uint64_t want = c->st.cycles / FRAME_CYCLES;
+    /* an output frame every 1024 cycles at 50 MHz: 48828 a second at any clock (fsim --hw) */
+    uint64_t want = dev_cpu_hz == CPU_HZ ? c->st.cycles / FRAME_CYCLES
+                                         : (uint64_t)((double)c->st.cycles * (CPU_HZ / FRAME_CYCLES) / dev_cpu_hz);
     while (A.frames < want) {
         frame(c);
         A.frames++;

@@ -1,6 +1,7 @@
 /* fpga_cpu simulator: WebAssembly front end.
  *
- * Runs BASIC or Doom in the browser.  The page (index.html) calls the
+ * Runs BASIC, Doom, and the demos and benchmarks of sim/tools/programs.py
+ * in the browser, on the hardware chosen (web_set_hw).  The page (index.html) calls the
  * web_* functions below: web_run and web_render once per animation frame,
  * web_key / web_key_up / web_mod for keyboard input, web_sound from the
  * audio callback.  BASIC's disk directory is /disk, an IndexedDB-backed
@@ -79,6 +80,7 @@ EMSCRIPTEN_KEEPALIVE int web_boot_image(const char *vname, const char *path, int
     const variant_t *v = find_variant(vname);
     if (!v)
         return -1;
+    int was_halted = ready && cpu.halted;   /* a halt stops the debugger; a reboot runs again */
     if (ready)
         cpu_free(&cpu);
     else
@@ -102,7 +104,7 @@ EMSCRIPTEN_KEEPALIVE int web_boot_image(const char *vname, const char *path, int
         sym_load(sym);
         snprintf(booted, sizeof booted, "%s", path);
     }
-    if (dbg.mode != DBG_STOPPED)
+    if (dbg.mode != DBG_STOPPED || was_halted)
         dbg.mode = DBG_RUNNING;
     serial_len = 0;
     ready = 1;
@@ -116,6 +118,42 @@ EMSCRIPTEN_KEEPALIVE int web_boot(const char *vname)
     snprintf(path, sizeof path, "/rom/basic.%s.bin", vname);
     return web_boot_image(vname, path, 0x1000, 0, "/disk");
 }
+
+/* ---- hardware (fsim --hw) and keys ---- */
+
+/* the profiles as JSON: [{name, title, about, xram, hz, tc}] */
+EMSCRIPTEN_KEEPALIVE const char *web_hw_list(void)
+{
+    out_len = 0;
+    put("[");
+    for (int i = 0; i < NUM_HW; i++) {
+        const hw_t *h = &hw_profiles[i];
+        put("%s{\"name\":", i ? "," : "");
+        put_str(h->name);
+        put(",\"title\":");
+        put_str(h->title);
+        put(",\"about\":");
+        put_str(h->about);
+        put(",\"xram\":%u,\"hz\":%u,\"tc\":%d}", h->xram_mb, h->hz, h->true_color);
+    }
+    put("]");
+    return out;
+}
+
+/* Choose the hardware for the next boot: the video tier and the clock. Returns its expansion RAM in
+ * MB (for web_boot_image), -1 if the name is unknown. */
+EMSCRIPTEN_KEEPALIVE int web_set_hw(const char *name)
+{
+    const hw_t *h = find_hw(name);
+    if (!h)
+        return -1;
+    video_hicol8 = h->hicolor;
+    dev_cpu_hz = h->hz;
+    return (int)h->xram_mb;
+}
+EMSCRIPTEN_KEEPALIVE double web_hz(void) { return dev_cpu_hz; }
+/* type keys after boot, as fsim --keys ("\\n" = Enter) */
+EMSCRIPTEN_KEEPALIVE void web_keys(const char *s) { push_keys(&cpu.dev, s); }
 
 /* Run up to `cycles` CPU cycles (fewer if the program stops or a breakpoint hits). */
 EMSCRIPTEN_KEEPALIVE void web_run(double cycles)
