@@ -48,6 +48,87 @@ static void serial_hook(void *, int ch)
         serial.erase(0, 100000);
 }
 
+// ---- the program and the hardware (the catalogue: sim/tools/programs.py) ----
+
+static prog_t *progs;
+static int nprogs, cur_prog = -1;
+static SDL_Window *main_win;
+static SDL_AudioDeviceID g_audio;               // locked while the machine is rebuilt (its callback reads it)
+static std::string sym_path;
+
+static void set_title()
+{
+    if (!main_win)
+        return;
+    char t[700];
+    const hw_t *h = opt.hw ? find_hw(opt.hw) : nullptr;
+    snprintf(t, sizeof t, "fsim-gui: %s (variant %s, %s)", cur_prog >= 0 ? progs[cur_prog].title : opt.image, opt.vname,
+             h ? h->title : "Simulator");
+    SDL_SetWindowTitle(main_win, t);
+}
+
+// a new machine for opt: the CPU, the image, the symbols; the debugger and the console start over
+static bool boot_machine()
+{
+    if (g_audio)
+        SDL_LockAudioDevice(g_audio);
+    struct unlock { ~unlock() { if (g_audio) SDL_UnlockAudioDevice(g_audio); } } u;
+    dbg_free(&dbg);
+    cpu_free(&cpu);
+    sym_free();
+    if (setup_cpu(&cpu, &opt))
+        return false;
+    cpu.dev.con_stdin = 0;
+    cpu.dev.con_hook = serial_hook;
+    dbg_init(&dbg, &cpu);
+    dbg.mode = DBG_RUNNING;
+    serial.clear();
+    set_title();
+    return true;
+}
+
+static bool choose_program(int i)
+{
+    const prog_t *p = &progs[i];
+    const hw_t *h = find_hw(p->hw);
+    cur_prog = i;
+    opt.image = p->image;
+    opt.vname = p->variant;
+    opt.load = p->load;
+    opt.entry = p->entry;
+    opt.keys = p->keys[0] ? p->keys : nullptr;
+    opt.disk = p->disk[0] ? p->disk : "disk";
+    if (h)
+        apply_hw(&opt, h);
+    if (p->xram >= 0)
+        opt.cfg.xram_mb = (uint32_t)p->xram;
+    sym_path = std::string(p->image, strlen(p->image) - 4) + ".sym";
+    FILE *f = fopen(sym_path.c_str(), "r");
+    opt.sym = f ? sym_path.c_str() : nullptr;
+    if (f)
+        fclose(f);
+    return boot_machine();
+}
+
+static void load_catalog(const char *argv0)
+{
+    std::string path;
+    if (opt.programs) {
+        path = opt.programs;
+    } else {
+        char *base = SDL_GetBasePath();          // fsim-gui's folder (sim/build)
+        path = std::string(base ? base : "./") + "programs/catalog.tsv";
+        SDL_free(base);
+    }
+    nprogs = catalog_load(path.c_str(), &progs);
+    if (nprogs < 0) {
+        nprogs = 0;
+        if (opt.programs)
+            fprintf(stderr, "%s: cannot read the catalogue\n", path.c_str());
+    }
+    (void)argv0;
+}
+
 static void reset_machine()
 {
     memset(cpu.sram, 0, cpu.ram_size);
@@ -229,7 +310,7 @@ static void win_controls()
     ImGui::SameLine();
     ImGui::SetNextItemWidth(110);
     int sp = max_speed ? 1 : 0;
-    if (ImGui::Combo("##speed", &sp, "50 MHz\0Max\0"))
+    if (ImGui::Combo("##speed", &sp, "Real time\0Max\0"))
         max_speed = sp == 1;
     ImGui::SameLine();
     // hi-color bitmap: the board's 3-bit VGA (2x2 dither) or the full 8-bit indexed palette
@@ -394,8 +475,8 @@ static void win_memory()
 {
     static char go[64];
     static int scroll_to = -1;
-    ImGui::SetNextWindowPos(ImVec2(0, 590), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(600, 410), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(0, 680), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(600, 320), ImGuiCond_FirstUseEver);
     ImGui::Begin("Memory");
     ImGui::SetNextItemWidth(160);
     if (ImGui::InputTextWithHint("##go", "address or symbol", go, sizeof go, ImGuiInputTextFlags_EnterReturnsTrue)) {
@@ -443,8 +524,8 @@ static void win_serial()
 {
     static char input[256];
     static size_t last_len;
-    ImGui::SetNextWindowPos(ImVec2(600, 590), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(380, 410), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(600, 680), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(380, 320), ImGuiCond_FirstUseEver);
     ImGui::Begin("Serial console");
     float h = ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing();
     ImGui::BeginChild("out", ImVec2(0, h), ImGuiChildFlags_Borders);
@@ -535,6 +616,54 @@ static void win_board()
 
 static double pct(uint64_t a, uint64_t b) { return b ? 100.0 * (double)a / (double)b : 0.0; }
 
+static void win_machine()
+{
+    ImGui::SetNextWindowPos(ImVec2(0, 590), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(980, 90), ImGuiCond_FirstUseEver);
+    ImGui::Begin("Program and hardware");
+    static const char *kinds[3][2] = {{"demo", "Demos"}, {"bench", "Benchmarks"}, {"app", "Programs"}};
+    ImGui::SetNextItemWidth(330);
+    if (ImGui::BeginCombo("Program", cur_prog >= 0 ? progs[cur_prog].title : opt.image)) {
+        for (int k = 0; k < 3; k++) {
+            ImGui::SeparatorText(kinds[k][1]);
+            for (int i = 0; i < nprogs; i++)
+                if (!strcmp(progs[i].kind, kinds[k][0])) {
+                    ImGui::PushID(i);
+                    if (ImGui::Selectable(progs[i].title, i == cur_prog))
+                        choose_program(i);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("%s\n(made for: %s)", progs[i].about, progs[i].hw);
+                    ImGui::PopID();
+                }
+        }
+        ImGui::EndCombo();
+    }
+    if (!nprogs) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("(no catalogue: sim/tools/programs.py)");
+    }
+    const hw_t *h = opt.hw ? find_hw(opt.hw) : &hw_profiles[0];
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(200);
+    if (ImGui::BeginCombo("Hardware", h->title)) {
+        for (int i = 0; i < NUM_HW; i++) {
+            if (ImGui::Selectable(hw_profiles[i].title, h == &hw_profiles[i]) && h != &hw_profiles[i]) {
+                apply_hw(&opt, &hw_profiles[i]);
+                if (cur_prog >= 0 && progs[cur_prog].xram > (int)opt.cfg.xram_mb)
+                    opt.cfg.xram_mb = (uint32_t)progs[cur_prog].xram;   // the program needs it
+                boot_machine();
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s", hw_profiles[i].about);
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::TextWrapped("%s", cur_prog >= 0 ? progs[cur_prog].about : "");
+    ImGui::TextDisabled("%s, %.1f MHz, %u MB%s", h->title, dev_cpu_hz / 1e6, 1 + opt.cfg.xram_mb,
+                        cur_prog >= 0 && strcmp(progs[cur_prog].hw, h->name) ? "  (made for other hardware)" : "");
+    ImGui::End();
+}
+
 static void win_stats()
 {
     const stats_t *s = &cpu.st;
@@ -595,12 +724,18 @@ int main(int argc, char **argv)
 {
     if (opts_parse(&opt, argc, argv, 1))
         opts_usage(1);
-    if (setup_cpu(&cpu, &opt))
-        return 2;
-    cpu.dev.con_stdin = 0;
-    cpu.dev.con_hook = serial_hook;
-    max_speed = opt.max_speed;
+    load_catalog(argv[0]);
     dbg_init(&dbg, &cpu);
+    if (opt.image) {
+        if (!boot_machine())
+            return 2;
+    } else if (!nprogs) {
+        fprintf(stderr, "fsim-gui: no image, and no programs (build them: sim/tools/programs.py)\n");
+        opts_usage(1);
+    } else if (!choose_program(0)) {
+        return 2;
+    }
+    max_speed = opt.max_speed;
     dbg.mode = opt.paused ? DBG_STOPPED : DBG_RUNNING;
     if (getenv("FSIM_GUI_SELFTEST"))
         return selftest();
@@ -610,10 +745,10 @@ int main(int argc, char **argv)
         return 1;
     }
     SDL_SetHint(SDL_HINT_IME_SHOW_UI, "1");
-    char title[300];
-    snprintf(title, sizeof title, "fsim-gui: %s (variant %s)", opt.image, opt.vname);
-    SDL_Window *win = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1680, 1000,
+    SDL_Window *win = SDL_CreateWindow("fsim-gui", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1680, 1000,
                                        SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+    main_win = win;
+    set_title();
     SDL_Renderer *ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     if (!win || !ren) {
         fprintf(stderr, "SDL: %s\n", SDL_GetError());
@@ -631,6 +766,7 @@ int main(int argc, char **argv)
     SDL_AudioDeviceID audio = SDL_OpenAudioDevice(nullptr, 0, &want, &have, 0);
     if (audio)
         SDL_PauseAudioDevice(audio, 0);
+    g_audio = audio;
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -697,7 +833,7 @@ int main(int argc, char **argv)
                 while (dbg.mode != DBG_STOPPED && SDL_GetPerformanceCounter() < stop)
                     dbg_run(&dbg, 200000);
             } else {
-                dbg_run(&dbg, (uint64_t)(dt * CPU_HZ));
+                dbg_run(&dbg, (uint64_t)(dt * dev_cpu_hz));
             }
             mhz_cycles += (double)(cpu.st.cycles - c0);
             if (opt.max_cycles && cpu.st.cycles >= opt.max_cycles)
@@ -718,6 +854,7 @@ int main(int argc, char **argv)
         ImGui::NewFrame();
         win_display(tex);
         win_controls();
+        win_machine();
         win_registers();
         win_disasm();
         win_memory();

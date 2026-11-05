@@ -53,6 +53,7 @@ front ends take the same options (`fsim -h`):
 | `--sym FILE` | symbols, lines of `%06x name`; used by the GUI's disassembly |
 | `--keys STRING` | preload the keyboard queue (`\n` = Enter, `\e` = Esc) |
 | `--screenshot FILE` | write the 1280×720 display as PPM at exit |
+| `--hw sim\|spartan3\|tang\|big` | the hardware (below): the video tier, the RAM, the colours and the clock; later options override parts of it |
 | `--true-color` | show hi-color palette colors instead of the 3-bit dither |
 | `--trace`, `--json FILE`, `-q` | headless only: instruction trace, statistics, no summary |
 | `--dump A:N:FILE` | headless only: write N bytes of memory from A at exit |
@@ -64,6 +65,35 @@ front ends take the same options (`fsim -h`):
 The I/O registers and the memory layout are in [docs/io.md](../docs/io.md).
 Headless, `CON_OUT` goes to stdout and `CON_IN` reads stdin.
 
+## Hardware
+
+`--hw` picks the machine a program was made for (`fsim -h` lists them). The clock is set so a program
+runs at about the speed of the board's CPU (its measured MIPS at fsim's cycles per instruction on the
+demos, about 1.5); video timing and the low tier's sound follow the clock.
+
+| `--hw` | Machine | Clock | RAM | Video |
+|---|---|---|---|---|
+| `sim` (default) | the reference machine | 50 MHz | 1 MB | every mode, the 3-bit dither shown |
+| `spartan3` | the Spartan-3 board (T1F, about 2 MIPS) | 3 MHz | 1 MB | the low tier: 8- and 16-colour bitmaps, no palette or video extensions; its sound player |
+| `tang` | the Tang Nano 20K (T1F, about 6.5 MIPS) | 10 MHz | 8 MB | the high tier in true colour: palette, two playfields, line scroll, sprites, blitter |
+| `big` | the reference machine for Doom | 50 MHz | 15 MB | as `sim` |
+
+The Tang's 32-voice audio engine (F01000) is not simulated: the demos that play on it notice and run
+silent, keeping time by the video frames.
+
+## Programs
+
+`tools/programs.py` builds the demos and benchmarks (the apps' Makefiles, fcc, the assembler,
+`benchmarks/run.py`'s C builds, BASIC with the benchmark programs as its disk) into `build/programs/`
+and lists them in `build/programs/catalog.tsv`: name, kind, the hardware it was made for, how to load
+it. `--list` shows them; `FCC=...` points at another checkout's toolchain. A program whose build fails is
+left out. fsim-gui and the web page (`make -C web progs`) offer what was built.
+
+```sh
+.venv/bin/python sim/tools/programs.py      # build/programs/*.bin, catalog.tsv
+sim/build/fsim-gui                          # with no image: the first program, on its own hardware
+```
+
 ## GUI
 
 ```sh
@@ -73,7 +103,8 @@ sim/build/fsim-gui sim/build/video.bin --sym video.sym
 | Window | Contents |
 |---|---|
 | Display | the 1280×720 output. Click it to type: keys go to the keyboard queue as the io.md key codes |
-| Controls | Run (F5), Stop, Step (F11), Step Over (F10, steps over `JAL`/`JALR`), Step Out (runs until a `JR` returns from the current frame), Reset (reloads the image), speed: real time 50 MHz or as fast as possible |
+| Controls | Run (F5), Stop, Step (F11), Step Over (F10, steps over `JAL`/`JALR`), Step Out (runs until a `JR` returns from the current frame), Reset (reloads the image), speed: real time (at the hardware's clock) or as fast as possible |
+| Program and hardware | the program (demos, benchmarks and programs from the catalogue, `--programs FILE`) and the hardware (`--hw`); a choice builds the machine again. A program brings its own hardware; another can be picked after it |
 | Registers | r0–r15 (editable while stopped), the pairs with symbol names, PC, NZCV, cycles, frame and scan line |
 | Disassembly | follows the PC, shows labels from `--sym`; click a line to toggle a breakpoint; go to an address or symbol |
 | Memory | hex and ASCII over the whole 24-bit space; go to an address or symbol |

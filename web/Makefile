@@ -1,6 +1,7 @@
-# fpga_cpu BASIC and Doom in the browser: the simulator core compiled to WebAssembly
-#   make         build build/{index.html,fsim.js,fsim.wasm,fsim.data} and Doom's
+# fpga_cpu BASIC, Doom, demos and benchmarks in the browser: the simulator core compiled to WebAssembly
+#   make         build build/{index.html,fsim.js,fsim.wasm,fsim.data}, Doom's
 #                build/{doom.A.bin,doom.B.bin,doom.A.sym,doom.B.sym,DOOM.WAD.gz,FREEDOOM-COPYING.txt}
+#                and the demos and benchmarks, build/progs (make progs)
 #   make serve   build, then serve on http://localhost:8000
 #   make deploy  build, then rsync to $(DEPLOY), e.g. user@host:/srv/www/basic/
 #                (set DEPLOY on the command line or in web/local.mk, which git ignores)
@@ -14,7 +15,8 @@ BUILD  := build
 EMCC   ?= emcc
 -include local.mk
 
-CORE   := $(SIM)/src/cpu.c $(SIM)/src/dev.c $(SIM)/src/video.c $(SIM)/src/front.c $(SIM)/src/dbg.c $(SIM)/src/font8x14.c \
+CORE   := $(SIM)/src/cpu.c $(SIM)/src/dev.c $(SIM)/src/video.c $(SIM)/src/vidx.c $(SIM)/src/audlo.c $(SIM)/src/ps2.c \
+          $(SIM)/src/front.c $(SIM)/src/dbg.c $(SIM)/src/font8x14.c \
           $(SIM)/src/gen/isa_gen.c $(SIM)/src/gen/exec_gen.c
 ROMS   := $(BASIC)/build/basic.A.bin $(BASIC)/build/basic.B.bin
 SYMS   := $(ROMS:.bin=.sym)
@@ -29,9 +31,15 @@ EMFLAGS := -O3 -std=gnu11 -Wall -Wno-unused-parameter -I$(SIM)/src \
            -sEXPORTED_FUNCTIONS=_main,_malloc \
            -sEXPORTED_RUNTIME_METHODS=FS,IDBFS,ccall,UTF8ToString,HEAPU8,HEAPF32 \
            $(foreach r,$(ROMS) $(SYMS),--preload-file $(r)@/rom/$(notdir $(r))) \
-           --preload-file $(BASIC)/examples@/examples
+           --preload-file $(BASIC)/examples@/examples --preload-file $(ROOT)/benchmarks/basic@/bench
 
-all: $(BUILD)/fsim.js $(BUILD)/index.html doom
+all: $(BUILD)/fsim.js $(BUILD)/index.html doom progs
+
+# the demos and benchmarks (sim/tools/programs.py): build/progs/<name>.bin and .sym, and catalog.json,
+# which the page reads; the page fetches an image when it is picked
+PY ?= $(if $(wildcard $(ROOT)/.venv/bin/python),$(ROOT)/.venv/bin/python,python3)
+progs:
+	$(PY) $(SIM)/tools/programs.py --out $(BUILD)/progs --json
 
 # Doom is fetched by the page when picked, not preloaded
 doom: $(BUILD)/doom.A.bin $(BUILD)/doom.B.bin $(BUILD)/doom.A.sym $(BUILD)/doom.B.sym $(BUILD)/DOOM.WAD.gz $(BUILD)/FREEDOOM-COPYING.txt
@@ -83,4 +91,4 @@ deploy: all
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all doom serve deploy clean
+.PHONY: all doom progs serve deploy clean

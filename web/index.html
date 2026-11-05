@@ -78,10 +78,11 @@
     <div id="hint">Loading…</div>
   </div>
   <div class="bar">
-    <label>Program <select id="prog"><option value="basic">BASIC</option><option value="doom">Doom</option></select></label>
+    <label>Program <select id="prog"><optgroup label="Programs"><option value="basic">BASIC</option><option value="doom">Doom</option></optgroup></select></label>
+    <label>Hardware <select id="hw"></select></label>
     <button id="reset">Reset</button>
     <label>Encoding <select id="variant"><option>A</option><option>B</option></select></label>
-    <label>Speed <select id="speed"><option value="1">50 MHz (real)</option><option value="0">Maximum</option></select></label>
+    <label>Speed <select id="speed"><option value="1">Real time</option><option value="0">Maximum</option></select></label>
     <label>Colors <select id="color"><option value="0">3-bit (board)</option><option value="1">Full palette</option></select></label>
     <button id="sound">Sound off</button>
     <span id="diskui"><label>Disk <select id="files"></select></label>
@@ -157,15 +158,42 @@
   </details>
 </main>
 <script>
-const CPU_HZ = 50e6;
+let CPU_HZ = 50e6;      // the chosen hardware's clock (web_hz)
+let catalog = [], hwList = [];
 const $ = id => document.getElementById(id);
 const canvas = $('screen'), ctx = canvas.getContext('2d'), hint = $('hint');
 for (let i = 0; i < 8; i++) $('leds').appendChild(document.createElement('i'));
 
 var Module = {
   print: s => console.log(s), printErr: s => console.warn(s),
-  onRuntimeInitialized() { mountDisk().then(() => boot($('variant').value)); },
+  onRuntimeInitialized() { setupPrograms().then(mountDisk).then(() => boot($('variant').value)); },
 };
+
+// The hardware profiles (as fsim --hw), and the demos and benchmarks that web/Makefile built
+// (progs/catalog.json, from sim/tools/programs.py). ?prog=NAME and ?hw=NAME pick them.
+async function setupPrograms() {
+  hwList = JSON.parse(UTF8ToString(Module._web_hw_list()));
+  for (const h of hwList) { const o = new Option(h.title, h.name); o.title = h.about; $('hw').add(o); }
+  try { const r = await fetch('progs/catalog.json'); if (r.ok) catalog = await r.json(); } catch (e) {}
+  const groups = { demo: 'Demos', bench: 'Benchmarks' };
+  for (const k in groups) {
+    const g = document.createElement('optgroup');
+    g.label = groups[k];
+    for (const p of catalog.filter(p => p.kind === k)) {
+      const o = new Option(p.title, 'p:' + p.name);
+      o.title = p.about + ' (made for: ' + p.hw + ')';
+      g.appendChild(o);
+    }
+    if (g.children.length) $('prog').appendChild(g);
+  }
+  const q = new URLSearchParams(location.search), want = q.get('prog');
+  if (want && [...$('prog').options].some(o => o.value === want || o.value === 'p:' + want))
+    $('prog').value = want === 'basic' || want === 'doom' ? want : 'p:' + want;
+  $('hw').value = defaultHw();
+  if (q.get('hw') && hwList.some(h => h.name === q.get('hw'))) $('hw').value = q.get('hw');
+}
+function progEntry() { const v = $('prog').value; return v.startsWith('p:') ? catalog.find(p => 'p:' + p.name === v) : null; }
+function defaultHw() { const p = progEntry(), v = $('prog').value; return p ? p.hw : v === 'doom' ? 'big' : 'sim'; }
 
 // /disk lives in IndexedDB; the first time, it is filled with the examples.
 function mountDisk() {
@@ -212,11 +240,16 @@ let cpuMs = 0, drawMs = 0, cyclesPerMs = 50e3, running = false, lastT = 0, lastC
 let booting = 0;
 let dirty = true;   // the machine changed while stopped: redraw the screen and the debugger
 function boot(v) {
-  const prog = $('prog').value, n = ++booting;
+  const prog = $('prog').value, n = ++booting, entry = progEntry();
   running = false;
   releaseAll();
+  const xram = Module.ccall('web_set_hw', 'number', ['string'], [$('hw').value]);
+  CPU_HZ = Module._web_hz();
+  if ((hwList.find(h => h.name === $('hw').value) || {}).tc) $('color').value = '1';   // the board shows the palette
   $('diskui').style.display = prog === 'basic' ? '' : 'none';
-  (prog === 'doom' ? bootDoom(v) : Promise.resolve(Module.ccall('web_boot', 'number', ['string'], [v])))
+  (prog === 'doom' ? bootDoom(v) : entry ? bootProg(entry, v, xram)
+   : Promise.resolve(Module.ccall('web_boot_image', 'number', ['string', 'string', 'number', 'number', 'string'],
+                                  [v, '/rom/basic.' + v + '.bin', 0x1000, xram, '/disk'])))
     .then(r => {
       if (n !== booting) return;
       if (r !== 0) { hint.textContent = 'Boot failed'; hint.style.display = ''; return; }
@@ -226,7 +259,7 @@ function boot(v) {
       serialText = '';
       canvas.focus();
       if (prog === 'basic') typeKeys();
-    }, e => { if (n === booting) { hint.textContent = 'Doom: ' + e; hint.style.display = ''; } });
+    }, e => { if (n === booting) { hint.textContent = 'Loading failed: ' + e; hint.style.display = ''; } });
 }
 
 // Doom: its image and the Freedoom WAD (gzipped) are fetched the first time,
@@ -264,6 +297,32 @@ async function bootDoom(v) {
   $('color').value = '1';   // Doom's 256-color palette, not the board's 3-bit dither
   return Module.ccall('web_boot_image', 'number', ['string', 'string', 'number', 'number', 'string'],
                       [v, img, 0x100000, 14, '/doom']);
+}
+
+// A demo or benchmark from the catalogue: its image (and symbols) fetched the first time. The
+// BASIC benchmarks run BASIC with the benchmark programs as its disk (/bench) and type RUN.
+async function bootProg(p, v, xram) {
+  let img, disk = '/disk';
+  if (p.name.startsWith('basic-')) {
+    img = '/rom/basic.' + v + '.bin';
+    disk = '/bench';
+  } else {
+    $('variant').value = v = p.variant;        // built for one encoding
+    img = '/rom/progs/' + p.name + '.bin';
+    if (!FS.analyzePath('/rom/progs').exists) FS.mkdir('/rom/progs');
+    if (!FS.analyzePath(img).exists) {
+      hint.style.display = '';
+      FS.writeFile(img, new Uint8Array(await (await fetchBytes('progs/' + p.name + '.bin', p.title)).arrayBuffer()));
+      try {
+        FS.writeFile(img.replace(/\.bin$/, '.sym'),
+                     new Uint8Array(await (await fetchBytes('progs/' + p.name + '.sym', 'symbols')).arrayBuffer()));
+      } catch (e) {}
+    }
+  }
+  const r = Module.ccall('web_boot_image', 'number', ['string', 'string', 'number', 'number', 'string'],
+                         [v, img, parseInt(p.load, 16), p.xram === '-' ? xram : Math.max(xram, +p.xram), disk]);
+  if (r === 0 && p.keys !== '-') Module.ccall('web_keys', null, ['string'], [p.keys]);
+  return r;
 }
 
 // ?keys=TEXT types TEXT after boot (\n = Enter), like fsim-gui --keys
@@ -383,9 +442,9 @@ $('sound').onclick = () => {
 
 // ---- controls ----
 $('reset').onclick = () => boot($('variant').value);
-// ?prog=doom starts Doom
-if (new URLSearchParams(location.search).get('prog') === 'doom') $('prog').value = 'doom';
-$('prog').onchange = () => boot($('variant').value);
+// ?prog=NAME and ?hw=NAME: setupPrograms
+$('prog').onchange = () => { $('hw').value = defaultHw(); boot($('variant').value); };
+$('hw').onchange = () => boot($('variant').value);
 $('variant').onchange = () => boot($('variant').value);
 $('speed').onchange = () => canvas.focus();
 // hi-color display: ?color=full, else the last choice
