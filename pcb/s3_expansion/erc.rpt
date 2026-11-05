@@ -1,9 +1,25 @@
-ERC report (2026-11-02T22:46:11, Encoding UTF8)
-Report includes: Errors, Warnings, Exclusions
+ERC report (2026-11-04T21:23:22, Encoding UTF8)
+Report includes: Errors, Warnings
 
 ***** Sheet /
+[pin_to_pin]: Pins of type Tri-state and Power input are connected
+    ; warning
+    @(457.20 mm, 152.40 mm): Symbol U6 Pin 6 [A4, Tri-state, Line]
+    @(469.90 mm, 175.26 mm): Symbol U6 Pin 10 [GND, Power input, Line]
+[pin_to_pin]: Pins of type Tri-state and Power input are connected
+    ; warning
+    @(457.20 mm, 154.94 mm): Symbol U6 Pin 7 [A5, Tri-state, Line]
+    @(469.90 mm, 175.26 mm): Symbol U6 Pin 10 [GND, Power input, Line]
+[pin_to_pin]: Pins of type Tri-state and Power input are connected
+    ; warning
+    @(457.20 mm, 157.48 mm): Symbol U6 Pin 8 [A6, Tri-state, Line]
+    @(469.90 mm, 175.26 mm): Symbol U6 Pin 10 [GND, Power input, Line]
+[pin_to_pin]: Pins of type Tri-state and Power input are connected
+    ; warning
+    @(457.20 mm, 160.02 mm): Symbol U6 Pin 9 [A7, Tri-state, Line]
+    @(469.90 mm, 175.26 mm): Symbol U6 Pin 10 [GND, Power input, Line]
 
- ** ERC messages: 0  Errors 0  Warnings 0
+ ** ERC messages: 4  Errors 0  Warnings 4
 
  ** Ignored checks:
     - Global label only appears once in the schematic
