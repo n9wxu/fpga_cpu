@@ -96,12 +96,18 @@ module system #(
     reg  cpu_ce = 1'b0;
     wire ce;
     wire cpu_clk;
-`ifdef SIM
+`ifdef T1F
+    // T1F is synchronous (SYNC): it runs on fclk. Its step's clock is enabled by ce (the end of the
+    // period below, where T1's edge used to be); the clock before it, its register-file read, always
+    assign cpu_clk = fclk;
+    wire   t1_step_clk;
+    wire   t1_ce = t1_step_clk ? ce : 1'b1;
+`elsif SIM
     reg ce_l = 1'b0;
     always @(negedge fclk) ce_l <= ce;
     assign cpu_clk = fclk & ce_l;
 `else
-    DQCE gate (.CLKIN(fclk), .CE(ce), .CLKOUT(cpu_clk));
+    DQCE gate (.CLKIN(fclk), .CE(ce), .CLKOUT(cpu_clk));     // T1: a gated clock
 `endif
 
     // ---- T1 -------------------------------------------------------------------
@@ -121,8 +127,8 @@ module system #(
 `ifdef T1F
     // 24-bit addresses: T1F reaches all 8 MB of the SDRAM (T1 folds its addresses to 1 MB);
     // interrupts from iosys's controller (F00700): the vertical blank, the audio engine
-    t1f_core #(.EXT_X(0), .AW24(1), .IRQ(1)) cpu (
-        .clk(cpu_clk), .ce(1'b1), .rst(t1_rst), .reset_pc(entry), .irq(t1_irq),
+    t1f_core #(.EXT_X(0), .AW24(1), .IRQ(1), .SYNC(1)) cpu (
+        .clk(cpu_clk), .ce(t1_ce), .rst(t1_rst), .reset_pc(entry), .irq(t1_irq), .step_clk(t1_step_clk),
 `else
     t1_core #(.EXT_X(0)) cpu (
         .clk(cpu_clk), .rst(t1_rst), .reset_pc(entry),
