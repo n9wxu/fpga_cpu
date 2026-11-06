@@ -26,8 +26,8 @@
 #define MC_MON_LO    MC_REG(0x26)
 #define MC_MON_HI    MC_REG(0x28)
 
-#define MC_NODE_BASE 0x300000UL             /* the node pool: 32 nodes of 64 bytes */
-#define MC_NNODES    32
+#define MC_NODE_BASE 0x300000UL             /* the node pool: 64 nodes of 64 bytes */
+#define MC_NNODES    64
 #define MC_NODE(i)   ((volatile uint32_t *)(MC_NODE_BASE + 64UL * (uint32_t)(i)))
 #define MC_WADDR(p)  ((uint32_t)(p) >> 2)   /* the engine's addresses are SDRAM word addresses */
 

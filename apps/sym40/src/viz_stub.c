@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <fcpu.h>
 #include "viz.h"
-void viz_init(void) {}
+void viz_init(const viz_cfg_t *c) { (void)c; }
 void viz_frame(const viz_t *v)
 {
     static uint16_t bar;

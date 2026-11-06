@@ -14,6 +14,15 @@
 #include "score.h"
 #include "instruments.h"
 
+enum { VI_VIOLIN1, VI_VIOLIN2, VI_VIOLA, VI_CELLO, VI_BASS, VI_FLUTE, VI_OBOE, VI_CLARINET, VI_BASSOON, VI_HORN, VI__N };
+static const char *const sec_name[VI__N] = { "Vln I", "Vln II", "Viola", "Cello", "Bass", "Flute", "Oboe", "Clar", "Bsn", "Horn" };
+static const uint8_t sec_rgb[VI__N][3] = {
+    { 255, 214, 90 }, { 255, 160, 60 }, { 255, 105, 80 }, { 230, 60, 110 }, { 170, 90, 230 },   /* strings: gold to violet */
+    { 90, 230, 255 }, { 110, 240, 140 }, { 80, 160, 255 }, { 200, 220, 90 }, { 255, 250, 210 },  /* winds, horn */
+};
+#define VIZ_LOOK (16 * 16)              /* the falling notes listed: 16 eighths ahead (12 pixels each) */
+static const viz_cfg_t viz_cfg = { VI__N, sec_name, sec_rgb, 12 * 16 };
+
 #define TICK_BLOCKS 208                 /* an eighth note at half note = 108: 1500 * 60 / 432 */
 
 typedef struct {
@@ -217,6 +226,8 @@ static void monitor(void)
     }
     v.bar = (uint16_t)(t / 8 + 1);
     v.beat = (uint16_t)((t / 4) & 1);
+    v.voices = NNODES;
+    v.progress = (uint16_t)((uint32_t)t * 65535u / SC_TICKS);
     v.blocks_busy = MC_CLOCKS;
     v.underruns = (uint16_t)(MC_UNDER - under0);
     v.section = sc_section_name[sc_bar_section[t / 8 < SC_BARS ? t / 8 : SC_BARS - 1]];
@@ -231,7 +242,7 @@ int main(void)
     }
     mc_init();
     v.title = "W. A. Mozart: Symphony No. 40 in G minor, K. 550 - I. Molto allegro";
-    viz_init();
+    viz_init(&viz_cfg);
     last_blocks = MC_BLOCKS;
     start();                            /* the list, before the engine has one: it renders only then */
     irq_on(IRQ_AUDIO, on_block);

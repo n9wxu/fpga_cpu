@@ -1,4 +1,4 @@
-/* The Symphony No. 40 visualizer: see viz.h. Falling notes over a keyboard (the keys light in their
+/* The falling-notes visualizer (sym40, toccata): see viz.h. Falling notes over a keyboard (the keys light in their
  * instrument's colour), sparks and a flash where each note lands, and under the keyboard the
  * sections' bouncing balls over a fire the notes feed. Registers: docs/io.md "Video", "Video
  * extensions", "Blitter". The video registers are write-only: the copies here are the truth.
@@ -7,7 +7,7 @@
  * coming into view at the top are drawn, and B's vertical scroll moves them all down; playfield A is
  * transparent over the falling area and opaque on the keyboard, so a note slides under the keys.
  * Hardware it works every frame: playfield B's scroll, the blitter (the new rows, changed keys), all
- * 64 hardware sprites (54 landing flashes, 10 bouncers) sent in vertical blank, the palette (stars
+ * 64 hardware sprites (54 landing flashes, a bouncer a section) sent in vertical blank, the palette (stars
  * twinkle), double-buffered playfield A (sparks, fire), the text layer. */
 #include <stdint.h>
 #include <math.h>
@@ -58,7 +58,6 @@ enum { C_BLACK = 1, C_WHITE, C_GREY, C_DIM, C_KEYGAP, C_BLACKKEY, C_RAIL, C_BARB
 #define BKEY_H     34
 #define BARS_Y     296                          /* the fire and the bouncers: 296-333 */
 #define BARS_H     38
-#define PX_TICK    12                           /* the notes fall 12 pixels an eighth note */
 #define LOW_MIDI   24                           /* the keyboard: C1 to C7, 43 white keys of 14 pixels */
 #define HIGH_MIDI  96
 #define WKEY       14
@@ -66,20 +65,10 @@ enum { C_BLACK = 1, C_WHITE, C_GREY, C_DIM, C_KEYGAP, C_BLACKKEY, C_RAIL, C_BARB
 
 static uint16_t rgb(uint8_t r, uint8_t g, uint8_t b) { return (uint16_t)((r >> 3) << 11 | (g >> 2) << 5 | (b >> 3)); }
 
-static const uint8_t inst_rgb[VI__N][3] = {
-    { 255, 214, 90 },   /* violin I: gold */
-    { 255, 160, 60 },   /* violin II: orange */
-    { 255, 105, 80 },   /* viola: coral */
-    { 230, 60, 110 },   /* cello: crimson */
-    { 170, 90, 230 },   /* bass: violet */
-    { 90, 230, 255 },   /* flute: cyan */
-    { 110, 240, 140 },  /* oboe: green */
-    { 80, 160, 255 },   /* clarinet: blue */
-    { 200, 220, 90 },   /* bassoon: olive */
-    { 255, 250, 210 },  /* horn: warm white */
-};
-static const char *const inst_name[VI__N] = { "Vln I", "Vln II", "Viola", "Cello", "Bass",
-                                              "Flute", "Oboe", "Clar", "Bsn", "Horn" };
+static uint8_t nsec;                             /* the app's sections (viz_cfg_t) */
+static uint16_t px16;                            /* pixels a tick, 1/16 */
+static const char *const *inst_name;
+static uint8_t inst_rgb[VIZ_MAXSEC][3];
 
 /* ---- the blitter ---- */
 static void bwait(void) { while (BLT(B_STAT) & 1) ; }
@@ -164,7 +153,7 @@ static void spr_send(void)
 static void make_sprites(void)                   /* a glowing ball per section, 4 fading sizes */
 {
     volatile uint8_t *p = (volatile uint8_t *)(uintptr_t)SPRPIX;
-    for (uint8_t i = 0; i < VI__N; i++)
+    for (uint8_t i = 0; i < VIZ_MAXSEC; i++)
         for (uint8_t f = 0; f < 4; f++)
             for (int16_t y = 0; y < 16; y++)
                 for (int16_t x = 0; x < 16; x++) {
@@ -184,7 +173,7 @@ static uint16_t isqrt(uint16_t v) { uint16_t r = 0; while ((uint16_t)((r + 1) * 
 static void make_flashes(void)                   /* a white-hot burst: a core, a glow, a cross of rays */
 {
     volatile uint8_t *p = (volatile uint8_t *)(uintptr_t)FLASHPIX;
-    for (uint8_t i = 0; i < VI__N; i++)
+    for (uint8_t i = 0; i < VIZ_MAXSEC; i++)
         for (uint8_t f = 0; f < 4; f++)
             for (int16_t y = 0; y < 32; y++)
                 for (int16_t x = 0; x < 32; x++) {
@@ -227,27 +216,27 @@ static void spark(uint16_t x, uint8_t inst, uint8_t hard)
     s->rate = (uint16_t)(2048 / (70 + (rnd() & 63)));                  /* 70-133 frames: up and back down */
 }
 
-/* ---- the fire under the keyboard: 80 x 19 cells of 8 x 2 pixels; each section owns 8 columns (its
- * slot under its label), and its note-ons feed heat into them ---- */
+/* ---- the fire under the keyboard: 80 x 19 cells of 8 x 2 pixels; each section owns its share of the
+ * columns (its slot under its label), and its note-ons feed heat into them ---- */
 #define FW 80
 #define FH 19
 static uint8_t heat[FH + 1][FW];
-static uint16_t energy[VI__N];
+static uint16_t energy[VIZ_MAXSEC];
 static uint16_t frnd = 1;
 static uint8_t frand(void) { frnd = (uint16_t)(frnd * 25173u + 13849u); return (uint8_t)(frnd >> 8); }
 static void fire_step(const viz_t *v, uint16_t df)
 {
     for (uint8_t j = 0; j < v->nnotes; j++)
-        if (v->notes[j].inst < VI__N) {
+        if (v->notes[j].inst < nsec) {
             uint16_t e = (uint16_t)(energy[v->notes[j].inst] + 6 + (v->notes[j].vel >> 3));
             energy[v->notes[j].inst] = e > 31 ? 31 : e;
         }
-    for (uint8_t i = 0; i < VI__N; i++) {
+    for (uint8_t i = 0; i < nsec; i++) {
         uint16_t lv = (uint16_t)(v->level[i] >> 11);
-        for (uint8_t x = 0; x < 8; x++) {
+        for (uint8_t x = (uint8_t)(i * FW / nsec); x < (uint8_t)((i + 1) * FW / nsec); x++) {
             uint16_t h = (uint16_t)(energy[i] + (lv > 4 ? lv - 4 : 0));
             h = (uint16_t)(h > 4 ? h - (frand() & 3) : h);
-            heat[FH][i * 8 + x] = (uint8_t)(h > 31 ? 31 : h);
+            heat[FH][x] = (uint8_t)(h > 31 ? 31 : h);
         }
         energy[i] = (uint16_t)(energy[i] > df ? energy[i] - df : 0);
     }
@@ -270,6 +259,25 @@ static void fire_draw(uint32_t buf)
             row[2 * x + W / 4] = c; row[2 * x + 1 + W / 4] = c;
         }
     }
+}
+
+/* ---- the progress bar along the bottom, under the labels (the text's 10 clear lines): drawn on
+ * into each buffer a few columns a frame, fire-coloured from red to yellow along its length ---- */
+#define PB_X 16
+#define PB_Y 352
+#define PB_W (W - 2 * PB_X)
+#define PB_H 5
+static uint16_t pb_done[2];
+static void progress_bar(uint32_t buf, uint8_t bi, uint16_t prog)
+{
+    uint16_t x = (uint16_t)(((uint32_t)prog * PB_W) >> 16);
+    if (x < pb_done[bi]) {                                   /* round again: the track afresh */
+        rect(buf, PB_X, PB_Y, PB_W, PB_H, C_KEYGAP);
+        pb_done[bi] = 0;
+    }
+    for (uint16_t c = pb_done[bi]; c < x; c++)
+        rect(buf, (uint16_t)(PB_X + c), PB_Y, 1, PB_H, (uint8_t)(C_FIRE + 10 + (uint32_t)c * 21 / PB_W));
+    pb_done[bi] = x;
 }
 
 /* ---- state ---- */
@@ -326,8 +334,13 @@ static void palette_stars(uint16_t f)
     }
 }
 
-void viz_init(void)
+void viz_init(const viz_cfg_t *c)
 {
+    nsec = c->nsec > VIZ_MAXSEC ? VIZ_MAXSEC : c->nsec;
+    px16 = c->px16;
+    inst_name = c->name;
+    for (uint8_t i = 0; i < VIZ_MAXSEC; i++)
+        for (uint8_t q = 0; q < 3; q++) inst_rgb[i][q] = i < nsec ? c->rgb[i][q] : 128;
     for (uint16_t i = 0; i < 256; i++) sn[i] = (int16_t)(32767.0f * sinf((float)i * 6.2831853f / 256.0f));
     PAL_INDEX = 0;
     PAL_DATA = 0;
@@ -336,13 +349,13 @@ void viz_init(void)
     PAL_DATA = rgb(120, 30, 20);   PAL_DATA = rgb(8, 8, 12);      PAL_DATA = rgb(255, 230, 180);
     palette_stars(0);
     PAL_INDEX = C_INST;
-    for (uint8_t i = 0; i < VI__N; i++)
+    for (uint8_t i = 0; i < VIZ_MAXSEC; i++)
         for (uint8_t s = 0; s < 8; s++) {
             uint16_t k = (uint16_t)(256 - s * 30);
             PAL_DATA = rgb((uint8_t)(inst_rgb[i][0] * k >> 8), (uint8_t)(inst_rgb[i][1] * k >> 8), (uint8_t)(inst_rgb[i][2] * k >> 8));
         }
     PAL_INDEX = C_GLOW;                         /* white, through the colour, to dim */
-    for (uint8_t i = 0; i < VI__N; i++)
+    for (uint8_t i = 0; i < VIZ_MAXSEC; i++)
         for (uint8_t s = 0; s < 8; s++) {
             uint16_t wt = s < 4 ? (uint16_t)(256 - s * 72) : 0;            /* white's share */
             uint16_t k = s < 4 ? 256 : (uint16_t)(256 - (s - 3) * 42);     /* then dimming */
@@ -364,6 +377,7 @@ void viz_init(void)
         rect(buf, 0, 0, W, H, C_BLACK);
         rect(buf, 0, FALL_TOP, W, KEY_TOP - 3 - FALL_TOP, 0);      /* see-through: the notes (B) below */
         keyboard(buf, 1);
+        rect(buf, PB_X, PB_Y, PB_W, PB_H, C_KEYGAP);
     }
     rect(BUF_B, 0, 0, W, H, 0);
     make_sprites();
@@ -371,7 +385,12 @@ void viz_init(void)
     for (uint8_t n = 0; n < NSPR; n++) { pt[n].on = 0; spr_shadow(n); }
     spr_send();
     for (uint16_t i = 0; i < 80 * 25; i++) TEXT[i] = 0x4000 | ' ';
-    for (uint8_t i = 0; i < VI__N; i++) txt((uint16_t)(1 + i * 8), 24, inst_name[i], 7);
+    for (uint8_t i = 0; i < nsec; i++) {                       /* each label centred in its slot */
+        uint16_t n = 0;
+        while (inst_name[i][n]) n++;
+        uint16_t mid = (uint16_t)((2 * i + 1) * 80 / (2 * nsec));
+        txt((uint16_t)(mid > n / 2 ? mid - n / 2 : 0), 24, inst_name[i], 7);
+    }
     VID_BMP_LO = (uint16_t)BUF_A0; VID_BMP_HI = (uint16_t)(BUF_A0 >> 16);
     VID_BMPB_LO = (uint16_t)BUF_B; VID_BMPB_HI = (uint16_t)(BUF_B >> 16);
     VID_SCROLLX = 0; VID_SCROLLY = 0; VID_SXB = 0; VID_SYB = 0;
@@ -400,7 +419,7 @@ void viz_frame(const viz_t *v)
     /* ---- where notes land: a flash (a sprite) and a spray of sparks; the bouncer kicked ---- */
     for (uint8_t j = 0; j < v->nnotes; j++) {
         const viz_note_t *nt = &v->notes[j];
-        if (nt->inst >= VI__N || nt->midi < LOW_MIDI || nt->midi > HIGH_MIDI) continue;
+        if (nt->inst >= nsec || nt->midi < LOW_MIDI || nt->midi > HIGH_MIDI) continue;
         uint16_t kw, kx = key_x(nt->midi, &kw);
         part_t *p = &pt[next_spr];
         next_spr = (uint8_t)((next_spr + 1) % NPART);
@@ -422,11 +441,12 @@ void viz_frame(const viz_t *v)
         }
         spr_shadow(i);
     }
-    for (uint8_t i = 0; i < VI__N; i++) {                 /* the bouncers, on the fire */
+    for (uint8_t i = 0; i < VIZ_MAXSEC; i++) {            /* the bouncers, on the fire */
         part_t *b = &pt[NPART + i];
+        if (i >= nsec) { b->on = 0; spr_shadow((uint8_t)(NPART + i)); continue; }
         int16_t floor = (int16_t)((BARS_Y + BARS_H - 17) << 4);
         b->on = 1; b->inst = i; b->age = 0; b->life = 255;
-        b->x = (int16_t)((8 + i * 64 + 19) << 4);
+        b->x = (int16_t)(((2 * i + 1) * W / (2 * nsec) - 8) << 4);
         for (uint16_t k = 0; k < df; k++) {
             b->vy = (int16_t)(b->vy + 32);
             b->y = (int16_t)(b->y + b->vy);
@@ -437,12 +457,12 @@ void viz_frame(const viz_t *v)
     }
 
     /* ---- the falling notes: B's scroll, and the rows newly in view drawn into the ring ---- */
-    uint32_t u_now = v->now16 * PX_TICK / 16;
+    uint32_t u_now = v->now16 * px16 / 256;
     VID_SYB = (uint16_t)((720u - (uint16_t)((KEY_TOP + u_now) % 360)) % 360);
     for (uint8_t k = 0; k < NKEY; k++) lit[k] = 0;
     for (uint16_t j = 0; j < v->nfall; j++) {
         const viz_fall_t *n = &v->fall[j];
-        if (n->midi >= LOW_MIDI && n->midi <= HIGH_MIDI && n->inst < VI__N && n->start <= 0 && n->start + (int16_t)n->len > 0)
+        if (n->midi >= LOW_MIDI && n->midi <= HIGH_MIDI && n->inst < nsec && n->start <= 0 && n->start + (int16_t)n->len > 0)
             lit[n->midi - LOW_MIDI] = (uint8_t)(n->inst + 1);
         if (n->start <= 0 && n->start + (int16_t)n->len > 0 && (rnd() & 15) == 0 && n->midi >= LOW_MIDI && n->midi <= HIGH_MIDI) {
             uint16_t kw, kx = key_x(n->midi, &kw);
@@ -457,9 +477,9 @@ void viz_frame(const viz_t *v)
             rect(BUF_B, 0, r, W, 1, 0);
             for (uint16_t j = 0; j < v->nfall; j++) {
                 const viz_fall_t *n = &v->fall[j];
-                if (n->midi < LOW_MIDI || n->midi > HIGH_MIDI || n->inst >= VI__N) continue;
+                if (n->midi < LOW_MIDI || n->midi > HIGH_MIDI || n->inst >= nsec) continue;
                 int32_t s16 = (int32_t)v->now16 + n->start;                /* its exact start, 1/16 ticks */
-                uint32_t a = (uint32_t)(s16 * PX_TICK / 16), e = (uint32_t)((s16 + (int32_t)n->len) * PX_TICK / 16);
+                uint32_t a = (uint32_t)(s16 * (int32_t)px16 / 256), e = (uint32_t)((s16 + (int32_t)n->len) * (int32_t)px16 / 256);
                 if (u < a || u >= e) continue;
                 uint16_t kw, kx = key_x(n->midi, &kw);
                 if (u <= a + 1 || u >= e - 2 || kw < 5)
@@ -508,6 +528,8 @@ void viz_frame(const viz_t *v)
         sp_n[bi] = na;
     }
 
+    progress_bar(buf, back, v->progress);
+
     /* the fire and the floor the bouncers sit on */
     fire_step(v, df);
     fire_draw(buf);
@@ -520,11 +542,12 @@ void viz_frame(const viz_t *v)
         q = cat(q, "bar "); q = utoa_(q, v->bar, 3); q = cat(q, (v->beat & 1) ? "  ."  : "  *");
         txtpad(68, 1, s, 3, 12);
         q = s;
-        q = cat(q, "frame "); q = utoa_(q, cyc_spent, 6);
-        q = cat(q, " cyc  notes "); q = utoa_(q, v->nfall, 3);
+        q = cat(q, "cyc "); q = utoa_(q, (cyc_spent + 500) / 1000, 4); q = cat(q, "k");
+        q = cat(q, " notes "); q = utoa_(q, v->nfall, 3);
         q = cat(q, " sparks "); q = utoa_(q, nsp, 4);
         q = cat(q, " over "); q = utoa_(q, SPR_OVER, 3);
-        q = cat(q, "  engine "); q = utoa_(q, (uint32_t)v->blocks_busy * 100 / 45000, 3); q = cat(q, "%  underruns ");
+        q = cat(q, " voices "); q = utoa_(q, v->voices, 2);
+        q = cat(q, " engine "); q = utoa_(q, (uint32_t)v->blocks_busy * 100 / 45000, 3); q = cat(q, "% under ");
         q = utoa_(q, v->underruns, 5);
         txtpad(0, 2, s, v->underruns ? 1 : 2, 80);
     }
