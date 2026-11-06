@@ -17,6 +17,7 @@
 
 #include "dbg.h"
 #include "front.h"
+#include "snd.h"
 
 static cpu_t cpu;
 static dbg_t dbg;
@@ -149,6 +150,7 @@ EMSCRIPTEN_KEEPALIVE int web_set_hw(const char *name)
         return -1;
     video_hicol8 = h->hicolor;
     dev_cpu_hz = h->hz;
+    hw_audio = h->audio;                    /* its sound device (snd.h), chosen at the boot's reset */
     return (int)h->xram_mb;
 }
 EMSCRIPTEN_KEEPALIVE double web_hz(void) { return dev_cpu_hz; }
