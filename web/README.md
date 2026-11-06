@@ -29,14 +29,17 @@ Any static web server can host it. Browsers will not load it from a
 
 ## The page
 
-- **Program:** BASIC, Doom (`?prog=doom`), or a demo or benchmark from
+- **Program:** BASIC, Doom (`?prog=doom`), or a demo, app or benchmark from
   `sim/tools/programs.py` (`make progs` builds them into `build/progs`;
-  `?prog=overdrive`). An image is fetched when it is picked. The BASIC
+  `?prog=overdrive`, `?prog=t1m-toccata`): the apps are the music players
+  (the SID and MOD trackers, Mozart, Bach, the T1M songs) and Paint. An image
+  is fetched when it is picked. The BASIC
   benchmarks boot BASIC with the benchmark programs as its disk and type
   their `RUN`.
 - **Hardware:** as fsim's `--hw` (sim/README.md): the reference machine, the
-  Spartan-3 board, the Tang Nano 20K or the 15 MB machine for Doom: the video
-  tier, the RAM, the colours and the clock (the board's speed). A program
+  Spartan-3 board, the Tang Nano 20K (with its audio engine, or with the
+  microcoded one) or the 15 MB machine for Doom: the video tier, the RAM, the
+  colours, the clock (the board's speed) and the sound device. A program
   picks the hardware it was made for; `?hw=NAME` or the menu picks another.
 - Doom runs from 14 MB of the
   simulator's expansion RAM, with the full palette. Arrow keys move, Ctrl
@@ -53,7 +56,10 @@ Any static web server can host it. Browsers will not load it from a
 - **Colors:** how the hi-color (8-bit indexed) bitmap is shown: as the
   board's 3-bit VGA shows it, through a 2×2 dither, or with the full
   256-entry palette. `?color=full` selects the full palette.
-- **Sound:** off until you press the button, as browsers require.
+- **Sound:** off until you press the button, as browsers require. Each
+  hardware has its own device, as in fsim: the 3-voice device (the reference
+  machine), the Spartan-3's streaming player, the Tang's audio engine and the
+  microcoded engine; a program plays on the one it was written for.
 - **Disk:** the file-service folder `/disk`, stored in the browser's
   IndexedDB. It starts with `basic/examples`. Programs you `SAVE` stay
   there across reloads. Download and Upload copy files out and in.
