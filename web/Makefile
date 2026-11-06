@@ -16,6 +16,7 @@ EMCC   ?= emcc
 -include local.mk
 
 CORE   := $(SIM)/src/cpu.c $(SIM)/src/dev.c $(SIM)/src/video.c $(SIM)/src/vidx.c $(SIM)/src/audlo.c $(SIM)/src/ps2.c $(SIM)/src/pads.c $(SIM)/src/flash.c \
+          $(SIM)/src/snd.c $(SIM)/src/audeng.c $(SIM)/src/mcaud.c \
           $(SIM)/src/front.c $(SIM)/src/dbg.c $(SIM)/src/font8x14.c \
           $(SIM)/src/gen/isa_gen.c $(SIM)/src/gen/exec_gen.c
 ROMS   := $(BASIC)/build/basic.A.bin $(BASIC)/build/basic.B.bin
@@ -73,7 +74,7 @@ $(SIM)/build/gen.stamp: $(ROOT)/cpu/isa.yaml
 $(ROMS) $(SYMS):
 	$(MAKE) -C $(BASIC) target
 
-$(BUILD)/fsim.js: web.c $(CORE) $(SIM)/build/gen.stamp $(SIM)/src/cpu.h $(SIM)/src/dev.h $(SIM)/src/front.h $(SIM)/src/dbg.h $(ROMS) $(SYMS) $(EXAMPLES)
+$(BUILD)/fsim.js: web.c $(CORE) $(SIM)/build/gen.stamp $(SIM)/src/cpu.h $(SIM)/src/dev.h $(SIM)/src/snd.h $(SIM)/src/front.h $(SIM)/src/dbg.h $(ROMS) $(SYMS) $(EXAMPLES)
 	@mkdir -p $(BUILD)
 	$(EMCC) $(EMFLAGS) -o $@ web.c $(CORE)
 

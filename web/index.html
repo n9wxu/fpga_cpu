@@ -422,13 +422,14 @@ let audio = null;
 $('sound').onclick = () => {
   if (!audio) {
     audio = new AudioContext();
-    const node = audio.createScriptProcessor(1024, 0, 1);
+    const node = audio.createScriptProcessor(1024, 0, 2);
     let buf = 0;
-    node.onaudioprocess = ev => {
-      const out = ev.outputBuffer.getChannelData(0);
-      if (!buf) buf = Module._malloc(out.length * 4);
-      Module._web_sound(buf, out.length, audio.sampleRate);
-      out.set(HEAPF32.subarray(buf >> 2, (buf >> 2) + out.length));
+    node.onaudioprocess = ev => {                    // web_sound fills n stereo frames, interleaved
+      const l = ev.outputBuffer.getChannelData(0), r = ev.outputBuffer.getChannelData(1), n = l.length;
+      if (!buf) buf = Module._malloc(n * 8);
+      Module._web_sound(buf, n, audio.sampleRate);
+      const s = HEAPF32.subarray(buf >> 2, (buf >> 2) + 2 * n);
+      for (let i = 0; i < n; i++) { l[i] = s[2 * i]; r[i] = s[2 * i + 1]; }
     };
     node.connect(audio.destination);
     $('sound').textContent = 'Sound on';

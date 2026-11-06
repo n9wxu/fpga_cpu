@@ -130,12 +130,7 @@ int vidx_flip_pending(const struct cpu *c);
 #define SCREEN_W 1280
 #define SCREEN_H 720
 void video_render(const struct cpu *c, uint32_t *px, int true_color, int cursor_on);
-/* the low tier's sound (audlo.c, fpga/rtl/audio_lite.v): F00400-F0043F with --no-hicolor */
-void audlo_write(struct cpu *c, uint32_t a, uint16_t v);
-uint16_t audlo_read(struct cpu *c, uint32_t a);
-void audlo_finish(const struct cpu *c);
-void audlo_wav(const char *path);
-void audlo_reset(void);
+/* the sound devices: snd.h */
 /* the PS/2 ports (ps2.c, fpga/rtl/ps2.v): F00300-F00307, a keyboard and a mouse */
 int ps2_handles(uint32_t a);
 uint16_t ps2_read(struct cpu *c, uint32_t a);
@@ -157,6 +152,6 @@ extern int video_hicol8;
 int write_ppm(const char *path, const uint32_t *px, int w, int h);
 
 /* Sound: fill n mono float samples at the given rate from the voice registers. */
-void sound_fill(iodev_t *d, float *out, int n, int rate);
+void sound_fill(iodev_t *d, float *out, int n, int rate);   /* n stereo frames (2n floats) */
 
 #endif
