@@ -90,7 +90,8 @@ all 8 MB of the SDRAM, 000000-7FFFFF, repeating every 8 MB up to the I/O at
 F00000 (`progs/xramtest.c` tests 100000-7FFFFF). T1 folds its addresses to
 the first 1 MB. T1F takes interrupts here (`IRQ`): the controller at F00700
 with the vertical blank and the audio engine as sources (`progs/irqtest.c`,
-built with `../fpga/lib/irq.c`). T1 needs 4 clocks. The SDRAM
+built with `../fpga/lib/irq.c`). The video reads its buffers anywhere in the
+8 MB too (`video.v` `AW = 23`; `progs/vidhigh.c` puts every layer above 1 MB). T1 needs 4 clocks. The SDRAM
 is on the RAM machine, as on the Spartan-3: `../fpga/rtl/rammux.v` (port 0
 T1 and the loader, port 1 video DMA in bursts of 8) in front of
 `rtl/sdram_phy.v`; port 2 is the audio engine. Video buffers must be in the SDRAM.

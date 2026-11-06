@@ -7,7 +7,8 @@
 
 typedef struct {
     tcfg_t cfg;
-    const char *vname, *image, *json, *disk, *sym, *screenshot, *keys, *dump, *profile, *log;
+    const char *vname, *image, *json, *disk, *sym, *screenshot, *keys, *dump, *profile, *log, *rom;
+    int rom_save;
     uint32_t load, entry;
     uint64_t max_cycles;
     int quiet, trace, true_color;

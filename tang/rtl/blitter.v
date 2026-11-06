@@ -71,17 +71,7 @@ module blitter #(
                 default: ;
             endcase
         end
-        case (io_addr[4:1])
-            4'h0: rd <= r_src[15:0];
-            4'h1: rd <= {8'd0, r_src[23:16]};
-            4'h2: rd <= r_dst[15:0];
-            4'h3: rd <= {8'd0, r_dst[23:16]};
-            4'h4: rd <= r_ss;
-            4'h5: rd <= r_ds;
-            4'h6: rd <= {4'd0, r_w};
-            4'h7: rd <= r_h;
-            4'h8: rd <= {8'd0, r_key};
-            4'h9: rd <= {8'd0, r_fill};
+        case (io_addr[4:1])                     // only BLT_STAT reads back: the rest are write-only
             4'hB: rd <= {15'd0, busy};
             default: rd <= 16'd0;
         endcase

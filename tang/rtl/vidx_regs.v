@@ -31,8 +31,6 @@ module vidx_regs (
     reg [7:0]  lo = 8'd0;
     wire [15:0] w = {io_wdata, lo};
     reg [7:0]  spr_index = 8'd0;
-    reg [15:0] at_sh [0:255];               // the attributes, for reading back (block RAM)
-    reg [15:0] at_q = 16'd0;
     reg        pending = 1'b0;
 
     // vertical blank, from the line timing (as iosys counts it)
@@ -55,7 +53,6 @@ module vidx_regs (
 
     always @(posedge clk) begin
         spr_we <= 1'b0;
-        at_q <= at_sh[spr_index];
         if (buf_wr) pending <= 1'b1;
         else if (frame_latch) pending <= 1'b0;
         if (io_wr) begin
@@ -74,25 +71,12 @@ module vidx_regs (
                 4'd8: spr_index <= w[7:0];
                 4'd9: begin
                     spr_we <= 1'b1; spr_wa <= spr_index; spr_wd <= w;
-                    at_sh[spr_index] <= w;
                     spr_index <= spr_index + 1'b1;
                 end
                 default: ;
             endcase
         end
-        case (ri)
-            4'd0: rd <= vid_ctrl2;
-            4'd1: rd <= {14'd0, vblank, pending};
-            4'd2: rd <= vid_bmpb[15:0];
-            4'd3: rd <= vid_bmpb[31:16];
-            4'd4: rd <= vid_scrollxb;
-            4'd5: rd <= vid_scrollyb;
-            4'd6: rd <= vid_lscr[15:0];
-            4'd7: rd <= vid_lscr[31:16];
-            4'd8: rd <= {8'd0, spr_index};
-            4'd9: rd <= at_q;
-            4'd10: rd <= spr_over;
-            default: rd <= 16'd0;
-        endcase
+        // reads: only the status; the other registers are write-only (read 0)
+        rd <= (ri == 4'd1) ? {14'd0, vblank, pending} : (ri == 4'd10) ? spr_over : 16'd0;
     end
 endmodule

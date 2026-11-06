@@ -14,7 +14,7 @@ BUILD   := build
 
 ISA     := $(ROOT)/cpu/isa.yaml
 TOOLS   := tools/isa.py tools/gen.py
-CORE    := src/cpu.c src/dev.c src/video.c src/vidx.c src/audlo.c src/ps2.c src/pads.c src/front.c src/dbg.c src/font8x14.c src/gen/isa_gen.c src/gen/exec_gen.c
+CORE    := src/cpu.c src/dev.c src/video.c src/vidx.c src/audlo.c src/ps2.c src/pads.c src/flash.c src/front.c src/dbg.c src/font8x14.c src/gen/isa_gen.c src/gen/exec_gen.c
 SRCS    := src/main.c $(CORE)
 
 HAVE_SDL := $(shell command -v sdl2-config 2>/dev/null)

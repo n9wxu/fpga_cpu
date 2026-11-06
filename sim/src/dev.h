@@ -27,6 +27,7 @@ struct cpu;
 #define IO_SND       0xF00400u /* 3 voices x 8 bytes */
 #define IO_FS        0xF00500u /* file service F00500-F0051B */
 #define IO_BOARD     0xF00600u /* board I/O F00600-F00609 */
+#define IO_FLASH     0xF00900u /* the SPI flash's port F00900-F00903 (sim/src/flash.c) */
 #define IO_PS2       0xF00300u /* PS/2 ports: +0 A DATA, +2 A STAT, +4 B DATA, +6 B STAT */
 #define IO_IRQ       0xF00700u /* interrupts: +0 IRQ_PEND (R; W 1s clear), +2 IRQ_EN, +4 IRQ_SET (W) */
 #define IRQ_VBLANK   0x0001u   /* vertical blank started (FRAME moved) */

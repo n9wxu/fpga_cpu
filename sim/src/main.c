@@ -117,7 +117,7 @@ int main(int argc, char **argv)
     if (!o.quiet)
         summary(&c);
     if (o.json)
-        write_json(&c, o.json, o.image);
+        write_json(&c, o.json, o.image ? o.image : o.rom);
     if (o.screenshot) {
         static uint32_t px[SCREEN_W * SCREEN_H];
         video_render(&c, px, o.true_color, 1);
@@ -150,6 +150,7 @@ int main(int argc, char **argv)
         free(c.prof);
     }
     int rc = c.exit_code;
+    flash_exit();
     cpu_free(&c);
     return rc;
 }

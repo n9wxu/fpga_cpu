@@ -48,11 +48,11 @@ I/O addresses (relative to F00000): global registers at **F01000**, voices at
 
 | Address | RW | Name | Function |
 |---|---|---|---|
-| F01000 | RW | `MASTER` | master volume, 0x1000 = 1.0 (max 0xFFFF = 16x). The mix is the sum of all voices: with many voices lower it |
-| F01002 | RW | `FMODE` | filter outputs added to the mix: bit 0 low-pass, 1 band-pass, 2 high-pass (0 = filtered voices are silent; 5 = notch) |
-| F01004 | RW | `FCUT` | filter cutoff F: 2 sin(pi fc/48000) x 32768 (about fc x 4.29 up to a few kHz; keep below 0x7000) |
-| F01006 | RW | `FRES` | filter damping Q: 1/Q x 32768 (0xFFFF = no resonance, 0x4000 = Q 2, 0x1000 = Q 8) |
-| F01008 | RW | `ENVDIV` | envelopes advance every 2^n frames (n = 0-7): slows every attack, decay and release |
+| F01000 | W | `MASTER` | master volume, 0x1000 = 1.0 (max 0xFFFF = 16x). The mix is the sum of all voices: with many voices lower it |
+| F01002 | W | `FMODE` | filter outputs added to the mix: bit 0 low-pass, 1 band-pass, 2 high-pass (0 = filtered voices are silent; 5 = notch) |
+| F01004 | W | `FCUT` | filter cutoff F: 2 sin(pi fc/48000) x 32768 (about fc x 4.29 up to a few kHz; keep below 0x7000) |
+| F01006 | W | `FRES` | filter damping Q: 1/Q x 32768 (0xFFFF = no resonance, 0x4000 = Q 2, 0x1000 = Q 8) |
+| F01008 | W | `ENVDIV` | envelopes advance every 2^n frames (n = 0-7): slows every attack, decay and release |
 | F0100C / F0100E | RW | `IRQ_LO/HI` | read: voices with an interrupt flag (bit n = voice n); write 1s to clear those |
 | F01010 / F01012 | R | `SCOUNT` | frames made so far (32 bits); the CPU can wait on it for a few frames of time |
 | F01014 | R | `ID` | 0xA032 |
@@ -62,29 +62,33 @@ I/O addresses (relative to F00000): global registers at **F01000**, voices at
 
 | w | Name | RW | Function |
 |---|---|---|---|
-| 0 | `CTRL` | RW | bits below |
-| 1 | `STEP_LO` | RW | pitch step, low 16 bits |
-| 2 | `STEP_HI` | RW | bits 7:0: step bits 23:16. The step is 8.16 fixed point: sample frames per output frame (0x10000 = 1.0). For a chip voice it is the 24-bit phase step |
-| 3 | `VOL_L` | RW | left volume, bits 8:0; 0x100 = 1.0 (up to 0x1FF = +6 dB) |
-| 4 | `VOL_R` | RW | right volume, the same |
-| 5 | `DUTY` | RW | pulse width, bits 11:0 (0x800 = 50%) |
-| 6 | `ATTACK` | RW | envelope attack rate: the level rises by 16 x ATTACK (of 2^24) a tick |
-| 7 | `DECAY` | RW | exponential decay rate: each tick the level loses level x DECAY / 65536 (time constant 65536/DECAY ticks) |
-| 8 | `SUSTAIN` | RW | sustain level (16 bits; decay stops there) |
-| 9 | `RELEASE` | RW | release rate, as `DECAY` |
-| 10 | `NOISE` | RW | bits 1:0 length: 0 15-bit (NES long), 1 15-bit with the short tap (NES periodic, 93 steps), 2 17-bit (AY), 3 23-bit (SID). Bit 2: multi-level output (8 bits of the register, SID style; else 1-bit) |
+| 0 | `CTRL` | W | bits below |
+| 1 | `STEP_LO` | W | pitch step, low 16 bits |
+| 2 | `STEP_HI` | W | bits 7:0: step bits 23:16. The step is 8.16 fixed point: sample frames per output frame (0x10000 = 1.0). For a chip voice it is the 24-bit phase step |
+| 3 | `VOL_L` | W | left volume, bits 8:0; 0x100 = 1.0 (up to 0x1FF = +6 dB) |
+| 4 | `VOL_R` | W | right volume, the same |
+| 5 | `DUTY` | W | pulse width, bits 11:0 (0x800 = 50%) |
+| 6 | `ATTACK` | W | envelope attack rate: the level rises by 16 x ATTACK (of 2^24) a tick |
+| 7 | `DECAY` | W | exponential decay rate: each tick the level loses level x DECAY / 65536 (time constant 65536/DECAY ticks) |
+| 8 | `SUSTAIN` | W | sustain level (16 bits; decay stops there) |
+| 9 | `RELEASE` | W | release rate, as `DECAY` |
+| 10 | `NOISE` | W | bits 1:0 length: 0 15-bit (NES long), 1 15-bit with the short tap (NES periodic, 93 steps), 2 17-bit (AY), 3 23-bit (SID). Bit 2: multi-level output (8 bits of the register, SID style; else 1-bit) |
 | 11 | `POS_F` | RW | position fraction (16 bits). Reads the live value |
 | 12 | `POS_L` | RW | position, frame number bits 15:0. Reads the live value |
 | 13 | `POS_H` | RW | position, frame number bits 23:16. **Writing this word commits the position** (write `POS_F`, `POS_L`, then `POS_H`). Reads the live value |
 | 14 | `STATUS` | RW | read: bit 0 running, 1 done (a one-shot ended), 2 interrupt flag, 3 half (the position is in the second half of the loop), 4 underrun happened, 5 armed (prefetching). Write 1s to bits 1, 2, 4 to clear them |
 | 15 | `ENV` | R | envelope level, 16 bits |
-| 16 | `ADDR_LO` | RW | sample start, byte address bits 15:0 |
-| 17 | `ADDR_HI` | RW | bits 7:0: byte address bits 23:16 |
-| 18 / 19 | `LOOP_LO/HI` | RW | loop start, in frames from `ADDR` (24 bits) |
-| 20 / 21 | `END_LO/HI` | RW | end: the loop end, or the end of a one-shot, in frames from `ADDR` (24 bits) |
+| 16 | `ADDR_LO` | W | sample start, byte address bits 15:0 |
+| 17 | `ADDR_HI` | W | bits 7:0: byte address bits 23:16 |
+| 18 / 19 | `LOOP_LO/HI` | W | loop start, in frames from `ADDR` (24 bits) |
+| 20 / 21 | `END_LO/HI` | W | end: the loop end, or the end of a one-shot, in frames from `ADDR` (24 bits) |
 
-Words 22-31 are spare (they store what is written). Everything above reads
-back what was written, except words 11-15.
+Words 22-31 are spare. The configuration registers (words 0-10 and 16-31,
+and the global `MASTER`, `FMODE`, `FCUT`, `FRES`, `ENVDIV`) are write-only:
+they read 0, which saves the read multiplexer and a block RAM of shadow
+copies. A program that changes one bit by bit (a gate in `CTRL`, say) keeps
+its own copy. Words 11-15 and the global `IRQ`, `SCOUNT`, `ID` and
+`UNDERRUNS` read the engine's state.
 
 ### CTRL
 
@@ -218,7 +222,8 @@ sign). Saw: `SRC` 3. Noise: `SRC` 4 with `NOISE` as above; the LFSR is clocked w
 (0-15 -> 0-0x4B of 0x100, so three voices at full volume do not clip); gate
 = `FREQ` and `VOL` both non-zero. It writes `CTRL`, `STEP`, `VOL`, `DUTY` of
 the voice (six register writes taking 7 clocks), so a program using it should
-not also use engine voices 0-2 at the same time.
+not also use engine voices 0-2 at the same time. Its registers are
+write-only (they read 0).
 
 ## What io.md should get
 

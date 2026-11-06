@@ -21,6 +21,7 @@
 module t1_tb;
     parameter EXT_X = 1;
     parameter AW24 = 0;                 // T1F: 24-bit addresses
+    parameter SYNC = 0;                 // T1F: synchronous, two clocks a step
     parameter RAMTOP = 24'h100000;      // RAM is 0 to RAMTOP - 1 (fsim --xram for more than 1 MB)
     reg clk = 1'b0, rst = 1'b1;
     always #5 clk = ~clk;
@@ -42,6 +43,9 @@ module t1_tb;
 `ifdef T1S
     wire        ce = cdiv == per - 1;
     always @(posedge clk) cdiv <= (cdiv == per - 1) ? 4'd0 : cdiv + 4'd1;
+`elsif T1F
+    // T1F with SYNC takes two clocks a step: what follows looks at the step's clock (its ce is 1)
+    wire        ce = SYNC ? core.step : 1'b1;
 `else
     wire        ce = 1'b1;
 `endif
@@ -88,7 +92,7 @@ module t1_tb;
     t1s_core #(.EXT_X(EXT_X)) core (.clk(clk), .ce(ce), .rst(rst), .reset_pc(reset_pc), .addr(addr), .mem_rd(mem_rd), .mem_wr(mem_wr),
                   .i_req(i_req), .i_addr(i_addr), .i_ack(i_ack), .i_valid(i_valid), .i_data(i_data), .irq(irq),
 `elsif T1F
-    t1f_core #(.EXT_X(EXT_X), .AW24(AW24), .IRQ(1)) core (.clk(clk), .ce(1'b1), .rst(rst), .reset_pc(reset_pc), .addr(addr), .mem_rd(mem_rd), .mem_wr(mem_wr), .irq(irq),
+    t1f_core #(.EXT_X(EXT_X), .AW24(AW24), .IRQ(1), .SYNC(SYNC)) core (.clk(clk), .ce(1'b1), .rst(rst), .reset_pc(reset_pc), .addr(addr), .mem_rd(mem_rd), .mem_wr(mem_wr), .irq(irq),
 `else
     t1_core #(.EXT_X(EXT_X)) core (.clk(clk), .rst(rst), .reset_pc(reset_pc), .addr(addr), .mem_rd(mem_rd), .mem_wr(mem_wr),
 `endif

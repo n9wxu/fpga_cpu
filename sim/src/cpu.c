@@ -158,13 +158,13 @@ static void log_rec(cpu_t *c, uint32_t w0, uint32_t w1)
     do { if (c->logging && !c->halted) log_rec(c, (kind) << 28 | (size) << 24 | (a), (v)); } while (0)
 
 #define IN_SRAM(a) ((a) < c->ram_size) /* SRAM or expansion RAM */
-#define IN_ROM(a)  ((a) >= ROM_BASE)
+#define IN_ROM(a)  ((a) >= c->rom_base && (a) < c->rom_base + c->rom_size)
 #define IN_IO(a)   ((a) >= IO_BASE && (a) < IO_BASE + IO_SIZE)
 
 static uint16_t rd8(cpu_t *c, uint32_t a)
 {
     if (IN_SRAM(a)) { c->dwords++; return c->sram[a]; }
-    if (IN_ROM(a)) return c->rom[a - ROM_BASE];
+    if (IN_ROM(a)) return c->rom[a - c->rom_base];
     if (IN_IO(a)) return io_read(c, a) >> ((a & 1) * 8) & 0xFF;
     fault(c, "read from unmapped", a);
     return 0;
@@ -174,7 +174,7 @@ static uint16_t rd16(cpu_t *c, uint32_t a)
 {
     if (a & 1) { fault(c, "unaligned 16-bit read", a); return 0; }
     if (IN_SRAM(a)) { c->dwords++; return c->sram[a] | c->sram[a + 1] << 8; }
-    if (IN_ROM(a)) return c->rom[a - ROM_BASE] | c->rom[a - ROM_BASE + 1] << 8;
+    if (IN_ROM(a)) return c->rom[a - c->rom_base] | c->rom[a - c->rom_base + 1] << 8;
     if (IN_IO(a)) return io_read(c, a);
     fault(c, "read from unmapped", a);
     return 0;
@@ -211,6 +211,7 @@ void mem_wr8(cpu_t *c, uint32_t a, uint32_t v)
 {
     v &= 0xFF;
     if (IN_SRAM(a)) { c->dwords++; c->sram[a] = (uint8_t)v; pdc_inval(a, 1); }
+    else if (IN_ROM(a) && c->rom_rw) { c->rom[a - c->rom_base] = (uint8_t)v; pdc_inval(a, 1); }
     else if (IN_IO(a)) io_write(c, a, v);
     else { fault(c, IN_ROM(a) ? "write to boot ROM" : "write to unmapped", a); return; }
     LOG_DATA(2u, 1u, a, v);
@@ -224,6 +225,10 @@ void mem_wr16(cpu_t *c, uint32_t a, uint32_t v)
         c->dwords++;
         c->sram[a] = (uint8_t)v;
         c->sram[a + 1] = (uint8_t)(v >> 8);
+        pdc_inval(a, 2);
+    } else if (IN_ROM(a) && c->rom_rw) {
+        c->rom[a - c->rom_base] = (uint8_t)v;
+        c->rom[a - c->rom_base + 1] = (uint8_t)(v >> 8);
         pdc_inval(a, 2);
     } else if (IN_IO(a)) {
         io_write(c, a, v);
@@ -250,7 +255,7 @@ void mem_wr32(cpu_t *c, uint32_t a, uint32_t v)
 static uint16_t fetch16(cpu_t *c, uint32_t a)
 {
     if (IN_SRAM(a)) return c->sram[a] | c->sram[a + 1] << 8;
-    if (IN_ROM(a)) return c->rom[a - ROM_BASE] | c->rom[a - ROM_BASE + 1] << 8;
+    if (IN_ROM(a)) return c->rom[a - c->rom_base] | c->rom[a - c->rom_base + 1] << 8;
     fault(c, "instruction fetch from non-code memory", a);
     return 0;
 }
@@ -699,6 +704,8 @@ void cpu_init(cpu_t *c, const variant_t *v, const tcfg_t *cfg)
     c->cfg = *cfg;
     c->ram_size = SRAM_SIZE + (cfg->xram_mb > XRAM_MAX ? XRAM_MAX : cfg->xram_mb) * 0x100000u;
     c->sram = calloc(c->ram_size + 4, 1);
+    c->rom_base = ROM_BASE;
+    c->rom_size = ROM_SIZE;
     c->rom = calloc(ROM_SIZE + 4, 1);
     c->st.form = calloc((size_t)v->nforms, sizeof(uint64_t));
     dev_init(&c->dev);
@@ -847,11 +854,17 @@ void cpu_mem_written(cpu_t *c, uint32_t a, uint32_t n)
         pdc_inval(a, (int)n);
 }
 
+void cpu_poke8(cpu_t *c, uint32_t a, uint8_t v)
+{
+    if (IN_SRAM(a)) c->sram[a] = v;
+    else if (IN_ROM(a)) c->rom[a - c->rom_base] = v;
+}
+
 uint16_t cpu_peek16(const cpu_t *c, uint32_t a)
 {
     a &= 0xFFFFFE;
     if (IN_SRAM(a)) return c->sram[a] | c->sram[a + 1] << 8;
-    if (IN_ROM(a)) return c->rom[a - ROM_BASE] | c->rom[a - ROM_BASE + 1] << 8;
+    if (IN_ROM(a)) return c->rom[a - c->rom_base] | c->rom[a - c->rom_base + 1] << 8;
     return 0;
 }
 

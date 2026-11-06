@@ -60,18 +60,21 @@ shown doubled in both directions. The layers, from back to front, are:
 3. Sprite buffer
 4. Text
 
+The video registers are write-only: they read 0 (a smaller read multiplexer). A program that
+changes a register bit by bit keeps its own copy of it.
+
 | Address | R/W | Name | Function |
 |---|---|---|---|
-| F00200 | RW | `VID_CTRL` | Bit 0: text on. Bit 1: bitmap on. Bit 2: bitmap hi-color (0 = 8-color). Bit 3: sprite layer on. Bit 4: shown sprite buffer (0/1). Bit 5: text cursor on. Bit 6: sprite buffer is 8 bpp (0 = 4 bpp). Bit 7: bitmap 16-color (when bit 2 is 0). |
-| F00202 | RW | `VID_BACKDROP` | backdrop color 0–7 |
-| F00204 / F00206 | RW | `VID_TEXT` | text buffer address |
-| F00208 / F0020A | RW | `VID_BMP` | bitmap address |
-| F0020C / F0020E | RW | `VID_SPR` | sprite buffer 0 address; buffer 1 follows it (+115,200 at 4 bpp, +230,400 at 8 bpp) |
+| F00200 | W | `VID_CTRL` | Bit 0: text on. Bit 1: bitmap on. Bit 2: bitmap hi-color (0 = 8-color). Bit 3: sprite layer on. Bit 4: shown sprite buffer (0/1). Bit 5: text cursor on. Bit 6: sprite buffer is 8 bpp (0 = 4 bpp). Bit 7: bitmap 16-color (when bit 2 is 0). |
+| F00202 | W | `VID_BACKDROP` | backdrop color 0–7 |
+| F00204 / F00206 | W | `VID_TEXT` | text buffer address |
+| F00208 / F0020A | W | `VID_BMP` | bitmap address |
+| F0020C / F0020E | W | `VID_SPR` | sprite buffer 0 address; buffer 1 follows it (+115,200 at 4 bpp, +230,400 at 8 bpp) |
 | F00210 | W | `PAL_INDEX` | palette index for the next `PAL_DATA` write |
 | F00212 | W | `PAL_DATA` | palette color, RGB565 (see below); the write auto-increments `PAL_INDEX` |
-| F00214 | RW | `VID_SCROLLX` | bitmap horizontal scroll, pixels (wraps at 640) |
-| F00216 | RW | `VID_SCROLLY` | bitmap vertical scroll, lines (wraps at 360) |
-| F00218 | RW | `VID_CURSOR` | text cursor cell, row × 80 + column |
+| F00214 | W | `VID_SCROLLX` | bitmap horizontal scroll, pixels (wraps at 640) |
+| F00216 | W | `VID_SCROLLY` | bitmap vertical scroll, lines (wraps at 360) |
+| F00218 | W | `VID_CURSOR` | text cursor cell, row × 80 + column |
 
 The power-on value of every register is 0. The C runtime's start-up code
 sets the layout below, with text and cursor on.
@@ -143,7 +146,8 @@ effect at the next frame, see "Double buffering").
 
 The Tang Nano 20K adds a second playfield, a per-line scroll table,
 hardware sprites and a blitter. On the low tier these registers do nothing
-and read 0. The layers, back to front:
+and read 0. On the high tier they are write-only too, except `VID_STAT` and `SPR_OVER`, which
+read the hardware's state. The layers, back to front:
 
 1. Backdrop
 2. Playfield B when it is behind (`VID_CTRL2` bit 1 = 0), else playfield A
@@ -154,15 +158,20 @@ and read 0. The layers, back to front:
 
 | Address | R/W | Name | Function |
 |---|---|---|---|
-| F00220 | RW | `VID_CTRL2` | Bit 0: playfield B on. Bit 1: playfield B in front of playfield A. Bit 2: line scroll on. Bit 3: hardware sprites on. Bit 4: hardware sprites behind the sprite buffer. |
+| F00220 | W | `VID_CTRL2` | Bit 0: playfield B on. Bit 1: playfield B in front of playfield A. Bit 2: line scroll on. Bit 3: hardware sprites on. Bit 4: hardware sprites behind the sprite buffer. |
 | F00222 | R | `VID_STAT` | Bit 0: a flip is pending (a buffer register was written and has not yet taken effect). Bit 1: vertical blank. |
-| F00224 / F00226 | RW | `VID_BMPB` | playfield B address (a multiple of 4) |
-| F00228 | RW | `VID_SCROLLXB` | playfield B horizontal scroll, pixels (wraps at 640) |
-| F0022A | RW | `VID_SCROLLYB` | playfield B vertical scroll, lines (wraps at 360) |
-| F0022C / F0022E | RW | `VID_LSCR` | line-scroll table address (a multiple of 4) |
-| F00230 | RW | `SPR_INDEX` | sprite attribute word for `SPR_DATA`: sprite × 4 + word (0–255) |
-| F00232 | RW | `SPR_DATA` | the attribute word at `SPR_INDEX`; a write increments `SPR_INDEX` |
+| F00224 / F00226 | W | `VID_BMPB` | playfield B address (a multiple of 4) |
+| F00228 | W | `VID_SCROLLXB` | playfield B horizontal scroll, pixels (wraps at 640) |
+| F0022A | W | `VID_SCROLLYB` | playfield B vertical scroll, lines (wraps at 360) |
+| F0022C / F0022E | W | `VID_LSCR` | line-scroll table address (a multiple of 4) |
+| F00230 | W | `SPR_INDEX` | sprite attribute word for `SPR_DATA`: sprite × 4 + word (0–255) |
+| F00232 | W | `SPR_DATA` | the attribute word at `SPR_INDEX`; a write increments `SPR_INDEX` |
 | F00234 | R | `SPR_OVER` | lines in the last frame that had more than 16 sprites |
+
+**Buffer addresses.** The video reads every buffer (`VID_TEXT`, `VID_BMP`, `VID_SPR`, `VID_BMPB`,
+`VID_LSCR`, a hardware sprite's pixel data) from wherever its address register points, a multiple of
+4. On the Tang Nano 20K the video takes 23 bits of each address: a buffer can be anywhere in the 8 MB
+SDRAM. The Spartan-3's video takes 20 bits: the first 1 MB, its SRAM.
 
 **Playfield A** is the bitmap of the "Video" section: `VID_BMP`,
 `VID_SCROLLX`, `VID_SCROLLY`, in any bitmap mode. **Playfield B** is
@@ -198,7 +207,7 @@ words, read and written through `SPR_INDEX` / `SPR_DATA`:
 | 1 | 8:0 | Y: its top line is Y − 32 |
 | 1 | 15:11 | height − 1 (1–32 lines) |
 | 2 | 15:0 | pixel data address, bits 15:0 (a multiple of 4) |
-| 3 | 3:0 | pixel data address, bits 19:16 |
+| 3 | 6:0 | pixel data address, bits 22:16 (the Tang; bits 19:16 where video addresses are 20 bits) |
 | 3 | 12 | flip horizontally |
 | 3 | 14:13 | width: 0 = 8, 1 = 16, 2 = 32 pixels |
 | 3 | 15 | on |
@@ -215,16 +224,18 @@ format (8 bpp: one byte a pixel; 4 bpp: two pixels a byte).
 
 | Address | R/W | Name | Function |
 |---|---|---|---|
-| F00800 / F00802 | RW | `BLT_SRC` | source byte address |
-| F00804 / F00806 | RW | `BLT_DST` | destination byte address |
-| F00808 | RW | `BLT_SSTRIDE` | source row step in bytes (signed) |
-| F0080A | RW | `BLT_DSTRIDE` | destination row step in bytes (signed) |
-| F0080C | RW | `BLT_W` | bytes in a row, 1–4095 |
-| F0080E | RW | `BLT_H` | rows, 1–65535 |
-| F00810 | RW | `BLT_KEY` | bits 7:0: the colour key |
-| F00812 | RW | `BLT_FILL` | bits 7:0: the fill byte |
+| F00800 / F00802 | W | `BLT_SRC` | source byte address |
+| F00804 / F00806 | W | `BLT_DST` | destination byte address |
+| F00808 | W | `BLT_SSTRIDE` | source row step in bytes (signed) |
+| F0080A | W | `BLT_DSTRIDE` | destination row step in bytes (signed) |
+| F0080C | W | `BLT_W` | bytes in a row, 1–4095 |
+| F0080E | W | `BLT_H` | rows, 1–65535 |
+| F00810 | W | `BLT_KEY` | bits 7:0: the colour key |
+| F00812 | W | `BLT_FILL` | bits 7:0: the fill byte |
 | F00814 | W | `BLT_CMD` | starts a blit: bit 0: 0 copy, 1 fill; bit 1: keyed (a copy leaves the destination byte alone where the source byte equals `BLT_KEY`) |
 | F00816 | R | `BLT_STAT` | bit 0: busy |
+
+Only `BLT_STAT` reads back; the other registers are write-only (they read 0).
 
 Rows are done in order, left to right: a copy whose destination overlaps
 its source must have the destination before the source (or use a stride
@@ -243,7 +254,7 @@ There are 3 voices, each 8 bytes apart (voice n is at `F00400 + 8n`).
 | +4 | `SND_WAVE` | 0 square, 1 triangle, 2 sawtooth, 3 noise |
 
 On the Tang Nano 20K these are voices 0-2 of the audio engine
-(docs/audio.md). On the Spartan-3 (the low tier, `fpga/rtl/audio_lite.v`)
+(docs/audio.md), and write-only (they read 0). On the Spartan-3 (the low tier, `fpga/rtl/audio_lite.v`)
 the sound is the streaming player alone, on an I2S DAC (for example a
 PCM5102A) on the A2 expansion connector: pin 4 (E6) bit clock, pin 5 (D5)
 word clock, pin 6 (C5) data, 3.3 V, ground on pin 1. The output is 16-bit
@@ -388,6 +399,24 @@ board's oscillator socket: leave the socket empty. Without the pads' port
 (the Tang) `PADS` reads 3F3F: no pads. fsim: `--pad N,TYPE,BUTTONS` (N 1 or
 2, TYPE 3 or 6, the buttons held as `fpga/lib/pad.h`'s bits).
 
+
+## Flash (F00900, Tang Nano 20K)
+
+The Tang's SPI flash (the configuration flash, an XT25F64B, 8 MB) through a byte port
+(`tang/rtl/spiflash.v`). At power-up the FPGA's boot copier uses it to load the ROM
+(docs/rom.md); after that it is the CPU's.
+
+| Address | R/W | Name | Function |
+|---|---|---|---|
+| F00900 | RW | `FL_DATA` | write (the low byte): send a byte to the flash and receive one; read: the byte received |
+| F00902 | RW | `FL_CTRL` | write bit 0: 1 = select the flash (CS low), 0 = end the command; read: bit 0 busy (a byte is moving), bit 1 the ROM was copied from the flash at power-up |
+
+A command is: select, its bytes (each `FL_DATA` write, waiting while busy), deselect. The flash
+sends during every byte, so reading data means sending a byte (any value) for each byte
+wanted: `READ` (03) and a 24-bit address, then one byte sent per byte read. Writing needs
+`WREN` (06) before each `PP` (02, within a 256-byte page) or `SE` (20, a 4 KB sector), then
+`RDSR` (05) until bit 0 clears. 000000–3FFFFF holds the bitstream; the BIOS's `fl_erase` and
+`fl_program` refuse it. The bit clock is 16.9 MHz (a byte in about 0.5 µs).
 
 ## Interrupts (F00700)
 

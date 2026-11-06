@@ -2,6 +2,8 @@
 // system: load a program over the serial line (+bytes=FILE: one hex byte a
 // line, loaded at +base, default 0x1000), run it, and print what it sends;
 // 0x04 and a code byte end the run, as tang/tools/run.py expects.
+// +flash=FILE (hex bytes from flash offset 400000, as tools/mkrom.py writes): nothing is sent;
+// the boot copier (rtl/spiflash.v) loads the ROM image from the flash model and starts it.
 // +shot=FILE +frame=N: write video frame N (counted from the start) as one
 // '0'-'7' character per pixel (each channel's top bit), for
 // fpga/tools/cmpshot.py, and stop; with +rgb24 as six hex digits a pixel.
@@ -16,10 +18,13 @@ module system_tb;
     wire [1:0]  sd_ba;
     wire [3:0]  sd_dqm;
     wire [31:0] sd_dq;
+    wire        fl_cs_n, fl_clk, fl_mosi, fl_miso;
     system dut (.clk(clk), .s1(1'b0), .s2(1'b0), .uart_rx(rx), .uart_tx(tx), .led(led), .tmds_p(), .tmds_n(),
                 .O_sdram_clk(sd_clk), .O_sdram_cke(sd_cke), .O_sdram_cs_n(sd_cs_n),
                 .O_sdram_ras_n(sd_ras_n), .O_sdram_cas_n(sd_cas_n), .O_sdram_wen_n(sd_we_n),
-                .O_sdram_addr(sd_a), .O_sdram_ba(sd_ba), .O_sdram_dqm(sd_dqm), .IO_sdram_dq(sd_dq));
+                .O_sdram_addr(sd_a), .O_sdram_ba(sd_ba), .O_sdram_dqm(sd_dqm), .IO_sdram_dq(sd_dq),
+                .flash_cs_n(fl_cs_n), .flash_clk(fl_clk), .flash_mosi(fl_mosi), .flash_miso(fl_miso));
+    spiflash_model flm (.cs_n(fl_cs_n), .sclk(fl_clk), .mosi(fl_mosi), .miso(fl_miso));
     sdram_model sdm (.clk(sd_clk), .cke(sd_cke), .cs_n(sd_cs_n), .ras_n(sd_ras_n), .cas_n(sd_cas_n),
                      .we_n(sd_we_n), .a(sd_a), .ba(sd_ba), .dqm(sd_dqm), .dq(sd_dq));
 
@@ -42,6 +47,10 @@ module system_tb;
     reg [1023:0] file;
     initial begin
         for (k = 0; k < 65536; k = k + 1) prog[k] = 8'hxx;
+        if ($test$plusargs("flash")) begin
+            @(posedge dut.fb_go);
+            $display("[system_tb] booted from the flash: entry %06h at %0t ns", dut.fb_entry, $time);
+        end else begin
         if (!$value$plusargs("bytes=%s", file)) begin $display("need +bytes=FILE"); $finish; end
         if (!$value$plusargs("base=%h", base)) base = 32'h1000;
         $readmemh(file, prog);
@@ -53,6 +62,7 @@ module system_tb;
         send(n >> 16); send(n >> 8); send(n);
         for (k = 0; k < n; k = k + 1) send(prog[k]);
         send("G"); send(base >> 16); send(base >> 8); send(base);
+        end
     end
 
     // receive what T1 sends

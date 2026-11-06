@@ -1,0 +1,102 @@
+/* The ROM's calls (docs/rom.md): slot n is the function pointer at 0x000100 + 4n, which the
+ * BIOS fills at boot. Append only: a slot's number, arguments and meaning never change.
+ * Blocks of 32: 0 system, 1 console, 2 video, 3 sound, 4 flash and ROM disk, 5 memory,
+ * 6 utility, 7 blitter, 8 shell.
+ *
+ *   SLOT(n, return type, name, (parameters), (arguments))
+ *   SLOTV(n, name, (parameters), (arguments))          a call that returns nothing
+ *
+ * Fixed-width types only (an --int32 program calls the same ROM); pointers are 32-bit pairs. */
+
+/* ---- 0: system */
+SLOT (  0, uint16_t, tb_version,   (void), ())                  /* ROM version: 0x0100 = 1.0 */
+SLOT (  1, uint16_t, sys_board,    (void), ())                  /* 1: Tang Nano 20K */
+SLOTV(  2,           sys_warm,     (void), ())                  /* restart the shell (no return) */
+SLOT (  3, uint32_t, sys_cycles,   (void), ())                  /* CYCLE: T1 periods, 16.875 MHz */
+SLOT (  4, uint32_t, sys_frame,    (void), ())                  /* video frames since power-up, 60 Hz */
+SLOTV(  5,           sys_wait,     (uint16_t frames), (frames)) /* wait this many frames */
+SLOT (  6, uint32_t, sys_ram_top,  (void), ())                  /* the end of the application's RAM */
+SLOTV(  7,           sys_panic,    (const char *why), (why))    /* message, red screen, stop */
+SLOT (  8, tb_handler_t, irq_set,  (int16_t src, tb_handler_t h), (src, h))   /* a source's handler; the old one */
+SLOTV(  9,           irq_enable,   (int16_t src, int16_t on), (src, on))      /* a source on or off (and IE on) */
+SLOT ( 10, uint32_t, sys_ms,       (void), ())                  /* milliseconds since power-up */
+SLOTV( 11,           sys_delay,    (uint16_t ms), (ms))
+SLOT ( 12, uint16_t, sys_buttons,  (void), ())                  /* bit 0 S1, bit 1 S2 */
+SLOTV( 13,           sys_leds,     (uint16_t on), (on))         /* bits 5:0, 1 = lit */
+SLOT ( 14, tb_fn_t,  tb_patch,     (int16_t slot, tb_fn_t fn), (slot, fn))    /* replace a slot; the old pointer */
+
+/* ---- 1: console (the serial port and the text layer) */
+SLOTV( 32,           con_putc,     (uint8_t c), (c))
+SLOTV( 33,           con_puts,     (const char *s), (s))
+SLOTV( 34,           con_write,    (const char *s, uint16_t n), (s, n))
+SLOT ( 35, int16_t,  con_getc,     (void), ())                  /* waits; a character (-2 end of input) */
+SLOT ( 36, int16_t,  con_poll,     (void), ())                  /* a character, or -1 for none */
+SLOT ( 37, int16_t,  con_gets,     (char *buf, uint16_t size), (buf, size))   /* an edited line; its length */
+SLOTV( 38,           con_puthex,   (uint32_t v, int16_t digits), (v, digits))
+SLOTV( 39,           con_putdec,   (int32_t v), (v))
+SLOTV( 40,           con_vprintf,  (const char *fmt, va_list ap), (fmt, ap))  /* %d %u %x %s %c %ld %lx, widths */
+SLOTV( 41,           con_clear,    (void), ())
+SLOTV( 42,           con_goto,     (uint16_t row, uint16_t col), (row, col))
+SLOTV( 43,           con_color,    (uint16_t fg, uint16_t bg), (fg, bg))      /* 0-7; bg 8 = transparent */
+SLOTV( 44,           con_target,   (uint16_t mask), (mask))     /* bit 0 serial, bit 1 screen */
+
+/* ---- 2: video (the registers are write-only: these keep the copies) */
+SLOTV( 64,           vid_ctrl,     (uint16_t v), (v))           /* VID_CTRL */
+SLOT ( 65, uint16_t, vid_ctrl_get, (void), ())
+SLOTV( 66,           vid_ctrl2,    (uint16_t v), (v))           /* VID_CTRL2 */
+SLOT ( 67, uint16_t, vid_ctrl2_get,(void), ())
+SLOTV( 68,           vid_text,     (uint32_t a), (a))           /* buffer addresses */
+SLOTV( 69,           vid_bmp,      (uint32_t a), (a))
+SLOTV( 70,           vid_spr,      (uint32_t a), (a))
+SLOTV( 71,           vid_palette,  (uint16_t first, const uint16_t *rgb565, uint16_t n), (first, rgb565, n))
+SLOTV( 72,           vid_scroll,   (uint16_t x, uint16_t y), (x, y))
+SLOTV( 73,           vid_wait_vbl, (void), ())                  /* until the next vertical blank */
+SLOTV( 74,           vid_backdrop, (uint16_t c), (c))
+SLOTV( 75,           vid_reset,    (void), ())                  /* the boot layout: text layer only */
+SLOT ( 76, uint32_t, vid_text_addr,(void), ())
+
+/* ---- 3: sound (the audio engine, docs/audio.md: CTRL copies kept here) */
+SLOTV( 96,           snd_tone,     (uint16_t voice, uint16_t hz, uint16_t vol, uint16_t wave), (voice, hz, vol, wave))
+SLOTV( 97,           snd_off,      (uint16_t voice), (voice))   /* release */
+SLOTV( 98,           snd_beep,     (uint16_t hz, uint16_t ms), (hz, ms))
+SLOTV( 99,           snd_ctrl,     (uint16_t voice, uint16_t v), (voice, v))
+SLOT (100, uint16_t, snd_ctrl_get, (uint16_t voice), (voice))
+SLOTV(101,           snd_master,   (uint16_t v), (v))
+SLOTV(102,           snd_quiet,    (void), ())                  /* every voice off at once */
+
+/* ---- 4: the SPI flash and the ROM disk */
+SLOT (128, uint32_t, fl_id,        (void), ())                  /* JEDEC ID: 0x0B4017 */
+SLOTV(129,           fl_read,      (uint32_t addr, void *buf, uint32_t n), (addr, buf, n))
+SLOT (130, int16_t,  fl_erase,     (uint32_t addr), (addr))     /* the 4 KB sector; 0, or <0 */
+SLOT (131, int16_t,  fl_program,   (uint32_t addr, const void *buf, uint32_t n), (addr, buf, n))
+SLOT (132, int16_t,  rd_count,     (void), ())                  /* files on the ROM disk */
+SLOT (133, int16_t,  rd_entry,     (int16_t i, tb_file_t *e), (i, e))
+SLOT (134, int16_t,  rd_find,      (const char *name, tb_file_t *e), (name, e))   /* its index, or -1 */
+SLOT (135, uint32_t, rd_load,      (const tb_file_t *e), (e))   /* to its load address; its entry, 0 on error */
+
+/* ---- 5: memory (the system heap, in the ROM's RAM) */
+SLOT (160, void *,   mem_alloc,    (uint32_t n), (n))
+SLOTV(161,           mem_free,     (void *p), (p))
+SLOT (162, uint32_t, mem_avail,    (void), ())                  /* the largest free block */
+
+/* ---- 6: utility */
+SLOT (192, void *,   ut_memcpy,    (void *d, const void *s, uint32_t n), (d, s, n))
+SLOT (193, void *,   ut_memset,    (void *d, uint8_t v, uint32_t n), (d, v, n))
+SLOT (194, int16_t,  ut_memcmp,    (const void *a, const void *b, uint32_t n), (a, b, n))
+SLOT (195, uint32_t, ut_strlen,    (const char *s), (s))
+SLOT (196, int16_t,  ut_strcmp,    (const char *a, const char *b), (a, b))
+SLOT (197, char *,   ut_strcpy,    (char *d, const char *s), (d, s))
+SLOT (198, uint32_t, ut_crc32,     (uint32_t crc, const void *p, uint32_t n), (crc, p, n))  /* start with 0 */
+SLOT (199, uint16_t, ut_rand,      (void), ())
+SLOTV(200,           ut_srand,     (uint32_t seed), (seed))
+SLOT (201, int16_t,  ut_stricmp,   (const char *a, const char *b), (a, b))
+
+/* ---- 7: blitter */
+SLOTV(224,           blt_copy,     (uint32_t src, uint32_t dst, int16_t sstride, int16_t dstride, uint16_t w, uint16_t h), (src, dst, sstride, dstride, w, h))
+SLOTV(225,           blt_fill,     (uint32_t dst, int16_t dstride, uint16_t w, uint16_t h, uint8_t v), (dst, dstride, w, h, v))
+SLOTV(226,           blt_keycopy,  (uint32_t src, uint32_t dst, int16_t sstride, int16_t dstride, uint16_t w, uint16_t h, uint8_t key), (src, dst, sstride, dstride, w, h, key))
+SLOTV(227,           blt_wait,     (void), ())
+
+/* ---- 8: shell */
+SLOT (256, int16_t,  sh_exec,      (const char *line), (line))  /* run one shell command line */
+SLOT (257, int16_t,  sh_run,       (const char *name), (name))  /* load and run a ROM disk program */

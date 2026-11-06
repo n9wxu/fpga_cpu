@@ -28,6 +28,10 @@ void opts_usage(int gui)
             "  --ext             allow extension X (DSTEP, MULPU, FSHR, FSHL, CLZ; see cpu/isa.yaml)\n"
             "  --video P:B       video steals B of every P port cycles (default 56:4 = 7%%, 0:0 = off)\n"
             "  --xram MB         simulator-only expansion RAM at 0x100000, up to 14 MB (default none)\n"
+            "  --rom IMG         the Tang's ROM (docs/rom.md): the flash image from 0x400000 (rom/tools/\n"
+            "                    mkrom.py), its body copied to its load address (F80000-FFFFFF is RAM),\n"
+            "                    run from its entry; the image (no image.bin needed) is also the flash\n"
+            "                    behind F00900. --rom-save writes flash changes back to IMG at exit\n"
             "  --max-cycles N    stop after N cycles (default %s)\n"
             "  --disk DIR        host directory served by the file service (default ./disk)\n"
             "  --sym FILE        symbol file (lines of \"%%06x name\")\n"
@@ -243,6 +247,8 @@ int opts_parse(opts_t *o, int argc, char **argv, int gui)
         else if (!strcmp(a, "--line") && more) o->cfg.line_bytes = num(argv[++i]);
         else if (!strcmp(a, "--no-prefetch")) o->cfg.prefetch = 0;
         else if (!strcmp(a, "--xram") && more) o->cfg.xram_mb = num(argv[++i]);
+        else if (!strcmp(a, "--rom") && more) o->rom = argv[++i];
+        else if (!strcmp(a, "--rom-save")) o->rom_save = 1;
         else if (!strcmp(a, "--fuse")) o->cfg.fuse = FU_ALL;
         else if (!strncmp(a, "--fuse=", 7)) {
             if (parse_fuse(a + 7, &o->cfg.fuse))
@@ -342,7 +348,7 @@ int opts_parse(opts_t *o, int argc, char **argv, int gui)
     }
     if (num_err)
         return -1;
-    if (!o->image && !gui)
+    if (!o->image && !o->rom && !gui)
         return -1;
     if (o->cfg.icache_bytes && (o->cfg.line_bytes < 4 || o->cfg.icache_bytes % o->cfg.line_bytes)) {
         fprintf(stderr, "bad I-cache geometry\n");
@@ -368,12 +374,13 @@ int load_image(cpu_t *c, const char *path, uint32_t load)
         perror(path);
         return 0;
     }
-    if (load < ROM_BASE && load >= c->ram_size) {
+    if (load < c->rom_base && load >= c->ram_size) {
         fprintf(stderr, "%s: load address %06x is not RAM (expansion RAM needs --xram)\n", path, load);
         return 0;
     }
-    uint8_t *dst = load >= ROM_BASE ? c->rom + (load - ROM_BASE) : c->sram + load;
-    size_t room = load >= ROM_BASE ? ROM_SIZE - (load - ROM_BASE) : c->ram_size - load;
+    int in_rom = load >= c->rom_base && load < c->rom_base + c->rom_size;
+    uint8_t *dst = in_rom ? c->rom + (load - c->rom_base) : c->sram + load;
+    size_t room = in_rom ? c->rom_size - (load - c->rom_base) : c->ram_size - load;
     size_t n = fread(dst, 1, room, f);
     fclose(f);
     if (!n)
@@ -408,9 +415,23 @@ int setup_cpu(cpu_t *c, const opts_t *o)
         perror(o->sym);
         return -1;
     }
-    if (!load_image(c, o->image, o->load))
-        return -1;
-    c->pc = o->entry == 0xFFFFFFFF ? o->load : o->entry;
+    if (o->rom) {
+        free(c->rom);
+        c->rom_base = 0xF80000u;              /* the Tang's ROM region: SDRAM, so writable */
+        c->rom_size = 0x80000u;
+        c->rom_rw = 1;
+        c->rom = calloc(c->rom_size + 4, 1);
+        uint32_t e = flash_load(c, o->rom, o->rom_save);
+        if (e == 0xFFFFFFFE)
+            return -1;
+        c->pc = e;
+    }
+    if (o->image) {
+        if (!load_image(c, o->image, o->load))
+            return -1;
+        if (!o->rom || o->entry != 0xFFFFFFFF)
+            c->pc = o->entry == 0xFFFFFFFF ? o->load : o->entry;
+    }
     push_keys(&c->dev, o->keys);
     return 0;
 }
