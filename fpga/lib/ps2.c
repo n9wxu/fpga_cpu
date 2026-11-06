@@ -6,6 +6,7 @@
 
 volatile uint8_t ps2_type[2];
 static volatile uint8_t replug[2];      /* BAT (AA) arrived: a device was plugged in */
+volatile uint8_t ps2_wheel;             /* the mouse has a wheel (IntelliMouse, ID 03) */
 
 /* ---- polled ---- */
 
@@ -116,6 +117,16 @@ int ps2_detect(int port)
         ps2_recv(port, 3);
         t = PS2_KBD;
     } else if (r == 0x00 || r == 0x03 || r == 0x04) {
+        /* a wheel: sample rates 200, 100, 80 turn on the IntelliMouse's
+         * fourth byte, and it then identifies as 03 */
+        if (r == 0x00 && !cmd(port, 0xF3) && !cmd(port, 200) && !cmd(port, 0xF3) && !cmd(port, 100) &&
+            !cmd(port, 0xF3) && !cmd(port, 80) && !cmd(port, 0xF2))
+            r = ps2_recv(port, 3);
+        ps2_wheel = (uint8_t)(r == 0x03 || r == 0x04);
+        if (!cmd(port, 0xF3))
+            cmd(port, 100);                   /* 100 samples a second */
+        if (!cmd(port, 0xE8))
+            cmd(port, 3);                     /* 8 counts a millimetre */
         t = cmd(port, 0xF4) ? PS2_NONE : PS2_MOUSE;   /* reporting on */
     } else
         t = PS2_NONE;
@@ -243,24 +254,33 @@ void kbd_releases(int on) { k_rel = (uint8_t)on; }
 
 /* ---- the mouse ---- */
 
-static uint8_t m_pkt[3], m_n;
-static volatile int16_t m_dx, m_dy;
-static volatile uint8_t m_b;
+static uint8_t m_pkt[4], m_n;
+static uint16_t m_frame;                /* when the last byte came */
+static volatile int16_t m_dx, m_dy, m_dz;
+static volatile uint8_t m_b, m_press;
 
 static void mouse_byte(uint8_t b)
 {
+    uint16_t f = FRAME;
+    if ((uint16_t)(f - m_frame) > 1)      /* a pause: the next byte starts a packet */
+        m_n = 0;
+    m_frame = f;
     if (m_n == 0 && !(b & 0x08))          /* out of step: the first byte has bit 3 set */
         return;
     m_pkt[m_n++] = b;
-    if (m_n < 3)
+    if (m_n < (ps2_wheel ? 4 : 3))
         return;
     m_n = 0;
-    uint8_t f = m_pkt[0];
-    if (f & 0xC0)                         /* overflow: drop */
-        return;
-    m_dx += (int16_t)((f & 0x10) ? (int16_t)m_pkt[1] - 256 : m_pkt[1]);
-    m_dy += (int16_t)((f & 0x20) ? (int16_t)m_pkt[2] - 256 : m_pkt[2]);
-    m_b = f & 7;
+    uint8_t f0 = m_pkt[0];
+    if (!(f0 & 0xC0)) {                   /* (overflow: no movement) */
+        m_dx += (int16_t)((f0 & 0x10) ? (int16_t)m_pkt[1] - 256 : m_pkt[1]);
+        m_dy += (int16_t)((f0 & 0x20) ? (int16_t)m_pkt[2] - 256 : m_pkt[2]);
+    }
+    if (ps2_wheel)                        /* + toward the user in the packet */
+        m_dz -= (int16_t)(int8_t)(m_pkt[3] & 0x08 ? m_pkt[3] | 0xF0 : m_pkt[3] & 0x0F);
+    uint8_t nb = f0 & 7;
+    m_press |= (uint8_t)(nb & ~m_b);
+    m_b = nb;
 }
 
 uint8_t ps2_mouse_get(int16_t *dx, int16_t *dy)
@@ -272,6 +292,19 @@ uint8_t ps2_mouse_get(int16_t *dx, int16_t *dy)
     uint8_t b = m_b;
     irq_enable(1);
     return b;
+}
+
+void ps2_mouse_read(ps2_mouse_t *m)
+{
+    irq_enable(0);
+    m->dx = m_dx;
+    m->dy = m_dy;
+    m->dz = m_dz;
+    m_dx = m_dy = m_dz = 0;
+    m->buttons = m_b;
+    m->pressed = m_press;
+    m_press = 0;
+    irq_enable(1);
 }
 
 /* ---- interrupts ---- */

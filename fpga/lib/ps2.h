@@ -5,6 +5,7 @@
  *   irq_enable(1);
  *   int k = kbd_get();          // like KBD_DATA: a key code, 0xFFFF if none
  *   ps2_mouse_get(&dx, &dy);    // movement since the last call; buttons back
+ *   ps2_mouse_read(&m);         // the same, with the wheel and the presses since
  *
  * Key codes are those of KBD_DATA (docs/io.md "Keyboard"): ASCII, Ctrl-A..Z
  * as 1-26, arrows 0x80-0x83, Home/End/PgUp/PgDn/Insert 0x84-0x88, F1-F12
@@ -45,4 +46,11 @@ uint16_t kbd_get(void);
 uint16_t kbd_mod(void);               /* bit 0 shift, 1 ctrl, 2 alt (as KBD_MOD) */
 void kbd_releases(int on);
 uint8_t ps2_mouse_get(int16_t *dx, int16_t *dy);   /* buttons: bit 0 left, 1 right, 2 middle */
+
+/* movement (dy + up), the wheel (dz + a turn away from the user), the
+ * buttons now and those pressed since the last call (a click shorter than
+ * the time between calls is still seen) */
+typedef struct { int16_t dx, dy, dz; uint8_t buttons, pressed; } ps2_mouse_t;
+void ps2_mouse_read(ps2_mouse_t *m);
+extern volatile uint8_t ps2_wheel;    /* the mouse has a wheel (IntelliMouse) */
 #endif

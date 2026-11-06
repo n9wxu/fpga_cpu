@@ -12,9 +12,13 @@
  * the command returns). An empty port never clocks.
  *
  * Inputs: the GUI's keyboard (as set-2 scan codes) and mouse, or scripted:
- * --ps2keys STRING types into the keyboard, --ps2mouse "dx,dy,b;..." moves
- * the mouse; each starts 100 ms after the device's last command, and the
- * mouse only once reporting is on (F4). --ps2 A,B picks the devices (kbd,
+ * --ps2keys STRING types into the keyboard (\p: wait 100 ms; \w: wait for
+ * the mouse script's k), --ps2mouse "dx,dy,b[,wheel];..." moves the mouse
+ * (wheel + is a turn away from the user; a step "k" waits until the
+ * keyboard has typed what follows its \w; a wheel mouse: IntelliMouse, ID
+ * 03 after the sample rates 200, 100, 80, with a fourth packet byte); each
+ * starts 100 ms after
+ * the device's last command, and the mouse only once reporting is on (F4). --ps2 A,B picks the devices (kbd,
  * mouse, none; default kbd,mouse). */
 #include "cpu.h"
 
@@ -45,11 +49,14 @@ typedef struct {
     uint8_t arg_for;          /* the command waiting for its argument */
     uint8_t last;             /* last byte sent to the host (FE: resend) */
     int scan, stream;         /* keyboard scanning, mouse reporting */
+    uint8_t rates[3];         /* the mouse's last three sample rates (F3) */
+    uint8_t id;               /* the mouse's ID: 00, or 03 once the rates were 200, 100, 80 (a wheel) */
     uint64_t last_cmd;
     const char *script;       /* scripted input still to come */
 } port_t;
 
 static port_t P[2] = { { .type = DEV_KBD, .scan = 1 }, { .type = DEV_MOUSE } };
+static int mouse_at_k;                    /* the mouse script waits for the keyboard's */
 
 static void put(port_t *p, uint8_t b)
 {
@@ -104,20 +111,24 @@ void ps2_key(int usage, int down)
         scan(p, usage, down);
 }
 
-static void packet(port_t *p, int dx, int dy, int b)
+static void packet(port_t *p, int dx, int dy, int b, int z)
 {
     dx = dx > 255 ? 255 : dx < -255 ? -255 : dx;
     dy = dy > 255 ? 255 : dy < -255 ? -255 : dy;
     put(p, (uint8_t)(0x08 | (b & 7) | (dx < 0 ? 0x10 : 0) | (dy < 0 ? 0x20 : 0)));
     put(p, (uint8_t)dx);
     put(p, (uint8_t)dy);
+    if (p->id == 3) {                       /* IntelliMouse: the wheel, + toward the user */
+        z = z > 7 ? 7 : z < -7 ? -7 : z;
+        put(p, (uint8_t)-z);
+    }
 }
 
-void ps2_mouse(int dx, int dy, int buttons)
+void ps2_mouse(int dx, int dy, int buttons, int wheel)
 {
     port_t *p = find(DEV_MOUSE);
     if (p && p->stream && qlen(p) < QLEN - 8)
-        packet(p, dx, dy, buttons);
+        packet(p, dx, dy, buttons, wheel);
 }
 
 /* ASCII -> HID usage, with bit 8 for shift (US layout) */
@@ -138,6 +149,19 @@ static void script_step(port_t *p, uint64_t now)
         return;
     if (p->type == DEV_KBD && p->scan) {
         int ch = (unsigned char)*p->script++;
+        if (ch == '\\' && *p->script == 'p') {   /* \p: a pause of 100 ms */
+            p->script++;
+            p->last_cmd = now;
+            return;
+        }
+        if (ch == '\\' && *p->script == 'w') {   /* \w: until the mouse script reaches k */
+            if (mouse_at_k) {
+                p->script++;
+                mouse_at_k = 2;             /* typing now */
+            } else
+                p->script--;
+            return;
+        }
         if (ch == '\\' && *p->script) {
             int e = *p->script++;
             ch = e == 'n' ? '\r' : e == 'e' ? 27 : e == 't' ? '\t' : e == 'b' ? '\b' : e;
@@ -149,13 +173,27 @@ static void script_step(port_t *p, uint64_t now)
         scan(p, u & 0xFF, 0);
         if (u & 0x100) scan(p, 225, 0);
     } else if (p->type == DEV_MOUSE && p->stream) {
+        if (*p->script == 'k') {            /* wait for the keyboard */
+            port_t *k = find(DEV_KBD);
+            if (!mouse_at_k)
+                mouse_at_k = 1;
+            if (mouse_at_k == 2 && k && (!k->script || !*k->script || (k->script[0] == '\\' && k->script[1] == 'w')) &&
+                !qlen(k) && !k->valid) {
+                mouse_at_k = 0;
+                p->script++;
+                if (*p->script == ';') p->script++;
+            } else if (!k || !k->script)
+                p->script++, mouse_at_k = 0;
+            return;
+        }
         char *end;
         long dx = strtol(p->script, &end, 0);
         long dy = *end == ',' ? strtol(end + 1, &end, 0) : 0;
         long b = *end == ',' ? strtol(end + 1, &end, 0) : 0;
+        long z = *end == ',' ? strtol(end + 1, &end, 0) : 0;
         while (*end && *end != ';') end++;
         p->script = *end ? end + 1 : end;
-        packet(p, (int)dx, (int)dy, (int)b);
+        packet(p, (int)dx, (int)dy, (int)b, (int)z);
     }
 }
 
@@ -164,6 +202,13 @@ static void command(port_t *p, uint8_t b, uint64_t now)
 {
     p->last_cmd = now;
     if (p->arg_for) {                       /* LEDs, rate, resolution, scan set */
+        if (p->type == DEV_MOUSE && p->arg_for == 0xF3) {
+            p->rates[0] = p->rates[1];
+            p->rates[1] = p->rates[2];
+            p->rates[2] = b;
+            if (p->rates[0] == 200 && p->rates[1] == 100 && p->rates[2] == 80)
+                p->id = 3;
+        }
         p->arg_for = 0;
         put(p, 0xFA);
         return;
@@ -186,15 +231,15 @@ static void command(port_t *p, uint8_t b, uint64_t now)
         }
     }
     switch (b) {                            /* the mouse */
-    case 0xFF: p->head = p->tail; p->stream = 0; put(p, 0xFA); put(p, 0xAA); put(p, 0x00);
+    case 0xFF: p->head = p->tail; p->stream = 0; p->id = 0; put(p, 0xFA); put(p, 0xAA); put(p, 0x00);
                p->next = now + BAT_CYCLES; return;
-    case 0xF2: put(p, 0xFA); put(p, 0x00); return;
+    case 0xF2: put(p, 0xFA); put(p, p->id); return;
     case 0xF4: p->stream = 1; put(p, 0xFA); return;
     case 0xF5: p->stream = 0; put(p, 0xFA); return;
     case 0xF6: p->stream = 0; put(p, 0xFA); return;
     case 0xE8: case 0xF3: put(p, 0xFA); p->arg_for = b; return;
     case 0xE9: put(p, 0xFA); put(p, p->stream ? 0x20 : 0x00); put(p, 0x02); put(p, 0x64); return;
-    case 0xEB: put(p, 0xFA); packet(p, 0, 0, 0); return;
+    case 0xEB: put(p, 0xFA); packet(p, 0, 0, 0, 0); return;
     default: put(p, 0xFA); return;
     }
 }
@@ -312,6 +357,7 @@ int ps2_config(const char *s)
         P[i].type = t;
         P[i].scan = t == DEV_KBD;
         P[i].stream = 0;
+        P[i].id = 0;
         if (!e) {
             if (i == 0) P[1].type = DEV_NONE;
             break;
