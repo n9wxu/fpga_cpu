@@ -396,7 +396,7 @@ module t1f_core #(
     end
     wire [7:0] a_eff_c = a_shl ? {a_in_c[6:0], shl_in} : a_in_c;
     wire [7:0] b_eff_c = b_inv ? ~b_in_c : b_in_c;
-    wire [7:0] sh_fb = {8{f_bit}};
+    wire [7:0] sh_fb = {8{f_bit}};       // f_bit from the live reads too (rfa_w, rfb_w): latched with them
     wire [7:0] sh_x_c = (sxs == 2'd1) ? 8'h00 : (sxs == 2'd2) ? sh_fb : rfa_w;
     wire [7:0] sh_y_c = (sys == 2'd1) ? 8'h00 : (sys == 2'd2) ? sh_fb : rfb_w;
     reg  [7:0] a_in_q = 8'd0, a_eff_q = 8'd0, b_eff_q = 8'd0, sh_x_q = 8'd0, sh_y_q = 8'd0;
@@ -620,7 +620,7 @@ module t1f_core #(
                     if (n != 4'd0) fC_n = sh_w[9];
                 end else begin                             // right, low byte
                     ra = rbyte(ra_r, 2'd1); rb = rbyte(ra_r, nbig ? 2'd1 : 2'd0);
-                    f_bit = (shk == 2'd2) && (nbig ? rfb[7] : rfa[7]);
+                    f_bit = (shk == 2'd2) && (nbig ? rfb_w[7] : rfa_w[7]);   // live: (SYNC) it goes into sh_x_q
                     sxs = nbig ? 2'd2 : 2'd0; shamt = nbig ? n - 4'd8 : n;
                     wa = rbyte(rd_r, 2'd0);
                     if (n != 4'd0) fC_n = sh_w[0];
@@ -633,7 +633,7 @@ module t1f_core #(
                     wa = rbyte(rd_r, 2'd0);
                 end else begin                             // right, high byte
                     rb = rbyte(ra_r, 2'd1);
-                    f_bit = (shk == 2'd2) && rfb[7];
+                    f_bit = (shk == 2'd2) && rfb_w[7];
                     sxs = 2'd2; shamt = nbig ? 4'd8 : n;
                     wa = rbyte(rd_r, 2'd1); fN_n = res[7];
                 end
