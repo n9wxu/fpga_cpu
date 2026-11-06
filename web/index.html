@@ -175,11 +175,11 @@ async function setupPrograms() {
   hwList = JSON.parse(UTF8ToString(Module._web_hw_list()));
   for (const h of hwList) { const o = new Option(h.title, h.name); o.title = h.about; $('hw').add(o); }
   try { const r = await fetch('progs/catalog.json'); if (r.ok) catalog = await r.json(); } catch (e) {}
-  const groups = { demo: 'Demos', bench: 'Benchmarks' };
+  const groups = { demo: 'Demos', app: 'Apps', bench: 'Benchmarks' };
   for (const k in groups) {
     const g = document.createElement('optgroup');
     g.label = groups[k];
-    for (const p of catalog.filter(p => p.kind === k)) {
+    for (const p of catalog.filter(p => p.kind === k && p.name !== 'basic')) {   // BASIC is in Programs
       const o = new Option(p.title, 'p:' + p.name);
       o.title = p.about + ' (made for: ' + p.hw + ')';
       g.appendChild(o);
