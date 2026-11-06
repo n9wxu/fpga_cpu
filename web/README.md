@@ -1,4 +1,4 @@
-# BASIC and Doom in the browser
+# BASIC, Doom, demos and benchmarks in the browser
 
 The simulator core (`sim/src`) compiled to WebAssembly with Emscripten,
 running the BASIC image (`basic/`) or Doom (`benchmarks/doom/`) on a web
@@ -29,7 +29,16 @@ Any static web server can host it. Browsers will not load it from a
 
 ## The page
 
-- **Program:** BASIC or Doom (`?prog=doom`). Doom runs from 14 MB of the
+- **Program:** BASIC, Doom (`?prog=doom`), or a demo or benchmark from
+  `sim/tools/programs.py` (`make progs` builds them into `build/progs`;
+  `?prog=overdrive`). An image is fetched when it is picked. The BASIC
+  benchmarks boot BASIC with the benchmark programs as its disk and type
+  their `RUN`.
+- **Hardware:** as fsim's `--hw` (sim/README.md): the reference machine, the
+  Spartan-3 board, the Tang Nano 20K or the 15 MB machine for Doom: the video
+  tier, the RAM, the colours and the clock (the board's speed). A program
+  picks the hardware it was made for; `?hw=NAME` or the menu picks another.
+- Doom runs from 14 MB of the
   simulator's expansion RAM, with the full palette. Arrow keys move, Ctrl
   fires, Space opens doors, Shift runs, Alt strafes, Esc is the menu. At
   50 MHz it draws about 6 frames per second; a browser too slow for real
@@ -39,7 +48,7 @@ Any static web server can host it. Browsers will not load it from a
   Ctrl+letter. Pasting text types it.
 - **Reset:** restarts BASIC.
 - **Encoding:** A or B; changing it reboots with that image.
-- **Speed:** 50 MHz real time or maximum. The status line shows the
+- **Speed:** real time (at the hardware's clock) or maximum. The status line shows the
   simulated MHz, MIPS, and the milliseconds each frame takes.
 - **Colors:** how the hi-color (8-bit indexed) bitmap is shown: as the
   board's 3-bit VGA shows it, through a 2×2 dither, or with the full

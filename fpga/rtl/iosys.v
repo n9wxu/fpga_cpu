@@ -17,17 +17,22 @@
 //
 // HICOL8 = 0 is the low video tier (the Spartan-3): no palette (PAL_INDEX,
 // PAL_DATA do nothing), no sprite registers, VID_CTRL keeps only the bits
-// that video.v uses there (0 text, 1 bitmap, 5 cursor, 7 16-color), and the
-// other video registers are write-only (they read 0).
+// that video.v uses there (0 text, 1 bitmap, 5 cursor, 7 16-color). On every
+// tier the video registers are write-only (they read 0).
 // AUDIO = 1: a sound block's registers (audio_lite.v) read through aud_rd
 // (16 bits, zero when the address is not its own); it takes the writes
 // itself, from the same io_wr/io_addr/io_wdata.
 // PS2 = 1: two PS/2 ports (ps2.v) at F00300, interrupt sources 1 and 2.
+// RDBACK = 0 (the low tier): the control registers software only writes
+// read 0, and so does INSTRET_LO (SR3 has it: fcpu_instret() reads it
+// there), which saves their read multiplexer.
 module iosys #(
     parameter HICOL8 = 1,
     parameter AUDIO = 0,
     parameter IRQ = 0,                      // 1: the interrupt controller's device sources (irq_src)
-    parameter PS2 = 0
+    parameter PS2 = 0,
+    parameter PADS = 0,                     // 1: the game pads' port (F00900)
+    parameter RDBACK = 1                    // 0: VID_CTRL, KBD_CTRL, LEDS, SEG7, SEG7_CTRL, INSTRET_LO read 0
 ) (
     input  wire        clk,                 // 50 MHz
     input  wire        io_wr,
@@ -74,7 +79,11 @@ module iosys #(
     output wire        irq,
     // PS/2 ports A (bit 0) and B (bit 1): the lines, and pull them low
     input  wire [1:0]  ps2_ci, ps2_di,
-    output wire [1:0]  ps2_co, ps2_do
+    output wire [1:0]  ps2_co, ps2_do,
+    // game pads (Sega Genesis, on the expansion board): the select line out,
+    // the pads' six lines in (pad 2 in bits 11:6), already synchronized
+    input  wire [11:0] pad_in,
+    output reg         pad_sel = 1'b1
 );
     // ---- frame and scan line -------------------------------------------------
     // line_tgl and line_top change at the same pixel-clock edge and cross
@@ -103,7 +112,8 @@ module iosys #(
     assign irq = (irq_pend & irq_en) != 8'd0;
 
     // ---- PS/2 ports (ps2.v): F00300 A, F00304 B
-    wire [1:0]  ps_v, ps_busy, ps_err, ps_rx;
+    wire [1:0]  ps_v, ps_rx;
+    wire [3:0]  ps_line;                    // port i: {data, clock} at 2i
     wire [15:0] ps_rd;
     reg  [1:0]  ps_take = 2'b00;
 
@@ -119,20 +129,22 @@ module iosys #(
             16'h0006: rv = cycles[31:16];
             16'h0700: rv = {8'd0, irq_pend};
             16'h0702: rv = {8'd0, irq_en};
-            16'h0010: rv = insts[15:0];
+            16'h0010: rv = RDBACK ? insts[15:0] : 16'd0;
             16'h0012: rv = insts[31:16];
             16'h0008: rv = con_in[8] ? 16'hFFFF : {8'd0, con_in[7:0]};
             16'h000A: rv = frame;
             16'h000C: rv = {line, 3'b000, vblank};
             16'h0100: rv = 16'hFFFF;        // KBD_DATA: no key
-            16'h0104: rv = kbd_ctrl;
-            // (the video registers, F00200-F0021F, are write-only: they read 0, for a smaller read
-            // multiplexer; programs keep their own copies)
-            16'h0600: rv = {8'd0, leds};
+            16'h0104: rv = RDBACK ? kbd_ctrl : 16'd0;
+            // (the video registers, F00200-F0021F, are write-only on every tier: they read 0, for a
+            // smaller read multiplexer; programs keep their own copies)
+            16'h0600: rv = RDBACK ? {8'd0, leds} : 16'd0;
             16'h0602: rv = {8'd0, switches};
             16'h0604: rv = {12'd0, buttons};
-            16'h0606: rv = seg7;
-            16'h0608: rv = {8'd0, seg7_ctrl};
+            16'h0606: rv = RDBACK ? seg7 : 16'd0;
+            16'h0608: rv = RDBACK ? {8'd0, seg7_ctrl} : 16'd0;
+            // PADS: no port reads as no pads (the lines pulled up)
+            16'h0900: rv = PADS ? {2'd0, pad_in[11:6], 2'd0, pad_in[5:0]} : 16'h3F3F;
             default:  rv = 16'd0;
         endcase
     endfunction
@@ -146,7 +158,7 @@ module iosys #(
     // would read stale while the read still took it)
     wire        ps_b = cur_addr[2];
     wire [15:0] ps_live = (!PS2 || {cur_addr[15:3], 3'b000} != 16'h0300) ? 16'd0 :
-                          cur_addr[1] ? {13'd0, ps_err[ps_b], ps_busy[ps_b], ps_v[ps_b]} :
+                          cur_addr[1] ? {13'd0, ps_line[2*ps_b +: 2], ps_v[ps_b]} :
                           ps_v[ps_b] ? {8'd0, ps_b ? ps_rd[15:8] : ps_rd[7:0]} : 16'hFFFF;
     wire [15:0] live = rv(cur_addr) | ps_live | (AUDIO ? aud_rd : 16'd0);
     always @(posedge clk) begin
@@ -176,14 +188,14 @@ module iosys #(
         wire ltick = lt_s[4] != lt_s[3];
         genvar i;
         for (i = 0; i < 2; i = i + 1) begin : port
-            ps2port p (.clk(clk), .samp(samp), .ltick(ltick), .ftick(frame_tick),
+            ps2port p (.clk(clk), .samp(samp), .ltick(ltick),
                 .clk_in(ps2_ci[i]), .dat_in(ps2_di[i]), .clk_lo(ps2_co[i]), .dat_lo(ps2_do[i]),
-                .wr(io_wr && io_addr[0] && {io_addr[15:3], 3'b000} == 16'h0300 && io_addr[2] == i && !io_addr[1]),
-                .wd(lo), .take(ps_take[i]), .valid(ps_v[i]), .rd(ps_rd[8*i +: 8]),
-                .busy(ps_busy[i]), .err(ps_err[i]), .rx(ps_rx[i]));
+                .ctl_wr(io_wr && io_addr[0] && {io_addr[15:3], 3'b000} == 16'h0300 && io_addr[2] == i && io_addr[1]),
+                .wd(lo[2:0]), .take(ps_take[i]), .valid(ps_v[i]), .rd(ps_rd[8*i +: 8]),
+                .line(ps_line[2*i +: 2]), .rx(ps_rx[i]));
         end
     end else begin : g_nops2
-        assign ps_v = 2'b00; assign ps_busy = 2'b00; assign ps_err = 2'b00; assign ps_rx = 2'b00;
+        assign ps_v = 2'b00; assign ps_line = 4'hF; assign ps_rx = 2'b00;
         assign ps_rd = 16'd0; assign ps2_co = 2'b00; assign ps2_do = 2'b00;
     end endgenerate
 
@@ -233,6 +245,7 @@ module iosys #(
                     16'h0600: leds <= w[7:0];
                     16'h0606: seg7 <= w;
                     16'h0608: seg7_ctrl <= w[7:0];
+                    16'h0900: pad_sel <= w[0];
                     default: ;
                 endcase
             end

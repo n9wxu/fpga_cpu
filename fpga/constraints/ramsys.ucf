@@ -46,3 +46,32 @@ NET "ps2_clk"   LOC = "M16" | IOSTANDARD = LVCMOS33 | PULLUP;
 NET "ps2_data"  LOC = "M15" | IOSTANDARD = LVCMOS33 | PULLUP;
 NET "ps2b_clk"  LOC = "D6"  | IOSTANDARD = LVCMOS33 | PULLUP;
 NET "ps2b_data" LOC = "C6"  | IOSTANDARD = LVCMOS33 | PULLUP;
+
+# The flash ROM (SST39VF1601C, sram_phy.v) on the A1 expansion connector:
+# A0-A17, OE#, WE# and DQ0-DQ7 are the SRAM's (UG130 table 13-2); its CE# on
+# pin 21 (M7, unshared) and A18 on pin 20 (P9, DOUT/BUSY: it toggles while
+# the FPGA configures, harmless on an address line). CE# has a pull-up on
+# the expansion board too, so the flash stays off while the FPGA configures.
+NET "flash_ce_n" LOC = "M7" | IOSTANDARD = LVCMOS33 | PULLUP;
+NET "flash_a18"  LOC = "P9" | IOSTANDARD = LVCMOS33;
+
+# Two Sega Genesis pads (PADS, iosys.v) through the expansion board's buffers
+# on A2 (pcb/s3_expansion): the select line (TH) on pin 14 (C9); pad 1 UP DOWN
+# LEFT RIGHT TL TR on pins 15, 16, 17, 27, 28, 29, pad 2 on 30-35. Pin 35 (D9)
+# is the oscillator socket's: leave the socket empty. Pulled up here too: no
+# board, no pads.
+NET "pad_sel"    LOC = "C9"  | IOSTANDARD = LVCMOS33 | SLEW = SLOW | DRIVE = 8;
+NET "pad_in<0>"  LOC = "D10" | IOSTANDARD = LVCMOS33 | PULLUP;
+NET "pad_in<1>"  LOC = "A3"  | IOSTANDARD = LVCMOS33 | PULLUP;
+NET "pad_in<2>"  LOC = "B4"  | IOSTANDARD = LVCMOS33 | PULLUP;
+NET "pad_in<3>"  LOC = "B10" | IOSTANDARD = LVCMOS33 | PULLUP;
+NET "pad_in<4>"  LOC = "A10" | IOSTANDARD = LVCMOS33 | PULLUP;
+NET "pad_in<5>"  LOC = "B11" | IOSTANDARD = LVCMOS33 | PULLUP;
+NET "pad_in<6>"  LOC = "B12" | IOSTANDARD = LVCMOS33 | PULLUP;
+NET "pad_in<7>"  LOC = "A12" | IOSTANDARD = LVCMOS33 | PULLUP;
+NET "pad_in<8>"  LOC = "B13" | IOSTANDARD = LVCMOS33 | PULLUP;
+NET "pad_in<9>"  LOC = "A13" | IOSTANDARD = LVCMOS33 | PULLUP;
+NET "pad_in<10>" LOC = "B14" | IOSTANDARD = LVCMOS33 | PULLUP;
+NET "pad_in<11>" LOC = "D9"  | IOSTANDARD = LVCMOS33 | PULLUP;
+INST "pad_s*" IOB = TRUE;
+INST "io/pad_sel" IOB = TRUE;

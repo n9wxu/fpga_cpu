@@ -1,7 +1,9 @@
 `timescale 1ns/1ps
 // The low tier's sound (the Spartan-3): the 3-voice chip device of
 // docs/io.md (F00400) and a streaming player, mixed to stereo and sent to
-// an I2S DAC (e.g. a PCM5102A, which makes its own master clock).
+// an I2S DAC (e.g. a PCM5102A, which makes its own master clock). The
+// Spartan-3 builds it with VOICES = 0: the stream only, software
+// synthesizing voices into it (fpga/lib/sid.c).
 //
 // Rates: an output frame every 1024 clocks of 50 MHz (48,828.125 Hz); the
 // bit clock is 50 MHz / 16 (3.125 MHz), 32 bits a channel (16 data bits,
@@ -37,7 +39,8 @@
 // by multiplexers; the products are MULT18X18s.
 (* shreg_extract = "no" *)     // flip-flops are plentiful here, LUTs are not
 module audio_lite #(
-    parameter AW = 18                       // the RAM's word address bits
+    parameter AW = 18,                      // the RAM's word address bits
+    parameter VOICES = 1                    // 0: no voices (their registers do nothing): the stream only
 ) (
     input  wire        clk,                 // 50 MHz
     // the CPU's I/O writes (as iosys.v gets them) and reads
@@ -156,7 +159,8 @@ module audio_lite #(
     // (the word fetched last frame, held from the frame's start: a fixed delay)
     wire [24:0] sm = $signed(selr ? wordh[31:16] : wordh[15:0]) * $signed({1'b0, svol});
     reg  [24:0] smr = 25'd0;
-    wire [17:0] sum = acc + {smr[24], smr[24:8]};                  // (sample x STR_VOL) / 256: 17 bits and the sign
+    wire [17:0] accv = VOICES ? acc : 18'd0;   // (VOICES = 0: the voices' logic is trimmed away)
+    wire [17:0] sum = accv + {smr[24], smr[24:8]};                  // (sample x STR_VOL) / 256: 17 bits and the sign
     wire        ovf = sum[17:15] != {3{sum[17]}};
     wire [15:0] sat = ovf ? {sum[17], {15{!sum[17]}}} : sum[15:0];
     reg  [15:0] mixl = 16'd0, mixr = 16'd0, outl = 16'd0, outr = 16'd0;

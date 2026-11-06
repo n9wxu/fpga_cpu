@@ -21,9 +21,12 @@
 #define PS2B_STAT IO16(0xF00306)
 #define PS2_DATA(p) IO16(0xF00300 + 4 * (p))
 #define PS2_STAT(p) IO16(0xF00302 + 4 * (p))
-#define PS2_WAITING 1                /* STAT: a byte waits in DATA */
-#define PS2_SENDING 2                /* STAT: a send is under way */
-#define PS2_NODEV   4                /* STAT: the last send had no device clocking it */
+#define PS2_WAITING 1                /* STAT (read): a byte waits in DATA */
+#define PS2_CLK     2                /* STAT (read): the clock line is high */
+#define PS2_DAT     4                /* STAT (read): the data line is high */
+#define PS2_CLK_LO  1                /* STAT (write): hold the clock low */
+#define PS2_DAT_LO  2                /* STAT (write): hold the data line low */
+#define PS2_RX_OFF  4                /* STAT (write): the receiver off (a byte waiting is dropped) */
 
 enum { PS2_NONE, PS2_KBD, PS2_MOUSE };
 extern volatile uint8_t ps2_type[2];   /* what ps2_init found in A and B */
@@ -32,8 +35,9 @@ void ps2_init(void);
 int ps2_detect(int port);             /* reset one port and find its device (interrupts off for it) */
 void ps2_service(void);               /* a device was plugged in: set it up */
 
-/* polled, for set-up: send a byte (0: sent; -1 no device); a byte within
- * frames (-1: none) */
+/* polled, for set-up: send a byte (0: sent; -1 no device), on the lines
+ * by software, with the device interrupts held off for its ~1 ms (IRQ_EN);
+ * a byte within frames (-1: none) */
 int ps2_send(int port, uint8_t b);
 int ps2_recv(int port, uint16_t frames);
 

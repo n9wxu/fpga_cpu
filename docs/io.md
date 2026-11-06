@@ -8,6 +8,11 @@ All registers are 16 bits wide and sit at even addresses in
 `F00000–F0FFFF`. A 32-bit register is a lo/hi pair; a 32-bit store (`STP`)
 writes the low half first. Devices raise interrupts through the controller at F00700 (below).
 
+On the Spartan-3, a few registers that software only writes read as 0, so the
+FPGA doesn't need a read path for them: `VID_CTRL`, `KBD_CTRL`, `LEDS`,
+`SEG7`, `SEG7_CTRL` and `INSTRET_LO`. Keep a copy in software if you need
+the value.
+
 ## System (F00000)
 
 | Address | R/W | Name | Function |
@@ -18,7 +23,7 @@ writes the low half first. Devices raise interrupts through the controller at F0
 | F00008 | R | `CON_IN` | next serial input character; 0xFFFF if none is waiting, 0xFFFE when the input has ended (simulator: stdin closed). Never blocks. |
 | F0000A | R | `FRAME` | frame counter, +1 at the start of each vertical blank (60 Hz) |
 | F0000C | R | `VSTAT` | bit 0 = in vertical blank; bits 15:4 = current scan line (0–749) |
-| F00010 / F00012 | R | `INSTRET_LO/HI` | instructions retired (SR3 has only the low 16 bits). The halves are read separately: read HI, LO, HI again and retry if HI changed |
+| F00010 / F00012 | R | `INSTRET_LO/HI` | instructions retired (SR3 has only the low 16 bits). The halves are read separately: read HI, LO, HI again and retry if HI changed. On the Spartan-3, LO reads 0: take it from SR3 (`fcpu_instret()` does) |
 
 ## Keyboard (F00100)
 
@@ -250,10 +255,14 @@ There are 3 voices, each 8 bytes apart (voice n is at `F00400 + 8n`).
 
 On the Tang Nano 20K these are voices 0-2 of the audio engine
 (docs/audio.md), and write-only (they read 0). On the Spartan-3 (the low tier, `fpga/rtl/audio_lite.v`)
-they are a small synthesizer of their own, with a streaming player beside
-it, on an I2S DAC (for example a PCM5102A) on the A2 expansion connector:
-pin 4 (E6) bit clock, pin 5 (D5) word clock, pin 6 (C5) data, 3.3 V,
-ground on pin 1. The output is 16-bit stereo at 48,828 Hz (50 MHz / 1024).
+the sound is the streaming player alone, on an I2S DAC (for example a
+PCM5102A) on the A2 expansion connector: pin 4 (E6) bit clock, pin 5 (D5)
+word clock, pin 6 (C5) data, 3.3 V, ground on pin 1. The output is 16-bit
+stereo at 48,828 Hz (50 MHz / 1024). The voice registers do nothing there:
+software makes voices into the stream instead (`fpga/lib/sid.c`, a 3-voice
+SID synthesizer). `audio_lite.v` still has the hardware voices, but the
+Spartan-3 doesn't have room for them (`VOICES = 0`); the description below
+is of the voices when they're built.
 
 - Each voice: a square (±full scale), triangle (half scale), sawtooth, or
   noise (a 15-bit LFSR, x^15 + x^14 + 1, shifted when bit 19 of the
@@ -262,8 +271,8 @@ ground on pin 1. The output is 16-bit stereo at 48,828 Hz (50 MHz / 1024).
 - The streaming player plays a ring buffer of stereo frames from RAM (a
   32-bit word a frame: the left sample in the low half, the right in the
   high, 16-bit signed). The program keeps it filled behind `STR_POS`.
-- The mix is the three voices plus the stream × `STR_VOL` / 256, clipped
-  to 16 bits.
+- The mix is the three voices (when built) plus the stream × `STR_VOL` / 256,
+  clipped to 16 bits.
 - Only `STR_POS` reads back; the other registers read 0 there.
 - `fsim --no-hicolor` models this device bit for bit, and `--wav FILE`
   writes its output.
@@ -275,6 +284,27 @@ ground on pin 1. The output is 16-bit stereo at 48,828 Hz (50 MHz / 1024).
 | F00424 / F00426 | W | `STR_ADDR_LO/HI` | the buffer's byte address (a multiple of 4), bits 19:0 |
 | F00428 | W | `STR_LEN` | the buffer's length in frames, 1-65535; the player loops around it |
 | F0042A | R | `STR_POS` | the frame being fetched, 0 .. `STR_LEN` − 1 (it is heard two output frames later) |
+
+### Software voices on the Spartan-3 (`fpga/lib/sid.c`)
+
+A 3-voice SID (MOS 6581) synthesizer in C. It renders 12,207 samples a
+second into a ring of stream frames and plays it with `STR_CTRL` n = 4.
+
+- **Modelled:** the SID's registers, oscillators, waveforms (combined ones
+  ANDed), sync, ring modulation, the test bit, ADSR with the SID's rates,
+  master volume and voice 3 off.
+- **Not modelled:** the filter.
+- **Cost:** about 60 instructions a sample, or about 120 while sync, ring
+  modulation or a combined waveform is in use. That's 25–40% of T1S on the
+  board, provided samples are rendered in blocks of 128 or more.
+- **The demo's soundtrack** (`fpga/demo/music.c`) uses it as the simple voice
+  device above. Its ring is 0FD000–0FEFFF.
+- **The SID player** (`fpga/demo/sidplay.c`) plays C64 tunes.
+  `fpga/tools/sid2regs.py` runs a PSID tune's 6502 code on the PC and records
+  the SID registers once per play call. The player feeds those frames to the
+  synthesizer at the tune's rate. RSID tunes need a whole C64 and are
+  refused.
+  `fpga/tools/mksidtest.py` writes a small test tune of our own.
 
 ## Files (F00500)
 
@@ -335,7 +365,39 @@ The Spartan-3 Starter Board's own LEDs, switches, buttons and display.
 | F00606 | RW | `SEG7` | four hex digits on the 7-segment display, digit 3 is leftmost |
 | F00608 | RW | `SEG7_CTRL` | bits 3:0 = decimal points, bits 7:4 = digit blank |
 
-GPIO, I2C and SPI on the expansion connectors come later, at F00700.
+On the Spartan-3 `LEDS`, `SEG7` and `SEG7_CTRL` are write-only (they read
+0; see the top of this page). The switches and buttons read as they are, two
+clocks behind.
+
+## Game pads (F00900, Spartan-3)
+
+Two Sega Genesis (Mega Drive) pads, 3- or 6-button, on the expansion board's
+DE9 plugs (`pcb/s3_expansion`: 5 V pads, buffered to 3.3 V). Both pads share
+the select line (TH); software runs the pads' protocol (`fpga/lib/pad.c`:
+`pad_read()` once a frame gives each pad's buttons, `PAD_SIX` and
+`PAD_PRESENT`).
+
+| Address | R/W | Name | Function |
+|---|---|---|---|
+| F00900 | RW | `PADS` | write: bit 0 = TH (1 after reset). Read: pad 1's lines in bits 5:0, pad 2's in bits 13:8, each `{TR, TL, RIGHT, LEFT, DOWN, UP}`, 0 = pressed |
+
+What the lines carry, by TH:
+
+| TH | TR | TL | RIGHT | LEFT | DOWN | UP |
+|---|---|---|---|---|---|---|
+| 1 | C | B | Right | Left | Down | Up |
+| 0 (1st, 2nd low) | Start | A | 0 | 0 | Down | Up |
+| 0 (3rd low, 6-button) | Start | A | 0 | 0 | 0 | 0 |
+| 1 (after it, 6-button) | C | B | Mode | X | Y | Z |
+| 0 (4th low, 6-button) | Start | A | 1 | 1 | 1 | 1 |
+
+A 6-button pad counts TH's lows and starts over when TH has stayed still for
+1.5 ms, so read the pads at most once in 1.5 ms. Give the pad about 2 µs
+after changing TH before reading. With TH low, LEFT and RIGHT read 1 when no
+pad is plugged in (the pull-ups). Pin 35 of A2 (D9) is pad 2's TR and the
+board's oscillator socket: leave the socket empty. Without the pads' port
+(the Tang) `PADS` reads 3F3F: no pads. fsim: `--pad N,TYPE,BUTTONS` (N 1 or
+2, TYPE 3 or 6, the buttons held as `fpga/lib/pad.h`'s bits).
 
 
 ## Flash (F00900, Tang Nano 20K)
@@ -424,6 +486,52 @@ the mouse's reporting (`F4`), and it decodes set-2 scan codes into the
 The simulator plugs a keyboard into A and a mouse into B (`--ps2 A,B`
 with `kbd`, `mouse` or `none`). The GUI's keyboard and mouse drive them;
 headless, `--ps2keys` types and `--ps2mouse "dx,dy,buttons;..."` moves.
+
+## Flash ROM (F80000, Spartan-3)
+
+A parallel NOR flash, an SST39VF1601C (16 Mbit, 1M x 16, 70 ns, 48-pin
+TSOP), on the A1 expansion connector. A1 carries the SRAM's address
+lines, OE#, WE# and IC10's low data byte, so the flash shares the SRAM's
+bus (`fpga/rtl/sram_phy.v`). Only its low byte reaches the FPGA: 512 KB of
+the part, mapped byte for byte.
+
+| Range | Use |
+|---|---|
+| F80000–FFFFFF | flash byte *k* (the low byte of flash word *k*) at F80000 + *k*, read and written as a byte |
+
+- A read is one flash cycle of 8 clocks (160 ns), with a clock off before it.
+  Reads are not cached, so status polling sees each one. The word buffer
+  never serves a flash read.
+- A write is one flash write cycle (WE# low 60 ns). Erase and program take the
+  part's command sequences on the low byte: `AA` to byte 555, `55` to byte
+  2AA, then the command (`A0` program, `80`… `50` sector erase, `90`
+  software ID, `F0` exit). Commands decode only A10–A0.
+  `fpga/lib/flash.c` has them, and waits on the DQ6 toggle bit.
+- A sector is 2 KWord, 2 KB here; erasing one takes up to 25 ms, and
+  programming a byte up to 10 µs. The bottom 8 KWord (bytes 0–1FFF) is the
+  boot block, which the WP# pin protects when it is held low.
+- Programs can't run from the flash, and the fetch unit reads only the RAM.
+  Copy code to the RAM to run it.
+
+Wiring (A1, UG130 table 13-2; the flash's pins from its data sheet):
+
+| Flash | A1 pin (FPGA pin) |
+|---|---|
+| A0–A17 | the SRAM's A0–A17: A0–A4 pins 6, 8, 10, 12, 14; A5–A17 pins 24, 23, 26, 25, 28, 27, 30, 29, 32, 31, 34, 33, 35 |
+| DQ0–DQ7 | DB0–DB7: pins 5, 7, 9, 11, 13, 15, 17, 19 |
+| OE#, WE# | pins 18 (K4) and 16 (G3) |
+| CE# | pin 21 (M7), 10 kΩ pull-up to 3.3 V |
+| A18 | pin 20 (P9: DOUT/BUSY, which toggles during configuration; harmless with CE# high) |
+| A19 | ground |
+| DQ8–DQ15 | 10 kΩ pull-ups to 3.3 V (not connected to the FPGA) |
+| RST# | 10 kΩ to 3.3 V with 100 nF to ground (high > 100 µs after power-up) |
+| WP# | open (internal pull-up), or a jumper to ground to protect the boot block |
+| RY/BY# | unconnected (the toggle bit serves) |
+| VDD, VSS | pin 3 (3.3 V), pin 1 (ground); 100 nF at each VDD pin |
+
+The RTL testbench models the part (`fpga/sim/sst39vf.v`, which checks its
+timing). `fpga/sim/progs/flashtest.c` tests ID, erase, program and read
+back, and checks that the SRAM is still correct. fsim has no flash model yet.
 
 ## Memory layout (C runtime convention)
 

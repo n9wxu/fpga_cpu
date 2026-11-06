@@ -4,7 +4,7 @@
 #define MOD_H
 #include <stdint.h>
 
-#define NCH 4
+#define NCH 8                   /* channels at most (M.K./4CHN: 4, 6CHN: 6, 8CHN: 8) */
 
 typedef struct {
     char name[23];
@@ -17,11 +17,12 @@ typedef struct {
 
 typedef struct {
     uint32_t base, size;        /* the file in SDRAM */
+    uint8_t nch;                /* channels: 4, 6 or 8 (engine voices 0 .. nch-1) */
     char title[21];
     uint8_t songlen, restart;
     uint8_t order[128];
     uint8_t npat;
-    uint32_t pat;               /* address of pattern 0 (64 rows x 4 channels x 4 bytes each) */
+    uint32_t pat;               /* address of pattern 0 (64 rows x nch channels x 4 bytes each) */
     sample_t smp[32];           /* 1..31 */
 } mod_t;
 
@@ -72,7 +73,7 @@ extern play_t pl;
 /* 0 = ok, else an error code (mod_err) */
 int mod_parse(uint32_t base, mod_t *m);
 const char *mod_err(int e);
-uint32_t mod_size(uint32_t base);              /* a MOD file's size from its header, 0 = not a 4-channel MOD */
+uint32_t mod_size(uint32_t base);              /* a MOD file's size from its header, 0 = not a MOD we play */
 void mod_cell(uint8_t pattern, uint8_t row, uint8_t c, cell_t *out);
 
 void mod_start(void);                          /* from position 0 */

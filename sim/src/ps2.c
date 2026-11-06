@@ -3,10 +3,13 @@
  *
  * A port holds one received byte until a read takes it (the hardware holds
  * the clock low meanwhile, so the device waits); the next one follows a
- * byte time later. A write sends a command: after the request to send and
- * the eleven clocks, the device answers as a real one does (the
- * acknowledge FA and what the command returns). An empty port ends the send
- * with "no device" (STAT bit 2), as the hardware's timeout does, at once.
+ * byte time later. The host sends on the lines, by software (STAT writes:
+ * clock low, data low, receiver off), and the device here takes it at line
+ * level: on the request to send (the clock released with the data line
+ * held low) it clocks eleven times (CLK_T apart), takes a data bit at each
+ * of the first ten rising edges, acknowledges in the eleventh (the data
+ * line low), and answers as a real one does (the acknowledge FA and what
+ * the command returns). An empty port never clocks.
  *
  * Inputs: the GUI's keyboard (as set-2 scan codes) and mouse, or scripted:
  * --ps2keys STRING types into the keyboard, --ps2mouse "dx,dy,b;..." moves
@@ -19,7 +22,9 @@
 #include <string.h>
 
 #define BYTE_CYCLES 50000u    /* 1 ms: eleven bits at 11 kHz */
-#define SEND_CYCLES 60000u    /* the request to send (155 us) and the frame */
+#define CLK_HALF 2000u        /* the device's clock: 40 us low, 40 us high (12.5 kHz) */
+#define CLK_T (2 * CLK_HALF)
+#define CLK_START 1000u       /* its first falling edge, 20 us after the request to send */
 #define BAT_CYCLES 250000u    /* after a reset (FF): 5 ms (a real one takes 300-500 ms) */
 #define IDLE_CYCLES 5000000u  /* scripted input starts 100 ms after the last command */
 #define QLEN 256
@@ -30,11 +35,14 @@ typedef struct {
     int type;
     uint8_t q[QLEN];
     unsigned head, tail;
-    int valid, busy, err;
+    int valid;
     uint8_t data;
     uint64_t next;            /* the device sends no sooner than this */
-    uint64_t done;            /* a send ends */
-    uint8_t cmd, arg_for;     /* the command sent; the command waiting for its argument */
+    uint8_t ctl;              /* STAT written: 1 clock low, 2 data low, 4 receiver off */
+    int rxing, rx_k;          /* taking the host's byte: rising edges seen */
+    uint64_t rx_t0;           /* its first falling edge */
+    uint16_t rx_bits;
+    uint8_t arg_for;          /* the command waiting for its argument */
     uint8_t last;             /* last byte sent to the host (FE: resend) */
     int scan, stream;         /* keyboard scanning, mouse reporting */
     uint64_t last_cmd;
@@ -191,23 +199,50 @@ static void command(port_t *p, uint8_t b, uint64_t now)
     }
 }
 
-/* time passes: sends end, bytes arrive (interrupt sources 1 and 2) */
+/* the device taking the host's byte: the rising edges up to now, each
+ * taking the data line as the host's STAT writes left it */
+static void rx_advance(port_t *p, uint64_t now)
+{
+    while (p->rxing && now >= p->rx_t0 + (uint64_t)p->rx_k * CLK_T + CLK_HALF) {
+        if (p->rx_k < 10)
+            p->rx_bits |= (uint16_t)((p->ctl & 2 ? 0 : 1) << p->rx_k);
+        if (++p->rx_k == 11) {
+            p->rxing = 0;
+            uint8_t b = (uint8_t)p->rx_bits;
+            unsigned ones = 0;
+            for (int i = 0; i < 9; i++) ones += (p->rx_bits >> i) & 1;
+            if (ones & 1) {
+                command(p, b, now);
+            } else
+                put(p, 0xFE);                       /* parity error: resend */
+            if (p->next < now + BYTE_CYCLES / 2)
+                p->next = now + BYTE_CYCLES / 2;
+        }
+    }
+}
+
+/* the lines now: bit 0 clock high, bit 1 data high */
+static int lines(port_t *p, uint64_t now)
+{
+    int clk = !(p->ctl & 1) && !p->valid, dat = !(p->ctl & 2);
+    if (p->rxing) {
+        uint64_t t = now - p->rx_t0;
+        if (now >= p->rx_t0 && t < 11 * (uint64_t)CLK_T && t % CLK_T < CLK_HALF) {
+            clk = 0;
+            if (t / CLK_T == 10) dat = 0;            /* the acknowledge */
+        }
+    }
+    return clk | dat << 1;
+}
+
+/* time passes: bytes arrive (interrupt sources 1 and 2) */
 void ps2_poll(cpu_t *c)
 {
     uint64_t now = c->st.cycles;
     for (int i = 0; i < 2; i++) {
         port_t *p = &P[i];
-        if (p->busy && now >= p->done) {
-            p->busy = 0;
-            if (p->type == DEV_NONE)
-                p->err = 1;
-            else {
-                command(p, p->cmd, now);
-                if (p->next < now + BYTE_CYCLES / 2)
-                    p->next = now + BYTE_CYCLES / 2;
-            }
-        }
-        if (p->busy || p->type == DEV_NONE)
+        rx_advance(p, now);
+        if (p->rxing || p->ctl || p->type == DEV_NONE)
             continue;
         script_step(p, now);
         if (!p->valid && qlen(p) && now >= p->next) {
@@ -226,7 +261,7 @@ uint16_t ps2_read(cpu_t *c, uint32_t a)
     ps2_poll(c);
     port_t *p = &P[(a >> 2) & 1];
     if (a & 2)
-        return (uint16_t)(p->valid | p->busy << 1 | p->err << 2);
+        return (uint16_t)(p->valid | lines(p, c->st.cycles) << 1);
     if (!p->valid)
         return 0xFFFF;
     p->valid = 0;
@@ -237,21 +272,29 @@ uint16_t ps2_read(cpu_t *c, uint32_t a)
 void ps2_write(cpu_t *c, uint32_t a, uint16_t v)
 {
     ps2_poll(c);
-    if (a & 2)
-        return;
+    if (!(a & 2))
+        return;                             /* DATA: nothing (the host sends on the lines) */
     port_t *p = &P[(a >> 2) & 1];
-    p->valid = 0;                           /* (the hardware's shift register is the send's now) */
-    p->busy = 1;
-    p->err = 0;
-    p->cmd = (uint8_t)v;
-    p->done = c->st.cycles + SEND_CYCLES;
+    uint8_t ctl = (uint8_t)(v & 7);
+    if (ctl & 4)
+        p->valid = 0;                       /* the receiver off: a waiting byte is dropped */
+    /* the request to send: the clock released with the data line low */
+    if ((p->ctl & 1) && !(ctl & 1) && (ctl & 2) && p->type != DEV_NONE && !p->rxing) {
+        p->rxing = 1;
+        p->rx_k = 0;
+        p->rx_bits = 0;
+        p->rx_t0 = c->st.cycles + CLK_START;
+    }
+    p->ctl = ctl;
 }
 
 void ps2_reset(void)
 {
     for (int i = 0; i < 2; i++) {
         port_t *p = &P[i];
-        p->valid = p->busy = p->err = 0;
+        p->valid = 0;
+        p->ctl = 0;
+        p->rxing = 0;
         p->arg_for = 0;
     }
 }

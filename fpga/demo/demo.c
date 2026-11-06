@@ -12,7 +12,8 @@
  *
  * The statistics line (row 24: frames a second, CPU busy, thousands of
  * instructions a frame, MIPS while busy) is hidden by SW0. A soundtrack
- * (music.c) plays on the 3-voice sound device; SW1 silences it.
+ * (music.c) plays on the 3-voice sound device (on the Spartan-3, made in
+ * software into the sound stream: fpga/lib/sid.c); SW1 silences it.
  *
  * Build: llvm/fcc -O2 --stack 0x20000 -o demo.bin fpga/demo/demo.c
  *   (-DTANG for the Tang; fpga/Makefile and tang/Makefile do this)
@@ -77,6 +78,7 @@ static COLD void title_card(int n)
     }
     tclear();
     music_silence();                            /* (the section's set-up: no note left hanging) */
+    music_pause();
 }
 
 int main(void)

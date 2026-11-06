@@ -16,7 +16,9 @@ static int sel, n;           /* CS low; bytes in this transaction */
 static uint8_t cmd, rx, wel;
 static uint32_t ad;
 
-int flash_handles(uint32_t a) { return (a & ~3u) == IO_FLASH; }
+/* the port is the Tang's: only with a flash image (--rom); without one, F00900 is the Spartan-3's
+ * game pads (pads.c) */
+int flash_handles(uint32_t a) { return fl && (a & ~3u) == IO_FLASH; }
 
 static uint32_t le32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
 

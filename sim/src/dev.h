@@ -58,7 +58,7 @@ enum { BL_SRC_LO, BL_SRC_HI, BL_DST_LO, BL_DST_HI, BL_SSTRIDE, BL_DSTRIDE, BL_W,
        BL_CMD, BL_STAT, BL__COUNT };
 
 /* frame timing: 50 MHz, 750 lines of which 720 are visible, 60 frames/s */
-#define CPU_HZ        50000000u
+#define CPU_HZ        50000000u    /* the default; dev_cpu_hz is the clock in use (fsim --hw) */
 #define FRAME_LINES   750u
 #define VISIBLE_LINES 720u
 
@@ -114,6 +114,7 @@ void dev_write(struct cpu *c, uint32_t a, uint32_t v);
 void dev_key(iodev_t *d, uint16_t code);   /* push a key into the keyboard queue */
 void dev_key_up(iodev_t *d, uint16_t code); /* a key was released: queued only if KBD_CTRL bit 0 */
 void dev_con_in(iodev_t *d, uint16_t ch);  /* push a character into CON_IN */
+extern uint32_t dev_cpu_hz;            /* cycles a second: video and sound timing (CPU_HZ unless fsim --hw) */
 uint32_t dev_frame(uint64_t cycles);
 /* the interrupt line now (pending and enabled sources), updating the sources */
 int dev_irq(struct cpu *c);
@@ -122,6 +123,7 @@ uint32_t dev_line(uint64_t cycles);
 uint16_t vidx_read(struct cpu *c, uint32_t a);
 int vidx_write(struct cpu *c, uint32_t a, uint16_t v);
 void vidx_buffer_written(const struct cpu *c);
+void vidx_reset(void);
 int vidx_flip_pending(const struct cpu *c);
 
 /* Video: render the composed 1280x720 frame as 0x00RRGGBB pixels. */
@@ -133,6 +135,7 @@ void audlo_write(struct cpu *c, uint32_t a, uint16_t v);
 uint16_t audlo_read(struct cpu *c, uint32_t a);
 void audlo_finish(const struct cpu *c);
 void audlo_wav(const char *path);
+void audlo_reset(void);
 /* the PS/2 ports (ps2.c, fpga/rtl/ps2.v): F00300-F00307, a keyboard and a mouse */
 int ps2_handles(uint32_t a);
 uint16_t ps2_read(struct cpu *c, uint32_t a);
@@ -141,6 +144,12 @@ void ps2_poll(struct cpu *c);             /* bytes arrive, sends end (interrupt 
 void ps2_reset(void);
 int ps2_config(const char *s);            /* --ps2 A,B: kbd, mouse or none each */
 void ps2_script(int mouse, const char *s); /* --ps2keys, --ps2mouse */
+/* the game pads (pads.c, the Spartan-3's PADS at F00900) */
+int pads_handles(uint32_t a);
+uint16_t pads_read(struct cpu *c, uint32_t a);
+void pads_write(struct cpu *c, uint32_t a, uint16_t v);
+void pads_reset(void);
+int pads_config(const char *s);           /* --pad N,TYPE,BUTTONS */
 void ps2_key(int usage, int down);        /* a key (USB HID usage = SDL scancode) */
 void ps2_mouse(int dx, int dy, int buttons);
 /* 0: the low video tier, the Spartan-3 (--no-hicolor): no hi-color, no palette */

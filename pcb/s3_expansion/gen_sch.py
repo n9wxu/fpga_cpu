@@ -1,5 +1,6 @@
 """Generate s3_expansion.kicad_sch: a rough schematic of the Spartan-3
-Starter Board expansion (sound, PS/2 mouse, microSD, two NES pads on A2;
+Starter Board expansion (sound, PS/2 mouse, microSD, two Sega Genesis pads on DE9s,
+an ESP32 on A2;
 a NOR flash ROM on the SRAM's bus, A1). Every pin is connected by a net label at its
 end; the symbols are copied from KiCad's standard libraries.
 
@@ -203,15 +204,18 @@ def flag(net, x, y):
     place('power', 'PWR_FLAG', f"#FLG0{_n['FLG']}", 'PWR_FLAG', x, y, {'1': net})
 
 
-# ---------------------------------------------------------------- A2: sound, mouse, SD, pads
+# ---------------------------------------------------------------- A2: sound, mouse, SD, pads, WiFi
 a2 = {'1': 'GND', '2': '+5V', '3': '+3V3',
       '4': 'I2S_BCK', '5': 'I2S_LRCK', '6': 'I2S_DATA',
       '7': 'MS_CLK', '8': 'MS_DATA',
       '9': 'SD_CS', '10': 'SD_SCK', '11': 'SD_MOSI', '12': 'SD_MISO', '13': 'SD_CD',
-      '14': 'PAD_LATCH', '15': 'PAD_CLK', '16': 'PAD1_DATA', '17': 'PAD2_DATA',
+      '14': 'PAD_SEL', '15': 'PAD1_UP', '16': 'PAD1_DOWN', '17': 'PAD1_LEFT',
       '18': 'WIFI_CS', '19': 'WIFI_SCK', '20': 'WIFI_MOSI', '21': 'WIFI_MISO', '22': 'WIFI_HS',
       '23': 'WIFI_EN', '24': 'WIFI_BOOT', '25': 'WIFI_TXD', '26': 'WIFI_RXD'}
-for p in range(27, 41):
+a2.update({'27': 'PAD1_RIGHT', '28': 'PAD1_TL', '29': 'PAD1_TR', '30': 'PAD2_UP',
+           '31': 'PAD2_DOWN', '32': 'PAD2_LEFT', '33': 'PAD2_RIGHT', '34': 'PAD2_TL',
+           '35': 'PAD2_TR'})                   # 35: D9, the oscillator socket's (keep it empty)
+for p in range(36, 41):
     a2[str(p)] = 'NC'
 place('Connector_Generic', 'Conn_02x20_Odd_Even', 'J1', 'A2 (to the Spartan-3 board)', 40, 60, a2,
       "Connector_PinSocket_2.54mm:PinSocket_2x20_P2.54mm_Vertical")
@@ -220,11 +224,13 @@ text("A2 expansion connector (UG130 table 13-3)\n"
      "7 D6 MS_CLK    8 C6 MS_DATA\n"
      "9 E7 SD_CS    10 C7 SD_SCK   11 D7 SD_MOSI\n"
      "12 C8 SD_MISO 13 D8 SD_CD\n"
-     "14 C9 PAD_LATCH 15 D10 PAD_CLK\n"
-     "16 A3 PAD1_DATA 17 B4 PAD2_DATA\n"
+     "14 C9 PAD_SEL (out)  15 D10 PAD1_UP 16 A3 PAD1_DOWN 17 B4 PAD1_LEFT\n"
+     "27 B10 PAD1_RIGHT 28 A10 PAD1_TL 29 B11 PAD1_TR 30 B12 PAD2_UP\n"
+     "31 A12 PAD2_DOWN 32 B13 PAD2_LEFT 33 A13 PAD2_RIGHT 34 B14 PAD2_TL\n"
+     "35 D9 PAD2_TR (the oscillator socket's pin: leave the socket empty)\n"
      "18 A4 WIFI_CS 19 B5 WIFI_SCK 20 A5 WIFI_MOSI 21 B6 WIFI_MISO\n"
      "22 B7 WIFI_HS 23 A7 WIFI_EN 24 B8 WIFI_BOOT 25 A8 WIFI_TXD 26 A9 WIFI_RXD\n"
-     "27-35 spare; 36-40 configuration: leave open\n"
+     "36-40 configuration: leave open\n"
      "2 +5V (VU), 3 +3.3V (VCCO), 1 GND", 15, 115, 1.27)
 flag('+5V', 20, 30)
 flag('+3V3', 40, 30)
@@ -285,16 +291,56 @@ text("microSD in SPI mode: DAT3 = CS, CMD = MOSI, DAT0 = MISO; DAT1/DAT2 pulled\
      "up (unused); card detect to the FPGA. 47k pull-ups, 33R on the clock.",
      110, 185, 1.27)
 
-# ---- two NES pads (7-pin NES connector or a header to an adapter)
+# ---- two Sega Genesis (Mega Drive) pads on DE9 plugs, as on the console
+# The console's DE9: 1 UP, 2 DOWN, 3 LEFT, 4 RIGHT, 5 +5V, 6 TL (B / A),
+# 7 TH (select, from the console), 8 GND, 9 TR (C / Start).
+SIG = ('UP', 'DOWN', 'LEFT', 'RIGHT', 'TL', 'TR')
+DE9 = {'UP': '1', 'DOWN': '2', 'LEFT': '3', 'RIGHT': '4', 'TL': '6', 'TR': '9'}
 for i in (1, 2):
-    place('Connector_Generic', 'Conn_01x07', f"J{4 + i}", f'NES pad {i}', 230 + 40 * (i - 1), 150, {
-        '1': 'GND', '2': 'PAD_CLK', '3': 'PAD_LATCH', '4': f'PAD{i}_DATA',
-        '5': 'NC', '6': 'NC', '7': '+3V3'}, "Connector_PinHeader_2.54mm:PinHeader_1x07_P2.54mm_Vertical")
-    R('10k', '+3V3', f'PAD{i}_DATA', 215 + 40 * (i - 1), 170)
-text("NES pads (pins: 1 GND, 2 CLK, 3 LATCH, 4 DATA, 7 VCC), powered at 3.3 V\n"
-     "(the pad's 4021 runs from 3 V, so DATA needs no level shifting). An SNES\n"
-     "pad uses the same three signals (16 bits). Pull-ups: no pad reads 'none'.",
-     215, 185, 1.27)
+    x = 230 + 50 * (i - 1)
+    _n['F'] = _n.get('F', 0) + 1
+    place('Device', 'Polyfuse', f"F{_n['F']}", '500mA', x - 15, 135, {'1': '+5V', '2': f'PAD{i}_5V'},
+          "Fuse:Fuse_1206_3216Metric")
+    nets = {'5': f'PAD{i}_5V', '8': 'GND', '7': f'PAD{i}_TH'}
+    for sg in SIG:
+        nets[DE9[sg]] = f'P{i}_{sg}'
+    place('Connector', 'DE9_Pins', f"J{4 + i}", f'Genesis pad {i}', x, 150, nets,
+          "Connector_Dsub:DSUB-9_Pins_Horizontal_P2.77x2.84mm_EdgePinOffset7.70mm_Housed_MountingHolesOffset9.12mm")
+    R('100', 'PAD_SEL5', f'PAD{i}_TH', x - 15, 165)
+    C('100n', f'PAD{i}_5V', 'GND', x + 15, 135)
+
+# the pads' outputs (5 V) into the FPGA (3.3 V, not 5 V tolerant): two 74LVC245A
+# at 3.3 V, A to B; their inputs take 5 V. Pull-ups to 3.3 V: no pad reads all 1s.
+ins = [(i, sg) for i in (1, 2) for sg in SIG]
+for u in (0, 1):
+    nets = {'1': '+3V3', '19': 'GND', '20': '+3V3', '10': 'GND'}
+    for k in range(8):
+        n = 8 * u + k
+        if n < len(ins):
+            i, sg = ins[n]
+            nets[str(2 + k)] = f'P{i}_{sg}'
+            nets[str(18 - k)] = f'PAD{i}_{sg}'
+            R('10k', '+3V3', f'P{i}_{sg}', 440 + 7 * k, 40 + 75 * u)
+        else:
+            nets[str(2 + k)] = 'GND'
+            nets[str(18 - k)] = 'NC'
+    place('74xx', '74LS245', f"U{5 + u}", '74LVC245A', 470, 80 + 75 * u, nets,
+          "Package_SO:TSSOP-20_4.4x6.5mm_P0.65mm")
+    C('100n', '+3V3', 'GND', 500, 60 + 75 * u)
+# select out at 5 V levels: a 74AHCT1G125 at 5 V (TTL inputs take 3.3 V)
+place('74xGxx', '74AHCT1G125', 'U7', '74AHCT1G125', 470, 225,
+      {'1': 'GND', '2': 'PAD_SEL', '3': 'GND', '4': 'PAD_SEL5', '5': '+5V'},
+      "Package_TO_SOT_SMD:SOT-23-5")
+C('100n', '+5V', 'GND', 500, 215)
+R('10k', '+3V3', 'PAD_SEL', 445, 215)
+text("Sega Genesis / Mega Drive pads (3- and 6-button) on DE9 plugs, at 5 V\n"
+     "(each through a 500 mA polyfuse). One select (TH) for both pads, driven\n"
+     "at 5 V by U7; 100R to each port. The 12 inputs come back through two\n"
+     "74LVC245A at 3.3 V (5 V-tolerant inputs): the Spartan-3's pins are not.\n"
+     "TH high: UP DOWN LEFT RIGHT B C; TH low: UP DOWN 0 0 A Start. A 6-button\n"
+     "pad answers its 3rd low with UP..RIGHT all 0, and its 4th high with\n"
+     "Z Y X Mode; it resets 1.5 ms after the last pulse. Software reads both pads.\n"
+     "With TH low, LEFT and RIGHT at 1 (the pull-ups): no pad.", 430, 255, 1.27)
 
 # ---- WiFi: ESP32-WROOM-32E, an SPI slave on its own pins (VSPI), own 3.3 V
 place('Regulator_Linear', 'AMS1117-3.3', 'U3', 'AMS1117-3.3', 330, 125,
@@ -324,13 +370,13 @@ text("WiFi: ESP32-WROOM-32E (e.g. ESP-AT firmware) on its own pins, not the SD b
 
 # ---------------------------------------------------------------- A1: NOR flash on the SRAM's bus
 # A1 carries the board's SRAM address lines A0-A17, WE#, OE# and IC10's IO0-IO7
-# (the FPGA's sram_d[7:0]); the flash sits on that bus with its own CE# (pin 4)
-# and A18 (pin 21); pin 22 is A19 for a 1 MB part. The FPGA's SRAM PHY raises
+# (the FPGA's sram_d[7:0]); the flash sits on that bus with its own CE# (pin 21)
+# and A18 (pin 20). The FPGA's SRAM PHY raises
 # both SRAM chip enables during a flash cycle and waits out its 70 ns.
 a1_sram_a = {6: 0, 8: 1, 10: 2, 12: 3, 14: 4, 24: 5, 23: 6, 26: 7, 25: 8, 28: 9, 27: 10, 30: 11,
              29: 12, 32: 13, 31: 14, 34: 15, 33: 16, 35: 17}
-a1 = {'1': 'GND', '2': 'NC', '3': '+3V3', '4': 'ROM_CE', '16': 'SRAM_WE', '18': 'SRAM_OE',
-      '20': 'NC', '21': 'ROM_A18', '22': 'NC'}  # 22 (M10): A19 for a 1 MB part
+a1 = {'1': 'GND', '2': 'NC', '3': '+3V3', '4': 'NC', '16': 'SRAM_WE', '18': 'SRAM_OE',
+      '20': 'ROM_A18', '21': 'ROM_CE', '22': 'NC'}  # as fpga/constraints/ramsys.ucf
 for k, p in enumerate((5, 7, 9, 11, 13, 15, 17, 19)):
     a1[str(p)] = f'SRAM_IO{k}'
 for p, k in a1_sram_a.items():
@@ -342,7 +388,8 @@ place('Connector_Generic', 'Conn_02x20_Odd_Even', 'J7', 'A1 (to the Spartan-3 bo
 text("A1 expansion connector (UG130 table 13-2): shared with the board's SRAM\n"
      "5-19 odd: IC10 IO0-IO7 (sram_d[7:0]); A0-A17: pins 6, 8, 10, 12, 14,\n"
      "24, 23, 26, 25, 28, 27, 30, 29, 32, 31, 34, 33, 35; 16 WE#, 18 OE#\n"
-     "Free: 4 N8 ROM_CE, 21 M7 ROM_A18, 22 M10 ROM_A19, 20 P9 (DOUT: unused)\n"
+     "21 M7 ROM_CE (unshared), 20 P9 ROM_A18 (DOUT/BUSY: toggles while the FPGA\n"
+     "configures, harmless on an address line); free: 4 N8, 22 M10\n"
      "36-40: JTAG (TMS, TCK, TDO): do not connect", 15, 245, 1.27)
 
 fl = {'VCC': '+3V3', 'GND': 'GND', 'CE': 'ROM_CE', 'OE': 'SRAM_OE', 'PGM': 'SRAM_WE',
@@ -351,17 +398,18 @@ for k in range(18):
     fl[f'A{k}'] = f'SRAM_A{k}'
 for k in range(8):
     fl[f'D{k}'] = f'SRAM_IO{k}'
-place('Memory_Flash', 'SST39SF040', 'U2', 'SST39VF040 (3.3 V, 512 KB, 70 ns)', 220, 228, fl,
+place('Memory_Flash', 'SST39SF040', 'U2', 'SST39VF1601C (see the note)', 220, 228, fl,
       "Package_LCC:PLCC-32_THT-Socket")
 R('10k', '+3V3', 'ROM_CE', 255, 215)
 C('100n', '+3V3', 'GND', 265, 215)
 text("NOR flash ROM, executed in place (a resident toolbox: no RAM spent on it).\n"
-     "512 KB x 8, 3.3 V (SST39VF040; the symbol is the 5 V SST39SF040, same JEDEC\n"
-     "pinout). For 1 MB (SST39VF080, TSOP-40) ROM_A19 is its A19. CE# pulled up:\n"
+     "The part: SST39VF1601C-70 (1M x 16, 3.3 V, TSOP-48), DQ0-DQ7 used: 512 KB.\n"
+     "Its A0-A18 as shown, A19 to GND, DQ8-DQ15 open (pulled up in the FPGA's\n"
+     "simulation only), WP#/RST# to 3.3 V. (The symbol is a stand-in: KiCad has\n"
+     "none for it; the connections are the same by name.) CE# pulled up:\n"
      "off while the FPGA configures. Writes (programming) use the JEDEC command\n"
      "sequences through the same bus, with a long WE# pulse.", 110, 225, 1.27)
-text("A1 pin 22 (M10): A19 for a 1 MB part (SST39VF080); unused with 512 KB.\n"
-     "J3 needs a mini-DIN-6 footprint (e.g. CUI MD-60S): none in KiCad's library.", 110, 240, 1.27)
+text("J3 needs a mini-DIN-6 footprint (e.g. CUI MD-60S): none in KiCad's library.", 110, 240, 1.27)
 
 text("fpga_cpu: Spartan-3 Starter Board expansion (rough). Serial and the keyboard\n"
      "are on the board itself (DB9: RXD T13, TXD R13; PS/2: M15/M16).", 15, 22, 2.0)
@@ -373,8 +421,8 @@ sch = f'''(kicad_sch
 	(generator "fpga_cpu gen_sch.py")
 	(generator_version "1")
 	(uuid "{ROOT}")
-	(paper "A3")
-	(title_block (title "fpga_cpu Spartan-3 expansion") (rev "0.1") (comment 1 "rough: sound, PS/2 mouse, microSD, NES pads, ESP32 WiFi (A2); NOR flash ROM on the SRAM bus (A1)"))
+	(paper "A2")
+	(title_block (title "fpga_cpu Spartan-3 expansion") (rev "0.1") (comment 1 "rough: sound, PS/2 mouse, microSD, Genesis pads, ESP32 WiFi (A2); NOR flash ROM on the SRAM bus (A1)"))
 	(lib_symbols
 {libs}
 	)

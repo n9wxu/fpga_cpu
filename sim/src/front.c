@@ -37,15 +37,21 @@ void opts_usage(int gui)
             "  --sym FILE        symbol file (lines of \"%%06x name\")\n"
             "  --keys STRING     preload the keyboard queue (\\n = Enter, \\e = Esc)\n"
             "  --true-color      show hi-color palette colors instead of the 3-bit dither\n"
+            "  --hw NAME         the hardware: sets the video tier, the RAM, the colours and the clock\n"
+            "                    (later options override parts of it; the list is below)\n"
             "  --no-hicolor      the low tier (Spartan-3): no hi-color, no palette; its sound device\n"
             "  --wav FILE        with --no-hicolor: write the sound (16-bit stereo, 48828 Hz)\n"
             "  --ps2 A,B         the PS/2 ports' devices: kbd, mouse or none (default kbd,mouse)\n"
+            "  --pad N,TYPE,BTNS a Sega Genesis pad in port N (1, 2), TYPE 3 or 6 buttons,\n"
+            "                    BTNS held (fpga/lib/pad.h: bit 0 Up ... 11 Mode)\n"
             "  --ps2keys STRING  type into the PS/2 keyboard (\\n = Enter, \\e = Esc)\n"
             "  --ps2mouse MOVES  move the PS/2 mouse: \"dx,dy,buttons;...\"\n"
             "  --screenshot FILE write the 1280x720 display as PPM at exit\n",
             gui ? "fsim-gui" : "fsim", gui ? "none" : "2000000000");
     if (gui)
         fprintf(stderr,
+                "  --programs FILE   the program catalogue (sim/tools/programs.py; default programs/catalog.tsv\n"
+                "                    beside fsim-gui); with no image, the first program in it starts\n"
                 "  --paused          start stopped (default: running)\n"
                 "  --max-speed       run as fast as possible (default: real time, 50 MHz)\n"
                 "  --frames N        run N display frames, then exit\n"
@@ -58,6 +64,9 @@ void opts_usage(int gui)
                 "  --profile FILE    write instructions and cycles per address (sim/tools/profile.py)\n"
                 "  --log FILE        log every instruction and data access, binary (sim/tools/memlog.py)\n"
                 "  -q                no summary on stderr\n");
+    fprintf(stderr, "hardware (--hw):\n");
+    for (int i = 0; i < NUM_HW; i++)
+        fprintf(stderr, "  %-9s %s: %s\n", hw_profiles[i].name, hw_profiles[i].title, hw_profiles[i].about);
     fprintf(stderr, "core configurations (each adds to the one before; build with fcc --cpu as shown):\n");
     for (int i = 0; i < NUM_CORES; i++)
         fprintf(stderr, "  %-4s fcc --cpu=%-8s %s\n", cores[i].name, cores[i].cpu, cores[i].about);
@@ -89,6 +98,95 @@ int apply_core(tcfg_t *cfg, const char *name)
     cfg->dual_any = k >= 3;
     cfg->dual_16 = 0;
     return k;
+}
+
+/* The hardware. The clocks put the boards' measured speed at fsim's CPI on their demos (about 1.5):
+ * the Tang's T1F 6.5 MIPS (docs/t1f.md), the Spartan-3's T1F 2 MIPS (fpga/README.md). */
+const hw_t hw_profiles[NUM_HW] = {
+    { "sim", "Simulator", "the reference machine: 50 MHz, 1 MB, every video mode and device", 1, 0, CPU_HZ, 0 },
+    { "spartan3", "Spartan-3 board", "XC3S200 and 1 MB SRAM: the low tier (8- and 16-colour bitmaps, no palette or video "
+      "extensions), its sound player; the CPU at about T1F's 2 MIPS", 0, 0, 3000000, 0 },
+    { "tang", "Tang Nano 20K", "GW2AR-18 and 8 MB SDRAM: the high tier (the palette in true colour, two playfields, line "
+      "scroll, 64 sprites, the blitter); the CPU at about T1F's 6.5 MIPS. The 32-voice audio engine is not simulated: "
+      "programs that wait for it run silent", 1, 7, 10000000, 1 },
+    { "big", "Simulator, 15 MB", "the reference machine with 14 MB of expansion RAM above the first (Doom)", 1, 14, CPU_HZ, 0 },
+};
+
+const hw_t *find_hw(const char *name)
+{
+    for (int i = 0; i < NUM_HW; i++)
+        if (!strcmp(hw_profiles[i].name, name))
+            return &hw_profiles[i];
+    return NULL;
+}
+
+void apply_hw(opts_t *o, const hw_t *h)
+{
+    video_hicol8 = h->hicolor;
+    dev_cpu_hz = h->hz;
+    o->cfg.xram_mb = h->xram_mb;
+    o->true_color = h->true_color;
+    o->hw = h->name;
+}
+
+/* catalog.tsv: name kind hw variant load entry xram disk keys title about, tab-separated; paths
+ * relative to the catalogue's folder */
+int catalog_load(const char *path, prog_t **out)
+{
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return -1;
+    char dir[512], line[2048];
+    snprintf(dir, sizeof dir, "%s", path);
+    char *sl = strrchr(dir, '/');
+    if (sl)
+        sl[1] = 0;
+    else
+        dir[0] = 0;
+    int n = 0;
+    *out = NULL;
+    while (fgets(line, sizeof line, f)) {
+        if (line[0] == '#' || line[0] == '\n')
+            continue;
+        line[strcspn(line, "\r\n")] = 0;
+        char *fld[11];
+        int k = 0;
+        for (char *p = line; k < 11; k++) {
+            fld[k] = p;
+            p = strchr(p, '\t');
+            if (!p) {
+                k++;
+                break;
+            }
+            *p++ = 0;
+        }
+        if (k < 11)
+            continue;
+        prog_t p;
+        memset(&p, 0, sizeof p);
+        snprintf(p.name, sizeof p.name, "%s", fld[0]);
+        snprintf(p.kind, sizeof p.kind, "%s", fld[1]);
+        snprintf(p.hw, sizeof p.hw, "%s", fld[2]);
+        snprintf(p.variant, sizeof p.variant, "%s", fld[3]);
+        p.load = (uint32_t)strtoul(fld[4], NULL, 16);
+        p.entry = strcmp(fld[5], "-") ? (uint32_t)strtoul(fld[5], NULL, 16) : 0xFFFFFFFF;
+        p.xram = strcmp(fld[6], "-") ? atoi(fld[6]) : -1;
+        if (strcmp(fld[7], "-"))
+            snprintf(p.disk, sizeof p.disk, "%s%s", dir, fld[7]);
+        if (strcmp(fld[8], "-"))
+            snprintf(p.keys, sizeof p.keys, "%s", fld[8]);
+        snprintf(p.title, sizeof p.title, "%s", fld[9]);
+        snprintf(p.about, sizeof p.about, "%s", fld[10]);
+        snprintf(p.image, sizeof p.image, "%s%s.bin", dir, p.name);
+        FILE *img = fopen(p.image, "rb");
+        if (!img)
+            continue;
+        fclose(img);
+        *out = realloc(*out, sizeof **out * (size_t)(n + 1));
+        (*out)[n++] = p;
+    }
+    fclose(f);
+    return n;
 }
 
 /* Number option parsing: a bad value sets num_err (reported by opts_parse). */
@@ -212,10 +310,24 @@ int opts_parse(opts_t *o, int argc, char **argv, int gui)
         else if (!strcmp(a, "--keys") && more) o->keys = argv[++i];
         else if (!strcmp(a, "--true-color")) o->true_color = 1;
         else if (!strcmp(a, "--no-hicolor")) video_hicol8 = 0;
+        else if (!strcmp(a, "--hw") && more) {
+            const hw_t *h = find_hw(argv[++i]);
+            if (!h) {
+                fprintf(stderr, "--hw: unknown hardware %s\n", argv[i]);
+                return -1;
+            }
+            apply_hw(o, h);
+        }
+        else if (gui && !strcmp(a, "--programs") && more) o->programs = argv[++i];
         else if (!gui && !strcmp(a, "--wav") && more) audlo_wav(argv[++i]);
         else if (!strcmp(a, "--ps2") && more) {
             if (ps2_config(argv[++i])) {
                 fprintf(stderr, "--ps2: want A,B, each kbd, mouse or none (got '%s')\n", argv[i]);
+                return -1;
+            }
+        } else if (!strcmp(a, "--pad") && more) {
+            if (pads_config(argv[++i])) {
+                fprintf(stderr, "--pad: want N,TYPE,BUTTONS: pad 1 or 2, 3 or 6 buttons, a mask as fpga/lib/pad.h (got '%s')\n", argv[i]);
                 return -1;
             }
         } else if (!strcmp(a, "--ps2keys") && more) ps2_script(0, argv[++i]);
@@ -236,7 +348,7 @@ int opts_parse(opts_t *o, int argc, char **argv, int gui)
     }
     if (num_err)
         return -1;
-    if (!o->image && !o->rom)
+    if (!o->image && !o->rom && !gui)
         return -1;
     if (o->cfg.icache_bytes && (o->cfg.line_bytes < 4 || o->cfg.icache_bytes % o->cfg.line_bytes)) {
         fprintf(stderr, "bad I-cache geometry\n");

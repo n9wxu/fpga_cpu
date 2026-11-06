@@ -12,6 +12,7 @@ static uint32_t r32(const uint16_t *r, int lo) { return r[lo] | (uint32_t)r[lo +
 int vidx_flip_pending(const cpu_t *c) { return (uint64_t)dev_frame(c->st.cycles) < vidx_flip_frame; }
 
 /* a buffer register was written (VID_BMP, VID_SPR, VID_CTRL bit 4, VID_BMPB, VID_LSCR) */
+void vidx_reset(void) { vidx_flip_frame = 0; }    /* a new machine: no flip pending */
 void vidx_buffer_written(const cpu_t *c) { vidx_flip_frame = (uint64_t)dev_frame(c->st.cycles) + 1; }
 
 static void blit(cpu_t *c)
