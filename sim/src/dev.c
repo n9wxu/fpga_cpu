@@ -1,6 +1,7 @@
 /* fpga_cpu simulator: I/O devices.  The register map is docs/io.md. */
 #define _POSIX_C_SOURCE 200809L /* strdup under -std=c11 on glibc */
 #include "cpu.h"
+#include "snd.h"
 
 #include <ctype.h>
 #include <dirent.h>
@@ -18,7 +19,6 @@ void dev_init(iodev_t *d)
     d->con_stdin = 1;
     snprintf(d->disk, sizeof d->disk, "disk");
     vidx_reset();
-    audlo_reset();
     dev_reset(d);
 }
 
@@ -56,6 +56,7 @@ void dev_reset(iodev_t *d)
     d->kbd_ctrl = 0;
     ps2_reset();
     pads_reset();
+    snd_machine(video_hicol8 ? hw_audio : SND_AUDLO);   /* the time base restarts with the cycle count */
 }
 
 void dev_free(iodev_t *d)
@@ -99,6 +100,7 @@ uint32_t dev_line(uint64_t cycles) { return (uint32_t)(total_lines(cycles) % FRA
 int dev_irq(cpu_t *c)
 {
     iodev_t *d = &c->dev;
+    snd_tick(c, c->st.cycles);                   /* the sound device's interrupt, when it is due */
     ps2_poll(c);
     uint32_t f = dev_frame(c->st.cycles);
     if (f != d->irq_frame) {
@@ -336,8 +338,8 @@ uint16_t dev_read(cpu_t *c, uint32_t a)
         return 0;                                 /* the video registers are write-only */
     if ((a >= IO_VIDX && a < IO_VIDX + 0x20) || (a >= IO_BLT && a < IO_BLT + 0x20))
         return vidx_read(c, a);
-    if (!video_hicol8 && a >= IO_SND && a < IO_SND + 0x40)
-        return audlo_read(c, a);                  /* the low tier: only STR_POS reads */
+    if (snd_handles(a))
+        return snd_read(c, a);                    /* the sound device (snd.h) */
     if (a >= IO_SND && a < IO_SND + 24)
         return 0;                                 /* the sound registers are write-only */
     switch (a) {
@@ -402,13 +404,22 @@ void dev_write(cpu_t *c, uint32_t a, uint32_t v)
     }
     if (ps2_handles(a)) { ps2_write(c, a, (uint16_t)v); return; }
     if (pads_handles(a)) { pads_write(c, a, (uint16_t)v); return; }
-    if (a == IO_IRQ + 0) { dev_irq(c); d->irq_pend &= (uint16_t)~v; return; }
+    if (a == IO_IRQ + 0) {
+        dev_irq(c);
+        d->irq_pend &= (uint16_t)~v;
+        if (snd_irq())
+            d->irq_pend |= IRQ_AUDIO;               /* the sound device's line is still up */
+        return;
+    }
     if (a == IO_IRQ + 2) { dev_irq(c); d->irq_en = (uint16_t)(v & 0xFF); return; }
     if (a == IO_IRQ + 4) { d->irq_pend |= (uint16_t)(v & 0xFF); return; }
     if (vidx_write(c, a, (uint16_t)v))
         return;
-    if (!video_hicol8 && a >= IO_SND && a < IO_SND + 0x40)
-        audlo_write(c, a, (uint16_t)v);
+    if (snd_handles(a)) {
+        snd_write(c, a, (uint16_t)v);             /* the sound device (snd.h) */
+        if (a >= IO_SND + 24)
+            return;
+    }
     if (a >= IO_SND && a < IO_SND + 24) {
         if ((a & 7) < 6)
             d->snd[(a - IO_SND) / 8][(a & 7) / 2] = (uint16_t)v;
@@ -436,7 +447,11 @@ void dev_write(cpu_t *c, uint32_t a, uint32_t v)
 
 void sound_fill(iodev_t *d, float *out, int n, int rate)
 {
-    for (int i = 0; i < n; i++)
+    if (snd_device != SND_NONE) {              /* the machine's sound device, as it made it */
+        snd_pull(out, n, rate);
+        return;
+    }
+    for (int i = 0; i < 2 * n; i++)
         out[i] = 0;
     for (int v = 0; v < 3; v++) {
         uint16_t f = d->snd[v][0], vol = d->snd[v][1] & 15, wave = d->snd[v][2] & 3;
@@ -452,7 +467,8 @@ void sound_fill(iodev_t *d, float *out, int n, int rate)
             case 2: s = (float)(2 * ph - 1); break;
             default: s = d->snd_noise[v]; break;
             }
-            out[i] += amp * s;
+            out[2 * i] += amp * s;
+            out[2 * i + 1] += amp * s;
             ph += step;
             if (ph >= 1.0) {
                 ph -= (double)(int)ph;

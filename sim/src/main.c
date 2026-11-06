@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "front.h"
+#include "snd.h"
 
 static double pct(uint64_t a, uint64_t b) { return b ? 100.0 * (double)a / (double)b : 0.0; }
 
@@ -124,7 +125,8 @@ int main(int argc, char **argv)
         if (write_ppm(o.screenshot, px, SCREEN_W, SCREEN_H))
             perror(o.screenshot);
     }
-    audlo_finish(&c);
+    snd_sync(&c);
+    snd_finish();
     if (o.dump) {
         char *e;
         uint32_t a = (uint32_t)strtoul(o.dump, &e, 0), n = *e == ':' ? (uint32_t)strtoul(e + 1, &e, 0) : 0;

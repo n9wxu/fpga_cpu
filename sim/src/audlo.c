@@ -5,10 +5,12 @@
  * the voices here are off too (AUDLO_VOICES).
  *
  * Frames are made lazily, up to the current cycle, whenever the program
- * touches the device and at exit. The registers a frame uses are those
- * written before it starts (the hardware reads them early in the frame).
- * --wav FILE writes the output (16-bit stereo, 48828 Hz). */
+ * touches the device, at each due frame while interrupts are on, and at the
+ * end of each run slice. The registers a frame uses are those written before
+ * it starts (the hardware reads them early in the frame). The output goes to
+ * snd_out (snd.c): the GUI's sound and --wav FILE (16-bit stereo, 48828 Hz). */
 #include "cpu.h"
+#include "snd.h"
 
 #include <string.h>
 
@@ -24,44 +26,13 @@ static struct {
     uint32_t word, wordh;
     int16_t mixl, mixr;
     uint64_t frames;           /* made so far */
-    FILE *wav;
-    uint32_t wav_frames;
 } A = { .nz = { 1, 1, 1 } };
 
-/* a new machine: the player stopped and its time back to 0 (the --wav file stays) */
+/* a new machine: the player stopped and its time back to 0 */
 void audlo_reset(void)
 {
-    FILE *w = A.wav;
-    uint32_t wf = A.wav_frames;
     memset(&A, 0, sizeof A);
     A.nz[0] = A.nz[1] = A.nz[2] = 1;
-    A.wav = w;
-    A.wav_frames = wf;
-}
-
-static void wav_header(FILE *f, uint32_t frames)
-{
-    uint32_t rate = 48828, bytes = frames * 4;
-    uint8_t h[44] = { 'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'A', 'V', 'E', 'f', 'm', 't', ' ',
-                      16, 0, 0, 0, 1, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 16, 0,
-                      'd', 'a', 't', 'a', 0, 0, 0, 0 };
-    uint32_t v[3] = { 36 + bytes, rate, rate * 4 };
-    memcpy(h + 4, &v[0], 4);
-    memcpy(h + 24, &v[1], 4);
-    memcpy(h + 28, &v[2], 4);
-    memcpy(h + 40, &bytes, 4);
-    fseek(f, 0, SEEK_SET);
-    fwrite(h, 1, 44, f);
-}
-
-void audlo_wav(const char *path)
-{
-    A.wav = fopen(path, "wb");
-    if (!A.wav) {
-        perror(path);
-        return;
-    }
-    wav_header(A.wav, 0);
 }
 
 static int16_t sat16(int32_t x) { return (int16_t)(x > 32767 ? 32767 : x < -32768 ? -32768 : x); }
@@ -69,11 +40,7 @@ static int16_t sat16(int32_t x) { return (int16_t)(x > 32767 ? 32767 : x < -3276
 static void frame(const cpu_t *c)
 {
     /* the output this frame is last frame's mix (as the I2S registers) */
-    if (A.wav) {
-        int16_t s[2] = { A.mixl, A.mixr };
-        fwrite(s, 2, 2, A.wav);
-        A.wav_frames++;
-    }
+    snd_out(A.mixl, A.mixr);
     A.wordh = A.word;
     int32_t acc = 0;
     for (int v = 0; v < (AUDLO_VOICES ? 3 : 0); v++) {
@@ -122,7 +89,7 @@ static void frame(const cpu_t *c)
     A.mixr = sat16(acc + ((sr * svol) >> 8));
 }
 
-void audlo_sync(const cpu_t *c)
+void audlo_sync(cpu_t *c)
 {
     /* an output frame every 1024 cycles at 50 MHz: 48828 a second at any clock (fsim --hw) */
     uint64_t want = dev_cpu_hz == CPU_HZ ? c->st.cycles / FRAME_CYCLES
@@ -131,6 +98,9 @@ void audlo_sync(const cpu_t *c)
         frame(c);
         A.frames++;
     }
+    /* the cycle at which frame A.frames is due: the first c with want(c) > A.frames */
+    snd_next = dev_cpu_hz == CPU_HZ ? (A.frames + 1) * FRAME_CYCLES
+                                    : (uint64_t)((double)(A.frames + 1) * dev_cpu_hz / (CPU_HZ / FRAME_CYCLES));
 }
 
 void audlo_write(cpu_t *c, uint32_t a, uint16_t v)
@@ -143,14 +113,4 @@ uint16_t audlo_read(cpu_t *c, uint32_t a)
 {
     audlo_sync(c);
     return (a & 0x3E) == 0x2A ? A.pos : 0;
-}
-
-void audlo_finish(const cpu_t *c)
-{
-    audlo_sync(c);
-    if (A.wav) {
-        wav_header(A.wav, A.wav_frames);
-        fclose(A.wav);
-        A.wav = NULL;
-    }
 }

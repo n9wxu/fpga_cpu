@@ -28,6 +28,10 @@ The Makefile creates `.venv/` (PyYAML) on first use. The GUI needs SDL2
 | `tools/mkfont.py` | Builds the 8×14 character ROM (`assets/font8x14.mem` for the FPGA, `src/font8x14.c` for the simulator) from the Terminus BDF |
 | `src/cpu.c` | CPU core: decode, memory map, timing model, `cpu_step`/`cpu_run` |
 | `src/dev.c` | I/O devices from [docs/io.md](../docs/io.md): console, frame timing, keyboard, video registers, sound, file service, board I/O |
+| `src/snd.c` | Sound out: the sound device's frames to the GUI's and the web page's audio, and `--wav` |
+| `src/audlo.c` | The low tier's sound player (`fpga/rtl/audio_lite.v`), bit exact |
+| `src/audeng.c` | The Tang's audio engine ([docs/audio.md](../docs/audio.md)), bit exact with `fpga/tools/audio_ref.py` (`tools/audeng_check.py`) |
+| `src/mcaud.c` | The microcoded audio engine ([docs/mcaudio.md](../docs/mcaudio.md)), bit exact with the RTL (`tools/mcaud_check.py`) |
 | `src/video.c` | Video renderer: backdrop, bitmap (8-color / hi-color), sprite buffer, text; 640×360 doubled to 1280×720 |
 | `src/front.c` | Shared by both front ends: options, image loading, symbols |
 | `src/main.c` | Headless front end, `fsim` |
@@ -53,7 +57,8 @@ front ends take the same options (`fsim -h`):
 | `--sym FILE` | symbols, lines of `%06x name`; used by the GUI's disassembly |
 | `--keys STRING` | preload the keyboard queue (`\n` = Enter, `\e` = Esc) |
 | `--screenshot FILE` | write the 1280×720 display as PPM at exit |
-| `--hw sim\|spartan3\|tang\|big` | the hardware (below): the video tier, the RAM, the colours and the clock; later options override parts of it |
+| `--hw sim\|spartan3\|tang\|tang-mc\|big` | the hardware (below): the video tier, the RAM, the colours, the clock and the sound device; later options override parts of it |
+| `--wav FILE` | headless only: the sound device's output as a WAV (16-bit stereo; 48828 Hz on the low tier, 48 kHz on the Tang) |
 | `--true-color` | show hi-color palette colors instead of the 3-bit dither |
 | `--trace`, `--json FILE`, `-q` | headless only: instruction trace, statistics, no summary |
 | `--dump A:N:FILE` | headless only: write N bytes of memory from A at exit |
@@ -69,17 +74,21 @@ Headless, `CON_OUT` goes to stdout and `CON_IN` reads stdin.
 
 `--hw` picks the machine a program was made for (`fsim -h` lists them). The clock is set so a program
 runs at about the speed of the board's CPU (its measured MIPS at fsim's cycles per instruction on the
-demos, about 1.5); video timing and the low tier's sound follow the clock.
+demos, about 1.5); video and sound timing follow the clock.
 
 | `--hw` | Machine | Clock | RAM | Video |
 |---|---|---|---|---|
 | `sim` (default) | the reference machine | 50 MHz | 1 MB | every mode, the 3-bit dither shown |
 | `spartan3` | the Spartan-3 board (T1F, about 2 MIPS) | 3 MHz | 1 MB | the low tier: 8- and 16-colour bitmaps, no palette or video extensions; its sound player |
-| `tang` | the Tang Nano 20K (T1F, about 6.5 MIPS) | 10 MHz | 8 MB | the high tier in true colour: palette, two playfields, line scroll, sprites, blitter |
+| `tang` | the Tang Nano 20K (T1F, about 6.5 MIPS) | 10 MHz | 8 MB | the high tier in true colour: palette, two playfields, line scroll, sprites, blitter; the audio engine |
+| `tang-mc` | the Tang with the microcoded audio engine (`tang/Makefile`'s `mcaudio` bitstream) | 10 MHz | 8 MB | as `tang`, with the microcoded engine in place of the fixed one |
 | `big` | the reference machine for Doom | 50 MHz | 15 MB | as `sim` |
 
-The Tang's 32-voice audio engine (F01000) is not simulated: the demos that play on it notice and run
-silent, keeping time by the video frames.
+The sound devices are modelled sample for sample, in simulated time: the low tier's player (F00400,
+`spartan3`), the Tang's 32-voice audio engine (F01000, `tang`; the old 3-voice registers drive its
+voices 0-2) and the microcoded engine (F01000, `tang-mc`), with their interrupts (source 3) and
+counters. A device makes its frames as the CPU's cycle count passes them and reads its samples from
+RAM at that moment, as the hardware does. The `sim` and `big` machines have the 3-voice device only.
 
 ## Programs
 
@@ -112,7 +121,7 @@ sim/build/fsim-gui sim/build/video.bin --sym video.sym
 | Board | the starter board's 7-segment display, LEDs, slide switches and push buttons |
 | Statistics | IPC, I-cache, branches, stall breakdown, fusion candidates |
 
-Sound plays the three voices through SDL audio. The window layout is
+Sound plays the machine's sound device through SDL audio (the three voices on `sim` and `big`). The window layout is
 saved in `~/.fsim_gui.ini`.
 
 Scripted runs, for checking the GUI without clicking:

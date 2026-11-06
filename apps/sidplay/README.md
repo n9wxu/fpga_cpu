@@ -247,7 +247,8 @@ the per-frame text, and the per-frame text.
 - Only one SID (PSID v2 `secondSID` is ignored); the PAL/NTSC clock comes from the PSID flags.
 - The tracker's rows are inferred, not the driver's own: a tune whose notes do not sit on a regular grid
   (funk tempo) shows rows of the nearest regular speed, instruments are SID settings, not the driver's.
-- fsim: no engine, so no sound and the CPU load shown is derived from fsim cycles (meaningless there).
+- fsim (`--hw tang`) models the engine bit for bit, so the tunes play there too (the simulators' program
+  picker has sidplay with the three tunes); the CPU load shown is derived from fsim's cycles.
 
 ## Files
 

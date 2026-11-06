@@ -35,8 +35,9 @@ typedef struct {
     uint32_t xram_mb;       /* RAM above the first MB */
     uint32_t hz;            /* the simulated clock */
     int true_color;         /* show the palette as the board's display does */
+    int audio;              /* its sound device on the high tier (snd.h: SND_NONE, SND_ENGINE, SND_MC) */
 } hw_t;
-#define NUM_HW 4
+#define NUM_HW 5
 extern const hw_t hw_profiles[NUM_HW];
 const hw_t *find_hw(const char *name);
 void apply_hw(opts_t *o, const hw_t *h);   /* the globals, o->cfg.xram_mb, o->true_color */

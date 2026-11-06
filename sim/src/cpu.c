@@ -1,5 +1,6 @@
 /* fpga_cpu simulator core: decode, memory, timing model, run loop. */
 #include "cpu.h"
+#include "snd.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -750,6 +751,7 @@ int cpu_step(cpu_t *c)
     char buf[96];
     if (c->halted)
         return 0;
+    snd_tick(c, c->st.cycles);              /* the sound device's frames and interrupts, when due */
     /* an interrupt is taken between instructions: EPC = the instruction it
      * displaces, IE cleared, to 0x000010; the handler saves the rest */
     if (c->ie && dev_irq(c)) {

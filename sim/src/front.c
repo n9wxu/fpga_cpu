@@ -1,6 +1,7 @@
 /* fpga_cpu simulator: helpers shared by the front ends. */
 #define _POSIX_C_SOURCE 200809L /* strdup under -std=c11 on glibc */
 #include "front.h"
+#include "snd.h"
 
 #include <errno.h>
 #include <stdlib.h>
@@ -40,7 +41,8 @@ void opts_usage(int gui)
             "  --hw NAME         the hardware: sets the video tier, the RAM, the colours and the clock\n"
             "                    (later options override parts of it; the list is below)\n"
             "  --no-hicolor      the low tier (Spartan-3): no hi-color, no palette; its sound device\n"
-            "  --wav FILE        with --no-hicolor: write the sound (16-bit stereo, 48828 Hz)\n"
+            "  --wav FILE        write the sound device's output (16-bit stereo): the low tier's player\n"
+            "                    (48828 Hz), the Tang's audio engine (--hw tang, tang-mc: 48 kHz)\n"
             "  --ps2 A,B         the PS/2 ports' devices: kbd, mouse or none (default kbd,mouse)\n"
             "  --pad N,TYPE,BTNS a Sega Genesis pad in port N (1, 2), TYPE 3 or 6 buttons,\n"
             "                    BTNS held (fpga/lib/pad.h: bit 0 Up ... 11 Mode)\n"
@@ -103,13 +105,15 @@ int apply_core(tcfg_t *cfg, const char *name)
 /* The hardware. The clocks put the boards' measured speed at fsim's CPI on their demos (about 1.5):
  * the Tang's T1F 6.5 MIPS (docs/t1f.md), the Spartan-3's T1F 2 MIPS (fpga/README.md). */
 const hw_t hw_profiles[NUM_HW] = {
-    { "sim", "Simulator", "the reference machine: 50 MHz, 1 MB, every video mode and device", 1, 0, CPU_HZ, 0 },
+    { "sim", "Simulator", "the reference machine: 50 MHz, 1 MB, every video mode and device", 1, 0, CPU_HZ, 0, SND_NONE },
     { "spartan3", "Spartan-3 board", "XC3S200 and 1 MB SRAM: the low tier (8- and 16-colour bitmaps, no palette or video "
-      "extensions), its sound player; the CPU at about T1F's 2 MIPS", 0, 0, 3000000, 0 },
+      "extensions), its sound player; the CPU at about T1F's 2 MIPS", 0, 0, 3000000, 0, SND_AUDLO },
     { "tang", "Tang Nano 20K", "GW2AR-18 and 8 MB SDRAM: the high tier (the palette in true colour, two playfields, line "
-      "scroll, 64 sprites, the blitter); the CPU at about T1F's 6.5 MIPS. The 32-voice audio engine is not simulated: "
-      "programs that wait for it run silent", 1, 7, 10000000, 1 },
-    { "big", "Simulator, 15 MB", "the reference machine with 14 MB of expansion RAM above the first (Doom)", 1, 14, CPU_HZ, 0 },
+      "scroll, 64 sprites, the blitter); the CPU at about T1F's 6.5 MIPS; the 32-voice "
+      "audio engine (docs/audio.md)", 1, 7, 10000000, 1, SND_ENGINE },
+    { "tang-mc", "Tang Nano 20K, microcoded audio", "the Tang with the microcoded audio engine in place of the fixed "
+      "one (docs/mcaudio.md, tang/Makefile's mcaudio bitstream)", 1, 7, 10000000, 1, SND_MC },
+    { "big", "Simulator, 15 MB", "the reference machine with 14 MB of expansion RAM above the first (Doom)", 1, 14, CPU_HZ, 0, SND_NONE },
 };
 
 const hw_t *find_hw(const char *name)
@@ -127,6 +131,7 @@ void apply_hw(opts_t *o, const hw_t *h)
     o->cfg.xram_mb = h->xram_mb;
     o->true_color = h->true_color;
     o->hw = h->name;
+    hw_audio = h->audio;
 }
 
 /* catalog.tsv: name kind hw variant load entry xram disk keys title about, tab-separated; paths
@@ -319,7 +324,7 @@ int opts_parse(opts_t *o, int argc, char **argv, int gui)
             apply_hw(o, h);
         }
         else if (gui && !strcmp(a, "--programs") && more) o->programs = argv[++i];
-        else if (!gui && !strcmp(a, "--wav") && more) audlo_wav(argv[++i]);
+        else if (!gui && !strcmp(a, "--wav") && more) snd_wav(argv[++i]);
         else if (!strcmp(a, "--ps2") && more) {
             if (ps2_config(argv[++i])) {
                 fprintf(stderr, "--ps2: want A,B, each kbd, mouse or none (got '%s')\n", argv[i]);

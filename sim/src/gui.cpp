@@ -712,7 +712,7 @@ static void win_stats()
 
 static void audio_cb(void *, Uint8 *stream, int len)
 {
-    sound_fill(&cpu.dev, (float *)stream, len / (int)sizeof(float), 48000);
+    sound_fill(&cpu.dev, (float *)stream, len / (int)(2 * sizeof(float)), 48000);
 }
 
 // ---- main ----
@@ -770,7 +770,7 @@ int main(int argc, char **argv)
     SDL_AudioSpec want = {}, have;
     want.freq = 48000;
     want.format = AUDIO_F32SYS;
-    want.channels = 1;
+    want.channels = 2;
     want.samples = 1024;
     want.callback = audio_cb;
     SDL_AudioDeviceID audio = SDL_OpenAudioDevice(nullptr, 0, &want, &have, 0);
