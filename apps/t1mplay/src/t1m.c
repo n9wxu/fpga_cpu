@@ -9,8 +9,19 @@
  *   unison                        that many nodes (or groups), detuned and panned apart
  *   filters                       one flt node each, after every voice in the list; a voice routed to
  *                                 the filters adds into the filter buses
- * Each channel keeps the nodes its most expensive instrument needs; the ones a note does not use
- * are skipped. Arithmetic is 32-bit wherever a product can pass 16 bits (fcc's int is 16). */
+ *
+ * Voices come from a pool: every node but the filters', in the list in order, a free one skipped
+ * (w1 bit 31). A note takes a run of nodes for its instrument. With the new-note action "release",
+ * a channel's next note leaves the last one ringing on its release in the background (a tail)
+ * and takes new nodes; the same note again restarts its own voice (a pipe speaks again). A tail is
+ * freed when its release has died away (-60 dB), or earlier when a note needs its nodes or the
+ * engine's time: the one closest to its end goes first.
+ *
+ * A tick's work takes several of the engine's blocks at 10 MHz, so its node writes are staged and
+ * sent together at the next block's end (the engine waiting for room in its FIFO), the note-on
+ * counts last: a note's nodes (a unison's copies, a chord) all start in the same block, and the
+ * engine never fetches a node half written. Only words that changed are sent. Arithmetic is 32-bit
+ * wherever a product can pass 16 bits (fcc's int is 16). */
 #include "t1m.h"
 #include "mc.h"
 
@@ -72,13 +83,17 @@ static uint32_t osc_step(int32_t u)     /* the oscillators' step, 0.32 */
 static int16_t cents_u(int16_t c) { return (int16_t)(((int32_t)c * 64) / 100); }
 
 /* ---- instruments, as the engine wants them */
+enum { NNA_CUT, NNA_RELEASE };
 typedef struct {
     uint8_t src, flags, level, pan, unison, spread, nodes, b16;
+    uint8_t nna, dup;                   /* the new-note action; the same note restarts its voice */
     int16_t tune;                       /* transpose and fine tune, units */
     int16_t detune;                     /* the unison spread, units */
     int16_t poff;                       /* pair: the second oscillator's offset, units */
     uint8_t partner;
     uint16_t entry;                     /* the routine */
+    uint16_t cost;                      /* the engine's clocks a block, about */
+    uint16_t rel_ms;
     uint32_t w9, w10, w11;              /* envelope */
     uint16_t width, pwm;                /* 0-4095 */
     uint16_t lfo256, vibc;              /* LFO rate (Hz x 256), vibrato cents */
@@ -94,6 +109,15 @@ typedef struct {                        /* a sequence */
     uint8_t kind, len, loop, rel;
 } seq_t;
 static seq_t seqs[255];
+
+/* the engine's time: clocks a block (45,000 at 67.5 MHz); 85% for the list, the rest for the
+ * video's share of the RAM. A node costs its fetch, its per-block code and 32 samples of its loop
+ * (docs/mcaudio.md: an oscillator 9 words a sample, noise 11, a sample voice 21, a sync group 15,
+ * the filter 31); the figures are measured in fsim (apps/toccata measures a sample voice: 925). */
+#define BUDGET     38250U
+#define COST_IDLE  2200U                /* the list's 64 nodes, all skipped */
+#define COST_FLT   1100U
+static const uint16_t src_cost[6] = { 400, 400, 400, 470, 925, 1300 };
 
 /* the time constant (ms) of an exponential segment as the engine's rate: Q15 of the distance a block */
 static uint16_t exp_rate(uint16_t ms)
@@ -142,14 +166,37 @@ static uint16_t flt_F(uint16_t hz)      /* 2 sin(pi fc / 48000), Q15 */
     return (uint16_t)(s < 0x100 ? 0x100 : s > 0x7000 ? 0x7000 : s);
 }
 
-/* ---- channels */
+/* ---- voices: a run of nodes from the pool, indexed by its first node */
 typedef struct {
-    uint8_t base, nres;                 /* its nodes */
-    uint8_t inst, cfg;                  /* the instrument; the one its nodes are set up for (0xFF none) */
-    uint8_t note, gate, on, vol, pan, route, trig, mute;
+    uint8_t n;                          /* its nodes (0: not a voice's first node) */
+    uint8_t inst;                       /* the instrument its nodes are set up for (0xFF none) */
+    uint8_t chan, fg, nna;              /* its channel; 1 the channel's note, 0 a tail */
+    uint8_t note, gate, on, released, dirty;
+    uint16_t cost;
     int16_t pitch;                      /* the note's pitch with tuning, units */
     int16_t slide;                      /* slides and portamento so far, units */
-    int16_t porta_to; uint8_t porta;
+    int16_t spitch;                     /* the pitch sequence's sum, units */
+    uint8_t spos[4];
+    uint16_t vph;                       /* software vibrato's phase (1/65536 cycle) */
+    uint16_t age, life;                 /* ticks since its release; ticks its release lasts */
+    /* the channel's settings it plays with: copied every tick while it is the channel's note, kept
+     * as they were when it became a tail */
+    uint8_t vol, pan, route, arp;
+    uint16_t width;                     /* 0-65535 */
+    uint16_t vib_lfo256, vibc, pwm;
+    int16_t fine, poff;
+} vc_t;
+static vc_t vc[MC_NNODES];
+static uint8_t own[MC_NNODES];          /* the voice each pool node belongs to (0xFF free) */
+static uint8_t ntrig[MC_NNODES];        /* each node's note-on count (w3 bits 7:0) */
+static uint8_t npool;                   /* nodes for voices: 0 .. npool-1; the filters after them */
+static uint16_t load, budget;           /* the engine's clocks a block, the voices' and theirs at most */
+
+/* ---- channels */
+typedef struct {
+    uint8_t inst, v;                    /* the instrument; the voice playing its note (0xFF none) */
+    uint8_t vol, pan, route, mute;
+    int16_t porta_to; uint8_t porta;    /* the portamento's target (from the note's pitch), its speed */
     int16_t fine;                       /* 0E, units */
     int16_t poff;                       /* pair offset, units */
     int8_t pslide;
@@ -158,17 +205,14 @@ typedef struct {
     uint8_t vslide, wslide;
     uint16_t width;                     /* 0-65535 */
     uint16_t vib_lfo256, vibc, pwm;     /* LFO rate, vibrato cents, PWM depth (width units 0-4095) */
-    uint16_t vph;                       /* software vibrato's phase (1/65536 cycle) */
     uint8_t cut_at, off_at, delay_at, retrig;
     uint8_t dnote, dinst, dvol, dflags; /* a delayed cell */
+    uint8_t nna;                        /* 19 01/02: the playing note's new-note action */
     uint32_t soff;                      /* sample offset, frames */
-    uint8_t spos[4], released;
-    int16_t spitch;                     /* the pitch sequence's sum, units */
     uint8_t dirty;                      /* engine parameters to write (LFO, width depth) */
 } ch_t;
 static ch_t ch[T1M_MAXCH];
 
-static uint8_t nnodes;                  /* in the list: voices, then filters */
 static uint32_t next_w[MC_NNODES];      /* each node's link to the next (word address) */
 
 /* ---- play position */
@@ -178,7 +222,33 @@ static uint16_t tick_hz256;
 static uint32_t period, acc;            /* blocks a tick (16.16), and the count toward it */
 static uint16_t last_blocks;
 
-static void W(uint8_t n, uint8_t w, uint32_t v) { MC_NODE(n)[w] = v; }
+/* ---- the node words, staged: what the player wants in each node, and which to send */
+static uint32_t sh[MC_NNODES][16];
+static uint16_t send[MC_NNODES];
+static uint8_t staged, pause_req;
+static uint16_t done_at;                /* MC_BLOCKS when the staged tick was finished */
+
+static void W(uint8_t n, uint8_t w, uint32_t v)
+{
+    if (w >= 12 || sh[n][w] != v) {     /* (words 12-15 are the engine's state: always sent) */
+        sh[n][w] = v;
+        send[n] |= (uint16_t)(1u << w);
+    }
+}
+
+static void flush(void)                 /* the staged words to the engine: first the parameters, then the note-ons */
+{
+    for (uint8_t n = 0; n < MC_NNODES; n++) {
+        uint16_t m = (uint16_t)(send[n] & ~8u);
+        if (!m) continue;
+        volatile uint32_t *p = MC_NODE(n);
+        for (uint8_t w = 0; m; w++, m >>= 1)
+            if (m & 1) p[w] = sh[n][w];
+    }
+    for (uint8_t n = 0; n < MC_NNODES; n++)
+        if (send[n] & 8) MC_NODE(n)[3] = sh[n][3];
+    memset(send, 0, sizeof send);
+}
 
 const char *t1m_inst_name(uint8_t i) { return i < m_ninst ? ins[i].name : ""; }
 
@@ -201,9 +271,12 @@ static void load_inst(uint8_t i)
     in->unison = r[39] ? (r[39] > 4 ? 4 : r[39]) : 1;
     in->spread = r[42];
     in->tune = (int16_t)((int8_t)r[43] * 64 + cents_u((int8_t)r[44]));
+    in->nna = r[45] == NNA_RELEASE ? NNA_RELEASE : NNA_CUT;
+    in->dup = r[46] & 1;
     in->detune = cents_u((int16_t)rd16(r + 40));
     in->poff = cents_u((int16_t)rd16(r + 36));
     in->partner = r[38];
+    in->rel_ms = rd16(r + 26);
     in->w9 = (uint32_t)(rd16(r + 22) ? 32767UL / (3UL * rd16(r + 22) / 2 + 1) : 32767UL) << 16;
     in->w10 = (uint32_t)exp_rate(rd16(r + 26)) << 16 | exp_rate(rd16(r + 24));
     in->w11 = (uint32_t)(r[21] == 255 ? 32767 : (uint16_t)r[21] << 7) << 16;
@@ -220,6 +293,7 @@ static void load_inst(uint8_t i)
     case 3: in->entry = MC_OSC_NOISE; break;
     case 5: in->entry = MC_SYNC; break;
     default: {                          /* a sample */
+        in->src = 4;
         const uint8_t *s = m_smpl + 20 * (uint16_t)(r[18] < m_nsmp ? r[18] : 0);
         in->b16 = s[19] & 1;
         in->entry = in->b16 ? MC_SMP16 : MC_SMP;
@@ -235,6 +309,7 @@ static void load_inst(uint8_t i)
     }
     }
     in->nodes = inst_nodes(in);
+    in->cost = (uint16_t)(in->unison * src_cost[in->src]);
 }
 
 int t1m_load(const void *module)
@@ -270,62 +345,36 @@ int t1m_load(const void *module)
         const uint8_t *s = m_seqs + rd16(m_seqs + 2 * (uint16_t)i);
         seqs[i].kind = s[0]; seqs[i].len = s[1]; seqs[i].loop = s[2]; seqs[i].rel = s[3]; seqs[i].step = s + 4;
     }
-    for (uint8_t i = 0; i < m_ninst; i++) load_inst(i);
-    /* each channel's nodes: what its most expensive instrument needs */
-    uint8_t need[T1M_MAXCH];
-    memset(need, 0, sizeof need);
-    for (uint16_t pt = 0; pt < m_npat; pt++) {
-        const uint8_t *s = m_patt + rd32(m_patt + 4 * (uint32_t)pt);
-        uint16_t nr = rd16(s), r = 0;
-        s += 2;
-        while (r < nr) {
-            uint8_t b = *s++;
-            if (b == 0) r++;
-            else if (b >= 0x80) r = (uint16_t)(r + b - 0x7F);
-            else {
-                uint8_t c = (uint8_t)(b - 1), fl = *s++;
-                if (fl & 1) s++;
-                if (fl & 2) {
-                    uint8_t i = *s++;
-                    if (c < m_nch && i < m_ninst && ins[i].nodes > need[c]) need[c] = ins[i].nodes;
-                }
-                if (fl & 4) s++;
-                if (fl & 8) s += 2;
-                if (fl & 16) s += 2;
-            }
-        }
-    }
-    nnodes = 0;
-    for (uint8_t c = 0; c < m_nch; c++) {
-        ch[c].base = nnodes;
-        ch[c].nres = need[c];
-        nnodes = (uint8_t)(nnodes + need[c]);
-        if (nnodes > MC_NNODES) return T1M_ENODES;
+    npool = (uint8_t)(MC_NNODES - m_nflt);
+    for (uint8_t i = 0; i < m_ninst; i++) {
+        load_inst(i);
+        if (ins[i].nodes > npool) return T1M_ENODES;
     }
     for (uint8_t f = 0; f < m_nflt; f++) {
         const uint8_t *r = m_filt + 16 * (uint16_t)f;
         flt[f].mode = r[0]; flt[f].pan = r[1]; flt[f].cut = cut_of_hz(rd16(r + 2)); flt[f].q256 = rd16(r + 4);
         flt[f].lfo256 = rd16(r + 6); flt[f].sweepc = rd16(r + 8); flt[f].level = r[10];
-        flt[f].node = nnodes++;
-        if (nnodes > MC_NNODES) return T1M_ENODES;
+        flt[f].node = (uint8_t)(npool + f);
     }
+    budget = (uint16_t)(BUDGET - COST_IDLE - COST_FLT * m_nflt);
     t1m.title = name ? (const char *)name : "";
     t1m.author = t1m.title + strlen(t1m.title) + 1;
     t1m.comment = t1m.author + strlen(t1m.author) + 1;
     if (!name) t1m.author = t1m.comment = "";
     t1m.channels = m_nch; t1m.orders = m_nord; t1m.ninst = m_ninst;
-    t1m.needs = rd16(m + 6); t1m.voices = rd16(m + 8); t1m.nodes = nnodes;
+    t1m.needs = rd16(m + 6); t1m.voices = rd16(m + 8); t1m.nodes = 0; t1m.tails = 0;
     return T1M_OK;
 }
 
 /* ---- the engine side of a voice */
 static void link(uint8_t n, uint8_t linked) { W(n, 0, next_w[n] | (linked ? 0x80000000UL : 0)); }
 
-static void configure(ch_t *c, uint8_t i)  /* set the channel's nodes up for instrument i */
+static void configure(uint8_t b, uint8_t i)    /* set voice b's nodes up for instrument i */
 {
+    vc_t *v = &vc[b];
     const ins_t *in = &ins[i];
-    for (uint8_t k = 0; k < c->nres; k++) {
-        uint8_t n = (uint8_t)(c->base + k);
+    for (uint8_t k = 0; k < v->n; k++) {
+        uint8_t n = (uint8_t)(b + k);
         uint8_t used = k < in->nodes;
         uint8_t slave = in->src == 5 && (k & 1);
         link(n, used && in->src == 5 && !slave);
@@ -342,75 +391,140 @@ static void configure(ch_t *c, uint8_t i)  /* set the channel's nodes up for ins
             W(n, 5, (in->flags & 2 ? 1u : 0u) | (in->flags & 4 ? 2u : 0u));
         }
     }
-    c->cfg = i;
+    load = (uint16_t)(load - v->cost + in->cost);
+    v->cost = in->cost;
+    v->inst = i;
+    v->dirty = 1;
+}
+
+static void free_voice(uint8_t b)
+{
+    vc_t *v = &vc[b];
+    for (uint8_t k = 0; k < v->n; k++) {
+        uint8_t n = (uint8_t)(b + k);
+        link(n, 0);
+        W(n, 1, (uint32_t)MC_SILENT | 0x80000000UL);
+        own[n] = 0xFF;
+    }
+    if (v->fg && ch[v->chan].v == b) ch[v->chan].v = 0xFF;
+    load = (uint16_t)(load - v->cost);
+    v->n = 0; v->cost = 0;
+}
+
+/* a tail's claim on its nodes: 1 + the ticks it has left (a channel's note: 0xFFFF, none) */
+static uint16_t claim(uint8_t b)
+{
+    const vc_t *v = &vc[b];
+    if (v->fg || !v->released) return 0xFFFF;
+    return (uint16_t)(1 + (v->life > v->age ? v->life - v->age : 0));
+}
+
+static uint8_t weakest_tail(void)
+{
+    uint8_t best = 0xFF;
+    uint16_t bc = 0xFFFF;
+    for (uint8_t b = 0; b < npool; b++)
+        if (vc[b].n) {
+            uint16_t c = claim(b);
+            if (c < bc) { bc = c; best = b; }
+        }
+    return best;
+}
+
+/* a run of n nodes for a voice costing `cost`: free ones, else the tails that matter least */
+static uint8_t alloc(uint8_t n, uint16_t cost)
+{
+    while ((uint32_t)load + cost > budget) {        /* the engine's time: the weakest tails go */
+        uint8_t t = weakest_tail();
+        if (t == 0xFF) break;           /* (only notes left: they play, a little over) */
+        free_voice(t);
+    }
+    uint8_t best = 0xFF;
+    uint16_t bs = 0xFFFF;
+    for (uint8_t s = 0; (uint8_t)(s + n) <= npool; s++) {
+        uint16_t sc = 0;
+        for (uint8_t k = 0; k < n && sc < bs; k++) {
+            uint8_t o = own[s + k];
+            if (o != 0xFF) { uint16_t c = claim(o); if (c > sc) sc = c; }
+        }
+        if (sc < bs) { bs = sc; best = s; if (!sc) break; }
+    }
+    if (best == 0xFF) return 0xFF;
+    for (uint8_t k = 0; k < n; k++)
+        if (own[best + k] != 0xFF) free_voice(own[best + k]);
+    vc_t *v = &vc[best];
+    memset(v, 0, sizeof *v);
+    v->n = n; v->inst = 0xFF;
+    for (uint8_t k = 0; k < n; k++) own[best + k] = best;
+    return best;
 }
 
 static int16_t clampi(int32_t v, int16_t lo, int16_t hi) { return (int16_t)(v < lo ? lo : v > hi ? hi : v); }
 
-static uint8_t seq_val(ch_t *c, const ins_t *in, uint8_t kind, int16_t *val)
+static uint8_t seq_val(const vc_t *v, const ins_t *in, uint8_t kind, int16_t *val)
 {
     uint8_t s = in->seq[kind];
     if (s == 0xFF || seqs[s].kind != kind) return 0;
     const seq_t *q = &seqs[s];
-    uint8_t pos = c->spos[kind];
+    uint8_t pos = v->spos[kind];
     if (pos >= q->len) pos = (uint8_t)(q->len - 1);
     *val = kind == 1 || kind == 2 ? (int16_t)(int8_t)q->step[pos] : (int16_t)q->step[pos];
     return 1;
 }
 
-static void seq_advance(ch_t *c, const ins_t *in)
+static void seq_advance(vc_t *v, const ins_t *in)
 {
     for (uint8_t kind = 0; kind < 4; kind++) {
         uint8_t s = in->seq[kind];
         if (s == 0xFF) continue;
         const seq_t *q = &seqs[s];
-        uint8_t end = (!c->released && q->rel != 0xFF) ? q->rel : q->len;   /* held: loop before the release point */
+        uint8_t end = (!v->released && q->rel != 0xFF) ? q->rel : q->len;   /* held: loop before the release point */
         if (kind == 2)                  /* pitch steps accumulate, one a tick */
-            c->spitch = (int16_t)(c->spitch + (int8_t)q->step[c->spos[2] < q->len ? c->spos[2] : q->len - 1] * 4);
-        uint8_t pos = (uint8_t)(c->spos[kind] + 1);
-        if (pos >= end) pos = (!c->released && q->loop != 0xFF && q->loop < end) ? q->loop : (uint8_t)(end - 1);
-        c->spos[kind] = pos;
+            v->spitch = (int16_t)(v->spitch + (int8_t)q->step[v->spos[2] < q->len ? v->spos[2] : q->len - 1] * 4);
+        uint8_t pos = (uint8_t)(v->spos[kind] + 1);
+        if (pos >= end) pos = (!v->released && q->loop != 0xFF && q->loop < end) ? q->loop : (uint8_t)(end - 1);
+        v->spos[kind] = pos;
     }
 }
 
-/* write the voice's pitch, volume and width for this tick */
-static void update(uint8_t ci)
+/* write voice b's pitch, volume and width for this tick */
+static void update(uint8_t b)
 {
-    ch_t *c = &ch[ci];
-    if (c->cfg == 0xFF) return;
-    const ins_t *in = &ins[c->cfg];
-    int16_t v;
-    int32_t u = (int32_t)c->pitch + c->slide + c->fine + c->spitch;
-    if (seq_val(c, in, 1, &v)) u += (int32_t)v * 64;
-    if (c->arp) {
+    vc_t *v = &vc[b];
+    if (v->inst == 0xFF) return;
+    const ins_t *in = &ins[v->inst];
+    int16_t sv;
+    int32_t u = (int32_t)v->pitch + v->slide + v->fine + v->spitch;
+    if (seq_val(v, in, 1, &sv)) u += (int32_t)sv * 64;
+    if (v->arp) {
         uint8_t a = (uint8_t)(tick % 3);
-        u += a == 1 ? (int32_t)(c->arp >> 4) * 64 : a == 2 ? (int32_t)(c->arp & 15) * 64 : 0;
+        u += a == 1 ? (int32_t)(v->arp >> 4) * 64 : a == 2 ? (int32_t)(v->arp & 15) * 64 : 0;
     }
-    if (in->src >= 4 && c->vibc) {      /* software vibrato: samples and pairs have no LFO in the engine */
-        int16_t s = sin64[c->vph >> 10];
-        u += ((int32_t)cents_u((int16_t)c->vibc) * s) >> 15;
+    if (in->src >= 4 && v->vibc) {      /* software vibrato: samples and pairs have no LFO in the engine */
+        int16_t s = sin64[v->vph >> 10];
+        u += ((int32_t)cents_u((int16_t)v->vibc) * s) >> 15;
     }
     /* the level: instrument x channel x sequence x global x mix, Q15 */
-    uint32_t lv = (uint32_t)in->level * c->vol;
-    if (seq_val(c, in, 0, &v)) lv = (lv * (uint16_t)v) >> 8;
+    uint32_t lv = (uint32_t)in->level * v->vol;
+    if (seq_val(v, in, 0, &sv)) lv = (lv * (uint16_t)sv) >> 8;
     lv = (lv * gvol) >> 8;
     lv = (lv * m_mix) >> 8;
     lv >>= 1;
     if (lv > 32767) lv = 32767;
-    if (c->mute || !c->on) lv = 0;
-    uint32_t wd = c->width >> 4;
-    if (seq_val(c, in, 3, &v)) wd = (uint32_t)v << 4;
+    if (ch[v->chan].mute || !v->on) lv = 0;
+    uint32_t wd = v->width >> 4;
+    if (seq_val(v, in, 3, &sv)) wd = (uint32_t)sv << 4;
     uint8_t n = in->unison;
     for (uint8_t k = 0; k < n; k++) {
         int16_t sp = n > 1 ? (int16_t)(2 * k - (n - 1)) : 0;    /* -(n-1) .. n-1 */
         int32_t uk = u + (n > 1 ? (int32_t)in->detune * sp / (2 * (n - 1)) : 0);
-        int32_t pk = (int32_t)c->pan + (n > 1 ? (int32_t)in->spread * sp / (2 * (n - 1)) : 0);
+        int32_t pk = (int32_t)v->pan + (n > 1 ? (int32_t)in->spread * sp / (2 * (n - 1)) : 0);
         pk = clampi(pk, 0, 255);
         uint32_t lf = pk < 128 ? 255 : (uint32_t)(255 - pk) * 2, rf = pk > 128 ? 255 : (uint32_t)pk * 2;
         if (lf > 255) lf = 255;
         if (rf > 255) rf = 255;
         uint32_t L = (lv * lf) / 255, R = (lv * rf) / 255;
-        uint8_t node = (uint8_t)(c->base + (in->src == 5 ? 2 * k : k));
+        uint8_t node = (uint8_t)(b + (in->src == 5 ? 2 * k : k));
         if (in->src == 4) {
             int16_t o;
             uint32_t r = oct_ratio(uk - in->sbase, &o);
@@ -423,56 +537,114 @@ static void update(uint8_t ci)
         }
         W(node, 4, R << 16 | L);
         if (in->src == 2) W(node, 5, wd > 4095 ? 4095 : wd);
-        if (c->dirty && in->src <= 3) {
-            W(node, 6, lfo_word(c->vib_lfo256)); W(node, 7, c->pwm); W(node, 8, vib_q15(c->vibc));
+        if (v->dirty && in->src <= 3) {
+            W(node, 6, lfo_word(v->vib_lfo256)); W(node, 7, v->pwm); W(node, 8, vib_q15(v->vibc));
         }
         if (in->src == 5) {             /* the pair's second oscillator, in the group's second node */
-            W((uint8_t)(node + 1), 2, osc_step(uk + c->poff));
+            W((uint8_t)(node + 1), 2, osc_step(uk + v->poff));
             uint32_t pl = (L * in->partner) / 255, pr = (R * in->partner) / 255;
             W((uint8_t)(node + 1), 4, pr << 16 | pl);
         }
-        uint32_t w3 = c->trig | (c->gate ? 0x100u : 0) | (c->route ? 0x1000u : 0);
+        uint32_t w3 = ntrig[node] | (v->gate ? 0x100u : 0) | (v->route ? 0x1000u : 0);
         W(node, 3, w3);
     }
+    v->dirty = 0;
+}
+
+static void release(vc_t *v)            /* the key off: the envelope's release, and the tail's life */
+{
+    v->gate = 0;
+    if (v->released) return;
+    v->released = 1;
+    v->age = 0;
+    const ins_t *in = &ins[v->inst];
+    /* -60 dB: 6.9 time constants of the release */
+    uint32_t t = ((uint32_t)in->rel_ms * 7UL * (tick_hz256 >> 8 ? tick_hz256 >> 8 : 1)) / 1000UL + 1;
+    v->life = (uint16_t)(t > 0xFFFF ? 0xFFFF : t);
+}
+
+static void cut(uint8_t b)              /* silence now: the level to 0, the nodes freed */
+{
+    vc_t *v = &vc[b];
+    for (uint8_t k = 0; k < v->n; k++) W((uint8_t)(b + k), 14, ntrig[b + k] | 0x200u);
+    free_voice(b);
+}
+
+static void cut_tails(uint8_t ci)       /* 19 00: the channel's tails */
+{
+    for (uint8_t b = 0; b < npool; b++)
+        if (vc[b].n && vc[b].chan == ci && !vc[b].fg) cut(b);
+}
+
+static void to_channel(ch_t *c, vc_t *v)   /* the channel's settings, into the voice playing its note */
+{
+    v->vol = c->vol; v->pan = c->pan; v->route = c->route; v->arp = c->arp;
+    v->width = c->width; v->vib_lfo256 = c->vib_lfo256; v->vibc = c->vibc; v->pwm = c->pwm;
+    v->fine = c->fine; v->poff = c->poff;
+    v->dirty |= c->dirty;
     c->dirty = 0;
 }
 
-static void note_on(ch_t *c, uint8_t note)
+/* a note on channel ci: its voice by the new-note action, then the note */
+static void note_on(uint8_t ci, uint8_t note)
 {
+    ch_t *c = &ch[ci];
     const ins_t *in = &ins[c->inst];
-    if (c->cfg != c->inst) configure(c, c->inst);
-    c->note = note;
-    c->pitch = (int16_t)(note * 64 + in->tune);
-    c->slide = 0; c->spitch = 0;
-    c->gate = 1; c->on = 1; c->released = 0;
-    memset(c->spos, 0, sizeof c->spos);
-    c->trig = (uint8_t)(c->trig + 1);
+    uint8_t old = c->v, b = 0xFF;
+    if (in->dup)                        /* the same note, still ringing: its voice speaks again */
+        for (uint8_t k = 0; k < npool; k++)
+            if (vc[k].n && vc[k].chan == ci && vc[k].note == note && vc[k].inst == c->inst && vc[k].n >= in->nodes) {
+                b = k;
+                break;
+            }
+    if (old != 0xFF && old != b) {
+        vc_t *o = &vc[old];
+        if (o->nna == NNA_RELEASE) {    /* the old note rings on, a tail */
+            release(o);
+            o->fg = 0; o->arp = 0;
+        } else if (b == 0xFF && o->n >= in->nodes) {
+            b = old;                    /* cut: the new note takes its voice */
+        } else {
+            cut(old);
+        }
+    }
+    c->v = 0xFF;
+    if (b == 0xFF) b = alloc(in->nodes, in->cost);
+    if (b == 0xFF) return;              /* (every node a channel's note: none for this one) */
+    vc_t *v = &vc[b];
+    v->fg = 1; v->chan = ci;
+    c->v = b;
+    if (v->inst != c->inst) configure(b, c->inst);
+    v->nna = c->nna != 0xFF ? c->nna : in->nna;
+    v->note = note;
+    v->pitch = (int16_t)(note * 64 + in->tune);
+    v->slide = 0; v->spitch = 0;
+    v->gate = 1; v->on = 1; v->released = 0; v->age = 0;
+    memset(v->spos, 0, sizeof v->spos);
+    for (uint8_t k = 0; k < v->n; k++) {
+        uint8_t n = (uint8_t)(b + k);
+        ntrig[n] = (uint8_t)(ntrig[n] + 1);
+        if (!ntrig[n]) ntrig[n] = 1;    /* (0: what a node set up afresh has seen) */
+    }
     if (in->src == 4) {                 /* the sample offset: start the sample later */
         uint32_t off = c->soff < in->sframes ? c->soff & ~3UL : 0;
         uint8_t fpw = in->b16 ? 1 : 2;
         for (uint8_t k = 0; k < in->unison; k++) {
-            W((uint8_t)(c->base + k), 5, in->saddr + (off >> fpw));
-            W((uint8_t)(c->base + k), 6, (in->sframes - off) << 16);
+            W((uint8_t)(b + k), 5, in->saddr + (off >> fpw));
+            W((uint8_t)(b + k), 6, (in->sframes - off) << 16);
         }
     }
     if (in->src <= 2 && !(in->flags & 8))
-        for (uint8_t k = 0; k < in->unison; k++) W((uint8_t)(c->base + k), 15, (uint32_t)(k * 16384u) << 16);
-    c->vph = 0;
+        for (uint8_t k = 0; k < in->unison; k++) W((uint8_t)(b + k), 15, (uint32_t)(k * 16384u) << 16);
+    v->vph = 0;
     c->soff = 0;
-}
-
-static void release(ch_t *c) { c->gate = 0; c->released = 1; }
-
-static void cut(ch_t *c)
-{
-    c->gate = 0; c->on = 0; c->released = 1;
-    if (c->cfg == 0xFF) return;
-    for (uint8_t k = 0; k < c->nres; k++) W((uint8_t)(c->base + k), 14, c->trig | 0x200u);   /* the level to 0 */
+    to_channel(c, v);
+    v->dirty = 1;
 }
 
 static void set_inst(ch_t *c, uint8_t i)
 {
-    if (i >= m_ninst || ins[i].nodes > c->nres) return;
+    if (i >= m_ninst) return;
     c->inst = i;
     c->vol = 255;
     c->pan = ins[i].pan;
@@ -528,20 +700,20 @@ static void pattern_at(uint8_t o, uint8_t r)
     t1m.order = ord; t1m.pattern = pt; t1m.rows = rows;
 }
 
-static void apply_cell(ch_t *c, uint8_t fl, uint8_t note, uint8_t inst, uint8_t vol)
+static void apply_cell(uint8_t ci, uint8_t fl, uint8_t note, uint8_t inst, uint8_t vol)
 {
+    ch_t *c = &ch[ci];
     uint8_t porta = (c->fx[0][0] == 3 || c->fx[1][0] == 3);
     if (fl & 2) set_inst(c, inst);
     if (fl & 4) c->vol = vol;
     if (fl & 1) {
-        if (note == 0x80) release(c);
-        else if (note == 0x81) cut(c);
+        if (note == 0x80) { if (c->v != 0xFF) release(&vc[c->v]); }
+        else if (note == 0x81) { if (c->v != 0xFF) cut(c->v); }
         else if (c->inst != 0xFF) {
-            if (porta && c->on) {
-                c->porta_to = (int16_t)(note * 64 + ins[c->inst].tune - c->pitch);
-            } else {
-                note_on(c, note);
-            }
+            if (porta && c->v != 0xFF && vc[c->v].on)
+                c->porta_to = (int16_t)(note * 64 + ins[c->inst].tune - vc[c->v].pitch);
+            else
+                note_on(ci, note);
         }
     }
 }
@@ -585,6 +757,10 @@ static void row_effects(ch_t *c, uint8_t ci)
         case 0x16: c->route = x ? 1 : 0; break;
         case 0x17: c->poff = (int16_t)((int8_t)x * 16); break;
         case 0x18: c->pslide = (int8_t)x; break;
+        case 0x19:                      /* 00 the channel's tails cut; 01, 02 its note's new-note action: cut, release */
+            if (x == 0) cut_tails(ci);
+            else if (x <= 2) c->nna = (uint8_t)(x - 1);
+            break;
         default:
             if (cmd >= 0x20 && cmd < 0x3C) {
                 uint8_t f = cmd & 3, op = (uint8_t)((cmd - 0x20) >> 2);
@@ -602,18 +778,21 @@ static void row_effects(ch_t *c, uint8_t ci)
             }
         }
     }
-    (void)ci;
 }
 
-static void tick_effects(ch_t *c)       /* the per-tick effects (ticks after the first) */
+static void tick_effects(uint8_t ci)    /* the per-tick effects (ticks after the first) */
 {
+    ch_t *c = &ch[ci];
+    vc_t *v = c->v != 0xFF ? &vc[c->v] : 0;
     for (uint8_t k = 0; k < 2; k++) {
         uint8_t cmd = c->fx[k][0], x = c->fx[k][1];
-        if (cmd == 0x01) c->slide = (int16_t)(c->slide + x * 4);
-        else if (cmd == 0x02) c->slide = (int16_t)(c->slide - x * 4);
+        if (cmd == 0x01) { if (v) v->slide = (int16_t)(v->slide + x * 4); }
+        else if (cmd == 0x02) { if (v) v->slide = (int16_t)(v->slide - x * 4); }
         else if (cmd == 0x03 && c->porta) {
-            int16_t d = (int16_t)(c->porta_to - c->slide), s = (int16_t)(c->porta * 4);
-            c->slide = (int16_t)(c->slide + (d > s ? s : d < -s ? -s : d));
+            if (v) {
+                int16_t d = (int16_t)(c->porta_to - v->slide), s = (int16_t)(c->porta * 4);
+                v->slide = (int16_t)(v->slide + (d > s ? s : d < -s ? -s : d));
+            }
         } else if (cmd >= 0x24 && cmd < 0x28 && (cmd & 3) < m_nflt) {
             flt_t *t = &flt[cmd & 3];
             t->cut += (int32_t)(int8_t)x * 4;
@@ -625,9 +804,10 @@ static void tick_effects(ch_t *c)       /* the per-tick effects (ticks after the
     if (c->vslide) c->vol = (uint8_t)clampi((int32_t)c->vol + (c->vslide >> 4) * 4 - (c->vslide & 15) * 4, 0, 255);
     if (c->wslide) c->width = (uint16_t)clampi(((int32_t)c->width >> 6) + (c->wslide >> 4) - (c->wslide & 15), 0, 1023) << 6;
     if (c->pslide) c->poff = (int16_t)(c->poff + c->pslide * 4);
-    if (tick == c->cut_at) cut(c);
-    if (tick == c->off_at) release(c);
-    if (c->retrig != 0xFF && c->retrig && c->on && tick % c->retrig == 0) note_on(c, c->note);
+    if (tick == c->cut_at && c->v != 0xFF) cut(c->v);
+    if (tick == c->off_at && c->v != 0xFF) release(&vc[c->v]);
+    if (c->retrig != 0xFF && c->retrig && c->v != 0xFF && vc[c->v].on && tick % c->retrig == 0)
+        note_on(ci, vc[c->v].note);
 }
 
 static void read_row(void)
@@ -654,11 +834,14 @@ static void read_row(void)
         }
     for (uint8_t i = 0; i < m_nch; i++) {
         ch_t *c = &ch[i];
+        if ((fl_[i] & 1) && n_[i] < 0x80 && !(c->fx[0][0] == 3 || c->fx[1][0] == 3))
+            c->nna = 0xFF;              /* (a new note: the instrument's action, unless 19 on its row says) */
         row_effects(c, i);
         if (c->delay_at != 0xFF && c->delay_at) {   /* a delayed cell: later this row */
             c->dflags = fl_[i]; c->dnote = n_[i]; c->dinst = i_[i]; c->dvol = v_[i];
         } else if (fl_[i])
-            apply_cell(c, fl_[i], n_[i], i_[i], v_[i]);
+            apply_cell(i, fl_[i], n_[i], i_[i], v_[i]);
+        if (c->nna != 0xFF && c->v != 0xFF) vc[c->v].nna = c->nna;
     }
 }
 
@@ -680,25 +863,43 @@ static void do_tick(void)
     else
         for (uint8_t i = 0; i < m_nch; i++) {
             ch_t *c = &ch[i];
-            tick_effects(c);
-            if (c->dflags && tick == c->delay_at) { apply_cell(c, c->dflags, c->dnote, c->dinst, c->dvol); c->dflags = 0; }
+            tick_effects(i);
+            if (c->dflags && tick == c->delay_at) { apply_cell(i, c->dflags, c->dnote, c->dinst, c->dvol); c->dflags = 0; }
         }
     for (uint8_t i = 0; i < m_nch; i++) {
         ch_t *c = &ch[i];
-        if (c->cfg == 0xFF) continue;
-        update(i);
-        if (c->vibc && ins[c->cfg].src >= 4)
-            c->vph = (uint16_t)(c->vph + (uint16_t)(((uint32_t)c->vib_lfo256 << 8) / (tick_hz256 >> 8 ? tick_hz256 >> 8 : 1)));
-        seq_advance(c, &ins[c->cfg]);
-        t1m.ch[i].note = c->on ? c->note : 0xFF;
+        c->mute = t1m.ch[i].mute;
+        if (c->v != 0xFF) to_channel(c, &vc[c->v]);
+    }
+    uint8_t nodes = 0, tails = 0;
+    for (uint8_t b = 0; b < npool; b++) {
+        vc_t *v = &vc[b];
+        if (!v->n) continue;
+        if (v->inst == 0xFF) { free_voice(b); continue; }
+        if (v->released && v->age >= v->life) { free_voice(b); continue; }   /* its release has died away */
+        const ins_t *in = &ins[v->inst];
+        update(b);
+        if (v->vibc && in->src >= 4)
+            v->vph = (uint16_t)(v->vph + (uint16_t)(((uint32_t)v->vib_lfo256 << 8) / (tick_hz256 >> 8 ? tick_hz256 >> 8 : 1)));
+        seq_advance(v, in);
+        if (v->released && v->age < 0xFFFF) v->age++;
+        nodes = (uint8_t)(nodes + v->n);
+        if (!v->fg) tails++;
+    }
+    for (uint8_t i = 0; i < m_nch; i++) {
+        ch_t *c = &ch[i];
+        const vc_t *v = c->v != 0xFF ? &vc[c->v] : 0;
+        t1m.ch[i].note = v && v->on ? v->note : 0xFF;
         t1m.ch[i].inst = c->inst;
         t1m.ch[i].vol = c->vol;
-        t1m.ch[i].gate = c->gate;
-        c->mute = t1m.ch[i].mute;
+        t1m.ch[i].gate = v ? v->gate : 0;
+        t1m.ch[i].node = v ? c->v : 0;
+        t1m.ch[i].nodes = v ? v->n : 0;
     }
     for (uint8_t f = 0; f < m_nflt; f++)
         if (flt[f].dirty) flt_write(f);
     t1m.row = row; t1m.speed = speed; t1m.gvol = gvol; t1m.tick_hz256 = tick_hz256;
+    t1m.nodes = nodes; t1m.tails = tails;
     t1m.ticks++;
     if (++tick >= speed) { tick = 0; next_row(); }
 }
@@ -726,30 +927,28 @@ uint16_t t1m_decode(uint8_t pat, uint8_t *note, uint8_t *inst, uint8_t nch, uint
 }
 
 void t1m_goto(uint8_t o) { jump_to = o; flow = 1; }
-void t1m_pause(uint8_t on)
-{
-    paused = on;
-    for (uint8_t i = 0; i < m_nch; i++)
-        if (on) cut(&ch[i]);
-}
+void t1m_pause(uint8_t on) { pause_req = (uint8_t)(on ? 2 : 1); }   /* (done in the interrupt) */
 
 void t1m_start(void)
 {
     mc_init();
     MC_CTRL = 0;
-    static uint8_t order[MC_NNODES];
-    for (uint8_t i = 0; i < nnodes; i++) order[i] = i;
-    for (uint8_t i = 0; i < nnodes; i++)
-        next_w[i] = i + 1 < nnodes ? MC_WADDR(MC_NODE(i + 1)) : 0;
-    for (uint8_t i = 0; i < nnodes; i++) {
+    memset(sh, 0, sizeof sh);
+    for (uint8_t i = 0; i < MC_NNODES; i++) send[i] = 0xFFFF;   /* every word, the first time */
+    staged = 0; pause_req = 0;
+    for (uint8_t i = 0; i < MC_NNODES; i++)
+        next_w[i] = i + 1 < MC_NNODES ? MC_WADDR(MC_NODE(i + 1)) : 0;
+    for (uint8_t i = 0; i < MC_NNODES; i++) {
         link(i, 0);
         W(i, 1, (uint32_t)MC_SILENT | 0x80000000UL);
+        own[i] = 0xFF; ntrig[i] = 0;
     }
+    memset(vc, 0, sizeof vc);
+    load = 0;
     for (uint8_t c = 0; c < m_nch; c++) {
-        memset(&ch[c].inst, 0, sizeof(ch_t) - 2);   /* (all but base and nres) */
-        ch[c].inst = ch[c].cfg = 0xFF;
-        ch[c].note = 0xFF;
-        t1m.ch[c].node = ch[c].base; t1m.ch[c].nodes = ch[c].nres;
+        memset(&ch[c], 0, sizeof(ch_t));
+        ch[c].inst = ch[c].v = ch[c].nna = 0xFF;
+        t1m.ch[c].node = 0; t1m.ch[c].nodes = 0;
         t1m.ch[c].note = t1m.ch[c].inst = 0xFF;
     }
     for (uint8_t f = 0; f < m_nflt; f++) {
@@ -757,16 +956,16 @@ void t1m_start(void)
         W(flt[f].node, 12, 0); W(flt[f].node, 13, 0); W(flt[f].node, 14, 0); W(flt[f].node, 15, (uint32_t)f << 30);
         flt_write(f);
     }
-    uint32_t h = nnodes ? MC_WADDR(MC_NODE(0)) : 0;
-    MC_HEAD_LO = (uint16_t)h;
-    MC_HEAD_HI = (uint16_t)(h >> 16);
+    flush();
+    MC_HEAD_LO = (uint16_t)MC_WADDR(MC_NODE(0));
+    MC_HEAD_HI = (uint16_t)(MC_WADDR(MC_NODE(0)) >> 16);
     speed = m_speed0 ? m_speed0 : 6;
     gvol = m_gvol0;
     tick_hz256 = m_tick0 ? m_tick0 : 50 * 256;
     period = ((0x5DC0000UL) / tick_hz256) << 8;  /* (1500 << 16) / Hz, << 8: blocks a tick, 16.16 */
     acc = period;                       /* the first tick at the first block */
     tick = 0; flow = 0; paused = 0;
-    t1m.ticks = 0;
+    t1m.ticks = 0; t1m.nodes = 0; t1m.tails = 0;
     pattern_at(0, 0);
     last_blocks = MC_BLOCKS;
     MC_IRQ = 0xFF;
@@ -776,13 +975,30 @@ void t1m_start(void)
 void t1m_block(void)
 {
     uint16_t now = MC_BLOCKS;
+    if (staged) {
+        if (now == done_at) return;     /* (a block that ended while the tick was worked out: wait for the next) */
+        flush();
+        staged = 0;
+    }
     uint16_t d = (uint16_t)(now - last_blocks);
     last_blocks = now;
+    if (pause_req) {
+        paused = (uint8_t)(pause_req - 1);
+        pause_req = 0;
+        if (paused) {
+            for (uint8_t b = 0; b < npool; b++)
+                if (vc[b].n) cut(b);
+            for (uint8_t i = 0; i < m_nch; i++) t1m.ch[i].note = 0xFF;
+            staged = 1; done_at = MC_BLOCKS;
+        }
+    }
     if (paused) return;
     acc += (uint32_t)d << 16;
     if (acc >= period) {
         acc -= period;
         if (acc >= period) acc = 0;     /* far behind: do not race to catch up */
         do_tick();
+        staged = 1;
+        done_at = MC_BLOCKS;
     }
 }

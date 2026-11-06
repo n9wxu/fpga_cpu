@@ -20,7 +20,7 @@ typedef struct {                        /* a channel, for a display (read it out
     uint8_t inst;                       /* 0xFF none */
     uint8_t vol;                        /* the channel's level */
     uint8_t gate;                       /* 1 held, 0 released or silent */
-    uint8_t node, nodes;                /* its first engine node and how many it has */
+    uint8_t node, nodes;                /* its note's first engine node and how many it has (0: none) */
     uint8_t mute;
 } t1m_chan_t;
 
@@ -29,7 +29,8 @@ typedef struct {
     uint8_t channels, speed, order, orders, pattern, row, rows, gvol;
     uint16_t tick_hz256;                /* the tick rate, Hz x 256 */
     uint16_t needs, voices;             /* the header's */
-    uint8_t nodes;                      /* engine nodes in use (voices and filters) */
+    uint8_t nodes;                      /* engine nodes sounding (the filters' not counted) */
+    uint8_t tails;                      /* voices ringing on after their channel's next note */
     uint8_t ninst;
     uint32_t ticks;                     /* since the start */
     t1m_chan_t ch[T1M_MAXCH];
@@ -37,7 +38,7 @@ typedef struct {
 
 extern volatile t1m_state_t t1m;
 
-int t1m_load(const void *module);       /* parse, check, place the voices on nodes: T1M_OK or an error */
+int t1m_load(const void *module);       /* parse and check: T1M_OK or an error */
 const char *t1m_error(int e);
 void t1m_start(void);                   /* the engine (mc_init), the node list; then enable IRQ_AUDIO */
 void t1m_block(void);                   /* the block-done interrupt's work */

@@ -16,7 +16,7 @@ comment "every T1M feature: oscillators, samples, pairs, unison, sequences, filt
 channels %d
 tick 50
 speed 6
-mix 0.42
+mix 0.39
 volume 1.0
 restart 1
 
@@ -45,7 +45,7 @@ instrument 05 "Sync lead" sync offset 1200 partner 0.85
   level 0.28 attack 6 decay 600 sustain 0.65 release 220 pan 0.45 vibrato 18 lfo 5.5
   seq pitch 0 0 0 0 0 0 1 1 1 0 0 -1 -1 -1 0 0 |
 instrument 06 "Bell" ring offset 1902 partner 0.9
-  level 0.42 attack 1 decay 350 sustain 0.15 release 600 pan 0.7
+  level 0.42 attack 1 decay 350 sustain 0.15 release 600 pan 0.7 nna release   # a struck bell rings on
 instrument 07 "Choir" sample choir
   level 0.5 attack 180 decay 2000 sustain 0.8 release 700 pan 0.38 vibrato 10 lfo 4.8
 instrument 08 "Chip" pulse

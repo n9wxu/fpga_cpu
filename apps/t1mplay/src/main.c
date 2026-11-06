@@ -77,8 +77,8 @@ static void draw(void)
     uint16_t clocks = MC_CLOCKS;
     snprintf(b, sizeof b, " T1M  %-50.50s%22.22s ", t1m.title, t1m.author);
     line(0, b, A(WHITE, BLUE));
-    snprintf(b, sizeof b, " ORD %02X/%02X  PAT %02X  ROW %02X/%02X  SPD %d  TICK %dHz  VOL %02X  NODES %d  ENGINE %d%% ",
-             t1m.order, t1m.orders - 1, t1m.pattern, t1m.row, rows - 1, t1m.speed, hz, t1m.gvol, t1m.nodes,
+    snprintf(b, sizeof b, " ORD %02X/%02X PAT %02X ROW %02X/%02X SPD %d TICK %dHz VOL %02X NODES %d TAILS %d ENGINE %d%% ",
+             t1m.order, t1m.orders - 1, t1m.pattern, t1m.row, rows - 1, t1m.speed, hz, t1m.gvol, t1m.nodes, t1m.tails,
              (int)((uint32_t)clocks * 100 / 44992));
     line(1, b, A(CYAN, BLACK));
     fill(2, A(BLACK, CYAN));
@@ -104,8 +104,9 @@ static void draw(void)
     for (uint8_t c = 0; c < 16 && c < t1m.channels; c++) {   /* the channels: instrument, note, level */
         int y = 17 + (c & 7), x = c < 8 ? 0 : 40;
         uint8_t in = t1m.ch[c].inst, n = t1m.ch[c].note;
-        MC_MON_IDX = (uint16_t)(256 + t1m.ch[c].node);
-        uint16_t lvl = t1m.ch[c].nodes ? MC_MON_HI : 0;
+        /* the note's meter: its first node's word 13, high half, read from the node itself (the
+         * monitor's 32 meters follow list positions, and the list is all 64 nodes) */
+        uint16_t lvl = t1m.ch[c].nodes ? ((volatile uint16_t *)MC_NODE(t1m.ch[c].node))[27] : 0;
         uint8_t bar = (uint8_t)(((uint32_t)lvl * t1m.ch[c].vol) >> 19);   /* 0-15 */
         if (t1m.ch[c].mute) bar = 0;
         snprintf(b, sizeof b, "%2d %-12.12s %s ", c + 1, in == 0xFF ? "" : t1m_inst_name(in), note_s(n, nb));
@@ -129,7 +130,7 @@ int main(void)
         printf("t1mplay: %s\n", t1m_error(e));
         return 1;
     }
-    printf("%s by %s: %d channels, %d engine nodes\n", t1m.title, t1m.author, t1m.channels, t1m.nodes);
+    printf("%s by %s: %d channels, up to %d engine voices\n", t1m.title, t1m.author, t1m.channels, t1m.voices);
     memset(txt, 0, sizeof txt);
     VID_TXT_L = (uint16_t)(uint32_t)txt;
     VID_TXT_H = (uint16_t)((uint32_t)txt >> 16);

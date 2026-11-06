@@ -15,6 +15,7 @@ a `.t1m` back.
 | Feature | |
 |---|---|
 | Channels | 1-32, each plays one note at a time (a voice); a note can use several engine voices (unison, pairs) |
+| Tails | an instrument's new-note action: *cut* (the channel's next note takes its voice) or *release* (the note is released and rings on in the background, its tail, while the next one plays; a pipe sounding after its key, a struck bell). The same note again restarts its own voice instead (the duplicate check, on by default) |
 | Sources | saw, triangle, pulse (width), noise (pitch = its clock), samples (8- or 16-bit, mono, one-shot or looped, any rate), oscillator pairs: hard sync (two saws, the second restarted by the first) and ring modulation (two triangles, the second's sign flipped by the first's), with or without sync |
 | Envelope | attack (linear, a time), decay and release (exponential, time constants), sustain level |
 | Modulation | one sine LFO a voice: vibrato depth and pulse-width depth, at its rate |
@@ -26,6 +27,10 @@ a `.t1m` back.
 
 A player tells the song what it cannot do: the header's `needs` bits (below) list the features used,
 and the compiler reports the song's worst-case load in engine voices.
+
+A tail lasts until its release has died away (−60 dB: 6.9 release time constants). A player with
+fewer voices than a song's tails need ends the tails closest to their end first; the channels'
+notes come before any tail.
 
 ## Timing
 
@@ -60,8 +65,8 @@ The file must be loaded at a 4-byte aligned address (sample data is played in pl
 |---|---|---|
 | 0 | 4 | `T1M` 0x1A |
 | 4 | 2 | version: 1 |
-| 6 | 2 | `needs`: features used. Bit 0 noise, 1 samples, 2 16-bit samples, 3 sync pairs, 4 ring pairs, 5 filters, 6 unison, 7 sequences |
-| 8 | 2 | the most engine voices sounding at once (unison and pairs counted) |
+| 6 | 2 | `needs`: features used. Bit 0 noise, 1 samples, 2 16-bit samples, 3 sync pairs, 4 ring pairs, 5 filters, 6 unison, 7 sequences, 8 tails |
+| 8 | 2 | the most engine voices sounding at once (unison, pairs and tails counted; the song played through its order list once) |
 | 10 | 2 | reserved, 0 |
 | 12 | 4 | total file length |
 
@@ -144,7 +149,9 @@ silence). The compiler makes short and ping-pong loops legal by unrolling them.
 | 42 | 1 | unison pan width (0 = all at the instrument's pan, 255 = hard left to hard right) |
 | 43 | 1 | transpose, semitones (signed) |
 | 44 | 1 | fine tune, cents (signed) |
-| 45 | 3 | reserved, 0 |
+| 45 | 1 | new-note action: 0 cut, 1 release (tails) |
+| 46 | 1 | duplicate check: bit 0 the same note (and instrument) on the channel restarts its voice, still sounding or a tail, rather than starting another |
+| 47 | 1 | reserved, 0 |
 | 48 | 8 | sequences: volume, arpeggio, pitch, width (a byte each: the sequence, or 0xFF = none), 4 bytes reserved (0xFF) |
 | 56 | 8 | reserved, 0 |
 
@@ -211,6 +218,7 @@ tick of the row but the first.
 | 16 xx | routing | 0 straight to the mix, 1 through the filters |
 | 17 xx | pair offset | the second oscillator xx/4 semitones (signed) from the first |
 | 18 xx | pair slide | the second oscillator's offset moves xx/16 semitone (signed) per tick |
+| 19 xx | tails | 00 cut the channel's tails now; 01 / 02 the new-note action of this channel's note: cut / release (until its next note) |
 | 2u xx | cutoff | filter u (0-3), byte scale |
 | 2(4+u) xx | cutoff slide | filter u, xx/8 (signed) of the byte scale per tick |
 | 2(8+u) xx | Q | filter u, byte scale |
@@ -243,6 +251,7 @@ instrument 01 "Lead" pulse
   level 0.7 pan 0.5 attack 5 decay 300 sustain 0.6 release 200
   width 0.5 pwm 0.3 lfo 5.5 vibrato 12 filter on unison 2 detune 8 spread 0.3
   transpose 0 fine 0 freelfo off
+  nna release dup on   # new-note action: cut (default) or release; dup on: the same note restarts its voice
   seq volume 255 230 200 | 180 / 120 60 0      # '|' the loop point, '/' the release point
   seq arp 0 4 7 |
 instrument 02 "Sync" sync  offset 700  partner 0.8     # pair: hard sync; 'ring', or 'sync ring'

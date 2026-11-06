@@ -191,7 +191,7 @@ def toccata():
     song.title, song.author = "Toccata and Fugue in D minor, BWV 565", "J. S. Bach (attr.); Mutopia 1780"
     song.comment = "converted from apps/toccata by apps/t1mplay/songs/convert.py"
     song.channels = 2 * len(parts)           # each part: its flue rank, and its reed at full organ
-    song.speed, song.tick, song.mix, song.volume, song.restart = 1, 1500 / 32, 1.25, 255, 0   # (toccata pans louder: x1.31 on the near side)
+    song.speed, song.tick, song.mix, song.volume, song.restart = 1, 1500 / 32, 1.12, 255, 0   # (toccata pans louder: x1.31 on the near side)
     for t in TIMBRES:                        # a pipe sample a range: a 1024-frame loop of whole cycles
         for r in range(4):
             rate, note = rate_for(375 * 2 ** r)
@@ -207,7 +207,7 @@ def toccata():
                                   sample=song.sample_ix["%s%d" % (t, rng)], level=min(255, round(vol / 128)),
                                   attack=round(attack_ms(att)), decay=round(tc_ms(DECAY)), sustain=255,
                                   release=round(tc_ms(RELEASE)), transpose=semis,
-                                  fine=round(1200 * math.log2(1 + det / 4096))))
+                                  fine=round(1200 * math.log2(1 + det / 4096)), nna=1, dup=1))   # pipes ring on
         return ix[key]
 
     events = []

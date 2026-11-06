@@ -13,7 +13,8 @@ import wave
 
 MAGIC = b"T1M\x1a"
 SRC = {"saw": 0, "tri": 1, "triangle": 1, "pulse": 2, "noise": 3, "sample": 4, "pair": 5}
-NEED_NOISE, NEED_SMP, NEED_SMP16, NEED_SYNC, NEED_RING, NEED_FILT, NEED_UNISON, NEED_SEQ = (1 << i for i in range(8))
+NEED_NOISE, NEED_SMP, NEED_SMP16, NEED_SYNC, NEED_RING, NEED_FILT, NEED_UNISON, NEED_SEQ, NEED_TAILS = (1 << i for i in range(9))
+NNA = {"cut": 0, "release": 1}
 SEQ_KIND = {"volume": 0, "arp": 1, "pitch": 2, "width": 3}
 NOTES = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
 MAXFRAMES, GUARD = 32764, 256
@@ -128,7 +129,7 @@ class Song:
 def new_inst(name):
     return dict(name=name, src=0, flags=0, sample=0, level=255, pan=128, sustain=255, attack=0, decay=0,
                 release=0, width=32768, lfo=0, vib=0, pwm=0, offset=0, partner=255, unison=1, detune=0,
-                spread=0, transpose=0, fine=0, seq=[0xFF] * 4)
+                spread=0, transpose=0, fine=0, nna=0, dup=1, seq=[0xFF] * 4)
 
 
 def parse_seq(words):
@@ -192,6 +193,11 @@ def parse_inst(song, ins, words):
         elif k == "transpose": ins["transpose"] = max(-128, min(127, int(arg)))
         elif k == "fine": ins["fine"] = max(-128, min(127, int(arg)))
         elif k == "filter": ins["flags"] = (ins["flags"] & ~1) | (arg in ("on", "1", "yes"))
+        elif k == "nna":
+            if arg not in NNA:
+                raise Err("nna: cut or release, not %r" % arg)
+            ins["nna"] = NNA[arg]
+        elif k == "dup": ins["dup"] = 1 if arg in ("on", "1", "yes") else 0
         elif k == "freelfo": ins["flags"] = (ins["flags"] & ~8) | (8 if arg in ("on", "1", "yes") else 0)
         else:
             raise Err("unknown instrument word %r" % k)
@@ -357,6 +363,66 @@ def voices_of(ins):
     return ins["unison"] * (2 if ins["src"] == 5 else 1)
 
 
+def voices_at_once(song):
+    """the most engine voices sounding at once, the song played through its order list once (jumps
+    not taken): each channel's note, and with the new-note action release its tails, each until its
+    release has died away (6.9 time constants, -60 dB)"""
+    nch = song.channels
+    fg = [None] * nch                   # [inst, note, released at (or None), new-note action (or None)]
+    tails = [[] for _ in range(nch)]    # [end, inst, note]
+    cur = [None] * nch
+    speed, hz, t, most = song.speed or 6, song.tick or 50, 0.0, 0
+
+    def life(i):
+        return 6.9 * song.inst[i]["release"] / 1000.0
+    o, start = 0, 0
+    while o < len(song.order):
+        p = song.patterns[song.order[o]]
+        brk = None
+        for r in range(start, p["rows"]):
+            for chn in range(nch):
+                c = p["cells"].get((r, chn))
+                if not c:
+                    continue
+                fx = [c[f] for f in ("fx1", "fx2") if f in c]
+                nna = None
+                for cmd, x in fx:
+                    if cmd == 0x0F and x: speed = x
+                    if cmd == 0x10 and x: hz = x
+                    if cmd == 0x0D: brk = x
+                    if cmd == 0x19 and x == 0: tails[chn] = []
+                    if cmd == 0x19 and x in (1, 2): nna = x - 1
+                if "inst" in c and c["inst"] < len(song.inst):
+                    cur[chn] = c["inst"]
+                n = c.get("note")
+                if n is None or cur[chn] is None:
+                    continue
+                if n == 0x80:
+                    if fg[chn] and fg[chn][2] is None: fg[chn][2] = t
+                elif n == 0x81:
+                    fg[chn] = None
+                elif not any(cmd == 0x03 for cmd, _ in fx) or not fg[chn]:
+                    i = cur[chn]
+                    if song.inst[i]["dup"]:
+                        tails[chn] = [x for x in tails[chn] if (x[1], x[2]) != (i, n)]
+                    f = fg[chn]
+                    if f and not (song.inst[i]["dup"] and (f[0], f[1]) == (i, n)):
+                        if f[3] if f[3] is not None else song.inst[f[0]]["nna"]:
+                            tails[chn].append([(f[2] if f[2] is not None else t) + life(f[0]), f[0], f[1]])
+                    fg[chn] = [i, n, None, nna]
+            for chn in range(nch):
+                tails[chn] = [x for x in tails[chn] if x[0] > t]
+                if fg[chn] and fg[chn][2] is not None and fg[chn][2] + life(fg[chn][0]) <= t:
+                    fg[chn] = None
+            most = max(most, sum(voices_of(song.inst[f[0]]) for f in fg if f) +
+                       sum(voices_of(song.inst[x[1]]) for tl in tails for x in tl))
+            t += speed / hz
+            if brk is not None:
+                break
+        o, start = o + 1, brk or 0
+    return most
+
+
 def encode_patterns(song):
     """the row stream: 0x00 ends a row, 0x80 + n ends it and skips n empty rows"""
     blobs = []
@@ -402,14 +468,9 @@ def build(song):
         if ins["flags"] & 1: needs |= NEED_FILT
         if ins["unison"] > 1: needs |= NEED_UNISON
         if any(s != 0xFF for s in ins["seq"]): needs |= NEED_SEQ
+        if ins["nna"]: needs |= NEED_TAILS
     if song.filters: needs |= NEED_FILT
-    # the most voices at once: each channel's most expensive instrument
-    used = [set() for _ in range(song.channels)]
-    for p in song.patterns:
-        for (r, ch), c in sorted(p["cells"].items()):
-            if "inst" in c:
-                used[ch].add(c["inst"])
-    voices = sum(max((voices_of(song.inst[i]) for i in u), default=0) for u in used)
+    voices = voices_at_once(song)
     body = b""
     body += chunk(b"SONG", struct.pack("<BBHHBBHHBBBB", song.channels, song.speed, u16(song.tick * 256),
                                        u16(song.mix * 256), song.volume, song.restart, len(song.order),
@@ -430,11 +491,11 @@ def build(song):
         body += chunk(b"SDAT", bytes(sd))
     ib = bytearray()
     for ins in song.inst:
-        ib += struct.pack("<16sBBBBBBHHHHHHHhBBHBbb3x4B4B8x", ins["name"].encode("ascii", "replace")[:16],
+        ib += struct.pack("<16sBBBBBBHHHHHHHhBBHBbbBBx4B4B8x", ins["name"].encode("ascii", "replace")[:16],
                           ins["src"], ins["flags"], ins["sample"], ins["level"], ins["pan"], ins["sustain"],
                           ins["attack"], ins["decay"], ins["release"], ins["width"], ins["lfo"], ins["vib"],
                           ins["pwm"], ins["offset"], ins["partner"], ins["unison"], ins["detune"], ins["spread"],
-                          ins["transpose"], ins["fine"], *ins["seq"], 0xFF, 0xFF, 0xFF, 0xFF)
+                          ins["transpose"], ins["fine"], ins["nna"], ins["dup"], *ins["seq"], 0xFF, 0xFF, 0xFF, 0xFF)
     body += chunk(b"INST", bytes(ib))
     if song.seqs:
         offs, data = [], bytearray()
@@ -478,7 +539,7 @@ FX = {0x00: "arp", 0x01: "slide up", 0x02: "slide down", 0x03: "portamento", 0x0
 def dump(path):
     data = open(path, "rb").read()
     ver, needs, voices, total, ch = chunks(data)
-    names = ["noise", "samples", "16-bit", "sync", "ring", "filters", "unison", "sequences"]
+    names = ["noise", "samples", "16-bit", "sync", "ring", "filters", "unison", "sequences", "tails"]
     print("T1M version %d, %d bytes; needs %s; up to %d engine voices" %
           (ver, total, ", ".join(n for i, n in enumerate(names) if needs >> i & 1) or "nothing", voices))
     nch, speed, tick, mix, gvol, restart, nord, npat, nins, nsmp, nflt, nseq = struct.unpack("<BBHHBBHHBBBB", ch["SONG"])
@@ -497,12 +558,12 @@ def dump(path):
                                                              "loop %d+%d" % (ls, ll) if ll else "one-shot"))
     src = ["saw", "triangle", "pulse", "noise", "sample", "pair"]
     for i in range(nins):
-        f = struct.unpack_from("<16sBBBBBBHHHHHHHhBBHBbb3x4B4B8x", ch["INST"], 64 * i)
+        f = struct.unpack_from("<16sBBBBBBHHHHHHHhBBHBbbBBx4B4B8x", ch["INST"], 64 * i)
         name = f[0].rstrip(b"\0").decode()
         print("inst %02X %-16s %-8s flags %x level %d pan %d ADSR %d/%d/%d/%d width %d lfo %.2f vib %d pwm %d "
-              "pair %+d/%d unison %d/%d/%d tr %d fine %d seq %s" %
+              "pair %+d/%d unison %d/%d/%d tr %d fine %d nna %s%s seq %s" %
               (i, name, src[f[1]], f[2], f[4], f[5], f[7], f[8], f[6], f[9], f[10], f[11] / 256, f[12], f[13], f[14],
-               f[15], f[16], f[17], f[18], f[19], f[20], f[21:25]))
+               f[15], f[16], f[17], f[18], f[19], f[20], ("cut", "release")[f[21] & 1], " dup" if f[22] else "", f[23:27]))
     pt = ch["PATT"]
     for i in range(npat):
         off = struct.unpack_from("<I", pt, 4 * i)[0]
