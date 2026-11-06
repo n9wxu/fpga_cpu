@@ -76,6 +76,40 @@ prog("demo-s3", "demo", "spartan3", "FPGA demo (Spartan-3)", "the six-section de
      lambda t: fcc(os.path.join(t, "demo-s3.bin"), ["fpga/demo/demo.c", "fpga/lib/sid.c"], "--stack", "0x20000"))
 prog("paint", "app", "spartan3", "Paint", "an 8-colour paint program with windows, for the PS/2 mouse (apps/paint)",
      lambda t: make("apps/paint", "build/paint.bin"))
+def with_data(name, d, target, tool, *args):
+    """a program's image with its data in RAM after it (the app's own packer: a flat image for fsim)"""
+    def build(t):
+        img = make(d, target)
+        out = os.path.join(t, name + ".bin")
+        sh([PY, os.path.join(ROOT, d, tool), *[a.replace("{img}", img).replace("{out}", out) for a in args]])
+        if os.path.exists(img[:-4] + ".sym"):
+            shutil.copyfile(img[:-4] + ".sym", out[:-4] + ".sym")
+        return out
+    return build
+
+
+SIDS = ["apps/sidplay/tunes/" + t + ".sid" for t in ("neondrift", "glassbells", "syncrider")]
+prog("sidplay", "app", "tang", "SID tracker", "C64 tunes on the audio engine through a 6502 JIT, as a tracker (apps/sidplay)",
+     with_data("sidplay", "apps/sidplay", "build/sidplay.bin", "tools/mkimage.py", "{img}", "{out}",
+               *[os.path.join(ROOT, t) for t in SIDS]))
+
+
+def modplay(t):
+    make("apps/demo80s", "src/music_mods.h")          # its two MODs, made by tools/mkmusic.py
+    mods = [os.path.join(ROOT, "apps/demo80s/build", m) for m in ("amiga.mod", "finale.mod")]
+    return with_data("modplay", "apps/modplay", "build/modplay.bin", "tools/pack.py", "image", "{img}", "{out}",
+                     *mods)(t)
+
+
+prog("modplay", "app", "tang", "MOD tracker", "Amiga MODs on the audio engine, as a tracker: demo80s's two tunes "
+     "(apps/modplay)", modplay)
+prog("sym40", "app", "tang-mc", "Symphony No. 40", "Mozart for orchestra on the microcoded audio engine, with a "
+     "falling-notes visualizer (apps/sym40)", lambda t: make("apps/sym40", "build/sym40.bin"))
+prog("toccata", "app", "tang-mc", "Toccata and Fugue", "Bach on a 64-node pipe organ, the microcoded audio engine "
+     "(apps/toccata)", lambda t: make("apps/toccata", "build/toccata.bin"))
+prog("mcdemo", "demo", "tang-mc", "Microcoded audio", "the microcoded audio engine feature by feature, with its "
+     "dataflow on screen (apps/mcdemo)", lambda t: make("apps/mcdemo", "build/mcdemo.bin"))
+
 for n, about in (("video", "every display layer and a double-buffered sprite"),
                  ("hicolor", "the 256-colour palette and the 3-bit dither"),
                  ("spr8", "the 8 bpp sprite buffer")):
