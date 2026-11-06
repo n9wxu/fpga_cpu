@@ -1,0 +1,3 @@
+build/
+tests/disk/
+__pycache__/
