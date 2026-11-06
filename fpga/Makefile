@@ -111,7 +111,7 @@ build/stat_text.hex build/stat_fields.hex build/stat_colours.hex: tools/mkstatus
 	python3 tools/mkstatus.py
 
 sim-ramsys: $(DATA)
-	iverilog -g2005 -Wall -DSIM -DRAMSYS -I ../verilog/rtl -o build/ramsys_tb.vvp sim/system_tb.v sim/sram_model.v sim/ps2_dev.v $(SRC)
+	iverilog -g2005 -Wall -DSIM -DRAMSYS -I ../verilog/rtl -o build/ramsys_tb.vvp sim/system_tb.v sim/sram_model.v sim/ps2_dev.v sim/sst39vf.v sim/genesis_pad.v $(SRC)
 	cd build && vvp -n ramsys_tb.vvp $(SIMARGS)
 
 sim-ramvid: $(DATA)
@@ -148,7 +148,7 @@ prog: build/$(TOP).bit
 PROG ?= build/demo.bin
 build/demo.bin: $(wildcard demo/*.c demo/*.h) FORCE
 	@mkdir -p build
-	cd .. && llvm/fcc -O2 --stack 0x20000 -o fpga/$@ fpga/demo/demo.c
+	cd .. && llvm/fcc -O2 --stack 0x20000 -o fpga/$@ fpga/demo/demo.c fpga/lib/sid.c
 
 demo: build/demo.bin
 

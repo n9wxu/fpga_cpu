@@ -38,6 +38,9 @@ module ps2_dev #(
         #(HALF / 2) d_lo = 1'b0;
         b = f[7:0];
         if (^f[8:0] !== 1'b1) $display("[ps2_dev] parity error on %h", b);
+`ifdef PS2_DEBUG
+        $display("[ps2_dev %0d] %0t: got %h (frame %b)", MOUSE, $time, b, f[9:0]);
+`endif
     end endtask
 
     // a byte to the host; false if the host held the clock (inhibit) first
@@ -56,6 +59,9 @@ module ps2_dev #(
     always begin
         #1000;
         if (clk === 1'b1 && dat === 1'b0 && !d_lo) begin
+`ifdef PS2_DEBUG
+            $display("[ps2_dev %0d] %0t: request to send", MOUSE, $time);
+`endif
             #5000 recv;
             ncmd = ncmd + 1;
             last = $time;

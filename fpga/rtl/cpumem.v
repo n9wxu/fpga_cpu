@@ -19,7 +19,15 @@
 // a read after a write to the same word sees it. A write's data is taken at
 // e(DLAT), later than its address: T1S's comes from its register file, a
 // block RAM read a clock earlier, once the register's address has settled.
+//
+// FLASH = 1: the flash on the SRAM bus (sram_phy.v) as a window at
+// F80000-FFFFFF (T1 reaches only 000000-0FFFFF and F00000-FFFFFF): flash
+// word k's low byte is the byte at F80000 + k, so its word address on the
+// port is the byte address (bits 17:0; bit 18 is the flash's A18) and the
+// byte comes back in lane 0. Reads and writes go to the flash as they
+// come: a read never finds its word in rbuf (status polling must see each).
 module cpumem #(
+    parameter FLASH = 0,
     parameter PER = 5,                      // 50 MHz cycles in a period, at least
     parameter PERF = 4,                     // and in one with no access or one from rbuf (T1S:
                                             // its register file reads two clocks before the step)
@@ -47,6 +55,7 @@ module cpumem #(
     output wire        p_req,
     output wire        p_we,
     output wire [17:0] p_addr,
+    output wire [1:0]  p_xa,                // FLASH: {the flash, its A18} (sram_phy's xa)
     output wire [31:0] p_wdata,
     output wire [3:0]  p_wbe,
     input  wire        p_ack,
@@ -64,32 +73,38 @@ module cpumem #(
 
     // the word buffer
     reg         rb_v = 1'b0;
+    reg         rb_fl = 1'b0;               // rbuf came from the flash: never a hit
     reg  [17:0] rb_a = 18'd0;
     reg  [31:0] rbuf = 32'd0;
     // the write buffer
     reg         wb_v = 1'b0;
     reg  [17:0] wb_a = 18'd0;
+    reg  [1:0]  wb_x = 2'b00;
     reg  [31:0] wb_d = 32'd0;
     reg  [3:0]  wb_be = 4'd0;
     // a read for the RAM
     reg         rd_v = 1'b0, rd_out = 1'b0;
     reg  [17:0] rd_a = 18'd0;
+    reg  [1:0]  rd_x = 2'b00;
 
     assign p_req   = wb_v || (rd_v && !rd_out);
     assign p_we    = wb_v;
     assign p_addr  = wb_v ? wb_a : rd_a;
+    assign p_xa    = !FLASH ? 2'b00 : wb_v ? wb_x : rd_x;
     assign p_wdata = wb_d;
     assign p_wbe   = wb_be;
 
     // T1F's access now (settled from e2)
     wire        a_io  = cpu_addr[23:16] == 8'hF0;
-    wire        a_ram = cpu_addr[23:20] == 4'h0;
-    wire [17:0] a_w   = cpu_addr[19:2];
+    wire        a_fl  = FLASH && cpu_addr[23:19] == 5'b11111;
+    wire        a_ram = cpu_addr[23:20] == 4'h0 || a_fl;
+    wire [17:0] a_w   = a_fl ? cpu_addr[17:0] : cpu_addr[19:2];
+    wire [1:0]  a_x   = {a_fl, cpu_addr[18]};
     wire [3:0]  a_be  = 4'b0001 << cpu_addr[1:0];
-    wire        hit   = rb_v && rb_a == a_w;
+    wire        hit   = rb_v && rb_a == cpu_addr[19:2] && !(FLASH && (rb_fl || a_fl));
     reg  [7:0]  lane;
     always @*
-        case (cpu_addr[1:0])
+        case (a_fl ? 2'b00 : cpu_addr[1:0])
             2'd0: lane = rbuf[7:0];
             2'd1: lane = rbuf[15:8];
             2'd2: lane = rbuf[23:16];
@@ -120,7 +135,7 @@ module cpumem #(
         else if (p_ack) rd_out <= 1'b1;
         if (rd_back) begin
             rd_v <= 1'b0; rd_out <= 1'b0;
-            rbuf <= p_rdata; rb_v <= 1'b1; rb_a <= rd_a;
+            rbuf <= p_rdata; rb_v <= 1'b1; rb_a <= rd_a; rb_fl <= rd_x[1];
         end
 
         // the period
@@ -138,7 +153,7 @@ module cpumem #(
                 else if (a_ram && cpu_wr)
                     wpend <= 1'b1;
                 else if (a_ram && cpu_rd && !hit) begin
-                    rd_v <= 1'b1; rd_a <= a_w; s_miss <= 1'b1;
+                    rd_v <= 1'b1; rd_a <= a_w; rd_x <= a_x; s_miss <= 1'b1;
                 end else begin
                     resolved <= 1'b1; quick <= 1'b1;   // no access, or a read from rbuf
                 end
@@ -151,7 +166,7 @@ module cpumem #(
             if (wpend && dtime) begin
                 if (wb_free) begin
                     wpend <= 1'b0; resolved <= 1'b1;
-                    wb_v <= 1'b1; wb_a <= a_w; wb_d <= {4{cpu_dout}}; wb_be <= a_be;
+                    wb_v <= 1'b1; wb_a <= a_w; wb_x <= a_x; wb_d <= {4{cpu_dout}}; wb_be <= a_be;
                     if (hit) rbuf <= (rbuf & ~bmask) | ({4{cpu_dout}} & bmask);
                 end else s_wstall <= 1'b1;
             end

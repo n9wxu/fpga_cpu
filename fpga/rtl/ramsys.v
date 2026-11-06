@@ -13,6 +13,10 @@
 //             T1S fetches the code it changed again
 //   3 loader  JTAG: single words, while T1S is held in reset
 //   4 sound   audio_lite.v's streaming player: a word an output frame
+//
+// The flash ROM (SST39VF1601C on the A1 expansion connector, sharing the
+// SRAM's bus: sram_phy.v) is the CPU's window at F80000-FFFFFF (cpumem.v):
+// the CPU port's addresses carry two more bits, {the flash, its A18}.
 module ramsys (
     input  wire        clk,                 // 50 MHz pin
     input  wire [3:0]  btn,
@@ -27,10 +31,16 @@ module ramsys (
     output wire        sram_we_n,
     output wire [1:0]  sram_ce_n,
     output wire [3:0]  sram_be_n,
+    // the flash ROM on A1: its own CE# and A18 (the rest is the SRAM's bus)
+    output wire        flash_ce_n, flash_a18,
     // I2S to a DAC on the A2 expansion connector (audio_lite.v)
     output wire        i2s_bck, i2s_lrck, i2s_data,
     // PS/2: A the board's connector, B on the A2 expansion connector (open drain)
-    inout  wire        ps2_clk, ps2_data, ps2b_clk, ps2b_data
+    inout  wire        ps2_clk, ps2_data, ps2b_clk, ps2b_data,
+    // two Sega Genesis pads on A2 (PADS, F00900): the select line (TH) out,
+    // each pad's UP DOWN LEFT RIGHT TL TR in (pad 2 in bits 11:6)
+    output wire        pad_sel,
+    input  wire [11:0] pad_in
 );
     parameter PER = 5;                      // 50 MHz cycles in a T1F period, at least
 
@@ -130,7 +140,7 @@ module ramsys (
     localparam NP = 5;
     wire [NP-1:0]    p_wnext;
     wire             phy_cmd, phy_we, phy_ready, phy_rvalid;
-    wire [17:0]      phy_addr;
+    wire [19:0]      phy_addr;              // {flash, its A18, the word address}
     wire [31:0]      phy_wdata, phy_rdata;
     wire [3:0]       phy_be;
 
@@ -145,18 +155,19 @@ module ramsys (
     // port 1: the CPU
     wire        c_req, c_we;
     wire [17:0] c_addr;
+    wire [1:0]  c_xa;
     wire [31:0] c_wdata;
     wire [3:0]  c_wbe;
     wire        io_wr, io_rd, cpu_lat;
     wire [15:0] io_addr;
     wire [7:0]  io_wdata, io_rdata;
     wire        s_period, s_miss, s_wstall;
-    cpumem #(.PER(PER), .LAT(2)) mem (
+    cpumem #(.FLASH(1), .PER(PER), .LAT(2)) mem (
         .clk(clk50), .rst(!run), .cpu_ce(cpu_ce),
         .cpu_addr(cpu_addr), .cpu_rd(cpu_rd), .cpu_wr(cpu_wr), .cpu_dout(cpu_dout), .cpu_din(cpu_din),
         .io_wr(io_wr), .io_rd(io_rd), .io_addr(io_addr), .io_wdata(io_wdata), .cpu_lat(cpu_lat),
         .io_rdata(io_rdata),
-        .p_req(c_req), .p_we(c_we), .p_addr(c_addr), .p_wdata(c_wdata), .p_wbe(c_wbe),
+        .p_req(c_req), .p_we(c_we), .p_addr(c_addr), .p_xa(c_xa), .p_wdata(c_wdata), .p_wbe(c_wbe),
         .p_ack(p_ack[1]), .p_rvalid(p_rvalid[1]), .p_rdata(p_rdata),
         .s_period(s_period), .s_miss(s_miss), .s_wstall(s_wstall));
 
@@ -180,20 +191,20 @@ module ramsys (
     wire        a_req;
     wire [17:0] a_addr;
 
-    rammux #(.NP(NP), .AW(18), .LW(5), .WMASK(5'b01010)) mux (
+    rammux #(.NP(NP), .AW(20), .LW(5), .WMASK(5'b01010)) mux (
         .clk(clk50),
         .p_req({a_req, l_req, i_req, c_req, dma_req}), .p_we({1'b0, !ldr_rd, 1'b0, c_we, 1'b0}),
-        .p_addr({a_addr, ldr_addr, i_addr[19:2], c_addr, dma_addr}), .p_len({5'd1, 5'd1, 5'd1, 5'd1, dma_len}), .p_ack(p_ack),
+        .p_addr({2'b00, a_addr, 2'b00, ldr_addr, 2'b00, i_addr[19:2], c_xa, c_addr, 2'b00, dma_addr}), .p_len({5'd1, 5'd1, 5'd1, 5'd1, dma_len}), .p_ack(p_ack),
         .p_wdata({32'd0, ldr_data, 32'd0, c_wdata, 32'd0}), .p_wbe({4'h0, 4'hF, 4'h0, c_wbe, 4'h0}), .p_wnext(p_wnext),
         .p_rvalid(p_rvalid), .p_rdata(p_rdata),
         .phy_cmd(phy_cmd), .phy_we(phy_we), .phy_addr(phy_addr), .phy_wdata(phy_wdata), .phy_be(phy_be),
         .phy_ready(phy_ready), .phy_rvalid(phy_rvalid), .phy_rdata(phy_rdata));
-    sram_phy phy (
+    sram_phy #(.FLASH(1)) phy (
         .clk(clk50), .clk_cap(ccap), .clk_we(ccap), .wmode(1'b0),
-        .cmd(phy_cmd), .we(phy_we), .addr(phy_addr), .wdata(phy_wdata), .be(phy_be),
+        .cmd(phy_cmd), .we(phy_we), .addr(phy_addr[17:0]), .xa(phy_addr[19:18]), .wdata(phy_wdata), .be(phy_be),
         .ready(phy_ready), .rvalid(phy_rvalid), .rdata(phy_rdata),
         .sram_a(sram_a), .sram_d(sram_d), .sram_oe_n(sram_oe_n), .sram_we_n(sram_we_n),
-        .sram_ce_n(sram_ce_n), .sram_be_n(sram_be_n));
+        .sram_ce_n(sram_ce_n), .sram_be_n(sram_be_n), .flash_ce_n(flash_ce_n), .flash_a18(flash_a18));
 
     // ================================================================ I/O and video
     wire [15:0] vid_ctrl, vid_scrollx, vid_scrolly, vid_cursor, pal_wdata, seg7;
@@ -203,13 +214,15 @@ module ramsys (
     wire [7:0]  pal_windex, seg7_ctrl;
     reg [3:0] btn_s0 = 0, btn_s = 0;
     reg [7:0] sw_s0 = 0, sw_s = 0;
+    reg [11:0] pad_s = 12'hFFF;             // one register: in the IOBs (ramsys.ucf)
     always @(posedge clk50) begin
+        pad_s <= pad_in;
         btn_s0 <= btn; btn_s <= btn_s0;
         sw_s0  <= sw;  sw_s  <= sw_s0;
     end
 
     wire [15:0] aud_rd;
-    audio_lite #(.AW(18)) aud (
+    audio_lite #(.AW(18), .VOICES(0)) aud (   // the stream only: software makes the voices
         .clk(clk50), .io_wr(io_wr), .io_addr(io_addr), .io_wdata(io_wdata),
         .rd_addr(cpu_addr[15:0]), .rd_data(aud_rd),
         .p_req(a_req), .p_addr(a_addr), .p_ack(p_ack[4]), .p_rvalid(p_rvalid[4]), .p_rdata(p_rdata),
@@ -220,7 +233,7 @@ module ramsys (
     assign ps2_data  = ps2_do[0] ? 1'b0 : 1'bz;
     assign ps2b_clk  = ps2_co[1] ? 1'b0 : 1'bz;
     assign ps2b_data = ps2_do[1] ? 1'b0 : 1'bz;
-    iosys #(.HICOL8(0), .AUDIO(1), .IRQ(1), .PS2(1)) io (
+    iosys #(.HICOL8(0), .AUDIO(1), .IRQ(1), .PS2(1), .PADS(1), .RDBACK(0)) io (
         .clk(clk50), .io_wr(io_wr), .io_rd(io_rd), .io_addr(io_addr), .io_wdata(io_wdata),
         .cpu_lat(cpu_lat), .cur_rd(cpu_rd && cpu_addr[23:16] == 8'hF0),
         .cur_addr(cpu_addr[15:0]), .io_rdata(io_rdata), .cycles(tick10), .insts(insts),
@@ -231,7 +244,8 @@ module ramsys (
         .switches(sw_s), .buttons(btn_s), .leds(led), .seg7(seg7), .seg7_ctrl(seg7_ctrl),
         .con_in(9'h100), .con_take(), .con_we(), .exit_we(), .wvalue(), .aud_rd(aud_rd),
         .irq_src(7'd0), .irq(irq),
-        .ps2_ci({ps2b_clk, ps2_clk}), .ps2_di({ps2b_data, ps2_data}), .ps2_co(ps2_co), .ps2_do(ps2_do)
+        .ps2_ci({ps2b_clk, ps2_clk}), .ps2_di({ps2b_data, ps2_data}), .ps2_co(ps2_co), .ps2_do(ps2_do),
+        .pad_in(pad_s), .pad_sel(pad_sel)
     );
 
     video_lt #(.HICOL8(0)) vid (                 // the Spartan-3: 16 colours at most (docs/io.md)
@@ -254,9 +268,8 @@ module ramsys (
     );
 
     // ================================================================ seven-segment: SEG7
-    reg [17:0] refresh = 18'd0;
-    always @(posedge clk50) refresh <= refresh + 1'b1;
-    wire [1:0] dsel = refresh[17:16];
+    // the digit scan: from the 10 MHz tick (610 Hz a digit), not a counter of its own
+    wire [1:0] dsel = tick10[15:14];
     wire [6:0] glyph;
     seg7 dec (.digit(seg7[4*dsel +: 4]), .glyph(glyph));
     always @(posedge clk50) begin

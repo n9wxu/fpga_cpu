@@ -38,6 +38,8 @@ void opts_usage(int gui)
             "  --no-hicolor      the low tier (Spartan-3): no hi-color, no palette; its sound device\n"
             "  --wav FILE        with --no-hicolor: write the sound (16-bit stereo, 48828 Hz)\n"
             "  --ps2 A,B         the PS/2 ports' devices: kbd, mouse or none (default kbd,mouse)\n"
+            "  --pad N,TYPE,BTNS a Sega Genesis pad in port N (1, 2), TYPE 3 or 6 buttons,\n"
+            "                    BTNS held (fpga/lib/pad.h: bit 0 Up ... 11 Mode)\n"
             "  --ps2keys STRING  type into the PS/2 keyboard (\\n = Enter, \\e = Esc)\n"
             "  --ps2mouse MOVES  move the PS/2 mouse: \"dx,dy,buttons;...\"\n"
             "  --screenshot FILE write the 1280x720 display as PPM at exit\n",
@@ -315,6 +317,11 @@ int opts_parse(opts_t *o, int argc, char **argv, int gui)
         else if (!strcmp(a, "--ps2") && more) {
             if (ps2_config(argv[++i])) {
                 fprintf(stderr, "--ps2: want A,B, each kbd, mouse or none (got '%s')\n", argv[i]);
+                return -1;
+            }
+        } else if (!strcmp(a, "--pad") && more) {
+            if (pads_config(argv[++i])) {
+                fprintf(stderr, "--pad: want N,TYPE,BUTTONS: pad 1 or 2, 3 or 6 buttons, a mask as fpga/lib/pad.h (got '%s')\n", argv[i]);
                 return -1;
             }
         } else if (!strcmp(a, "--ps2keys") && more) ps2_script(0, argv[++i]);
