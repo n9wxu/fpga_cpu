@@ -187,7 +187,12 @@ module audio_engine #(
     reg [1:0]  off0, off1;
     reg [31:0] rd0, rd1;
     reg signed [15:0] aL, aR, bL, bR, xL, xR, xo, hL, hR;
-    reg signed [41:0] pn, dE, dS, ln, rf, rb, pn2;
+    // the loop points have no fraction (16 zero bits), so the end and loop arithmetic works on the
+    // position's integer part (26 bits, signed) and the fraction rides along
+    reg signed [41:0] pn;
+    reg signed [25:0] dEi, rfi, rbi, pn2i;
+    reg        dS_neg, ln_pos;
+    reg [15:0] rb_f;
     reg [39:0] n_pos;
     reg        n_dir, n_run, n_done;
     reg [24:0] ph_sum;
@@ -469,9 +474,12 @@ module audio_engine #(
             ma1 <= bL - aL; ma2 <= bR - aR;
             mb1 <= interp ? {10'd0, w_pos[15:8]} : 18'd0;
             mb2 <= interp ? {10'd0, w_pos[15:8]} : 18'd0;
-            dE <= pn - endfx; dS <= pn - lsfx; ln <= endfx - lsfx;
-            rf <= (endfx <<< 1) - pn - 42'sd1;
-            rb <= (lsfx <<< 1) - pn;
+            dEi <= pn[41:16] - $signed({2'b00, c_end});                         // pn - end
+            dS_neg <= pn[41:16] < $signed({2'b00, c_ls});                       // pn < loop start
+            ln_pos <= c_end > c_ls;                                             // end - loop start > 0
+            rfi <= $signed({1'b0, c_end, 1'b0}) + $signed(~pn[41:16]);          // 2 end - pn - 1
+            rbi <= $signed({1'b0, c_ls, 1'b0}) + $signed(~pn[41:16]) + (pn[15:0] == 16'd0);   // 2 ls - pn
+            rb_f <= -pn[15:0];
             // oscillator
             ph_n <= sync_hit ? 24'd0 : ph_sum[23:0];
             wrap_n <= ph_sum[24];
@@ -482,14 +490,14 @@ module audio_engine #(
             st <= st + 6'd1;
         end
         K0 + 6'd11: begin
-            pn2 <= dE + lsfx;
+            pn2i <= dEi + $signed({2'b00, c_ls});                                // pn - end + ls
             xo <= wave;
             msb_n <= ph_n[23];
             st <= st + 6'd1;
         end
         // ---- K12: the frame, and where the position goes
         K0 + 6'd12: begin
-            wrapev <= isamp && act && avail_r && !w_dir && dE >= 0 && loopm == 2'd1 && ln > 0;
+            wrapev <= isamp && act && avail_r && !w_dir && !dEi[25] && loopm == 2'd1 && ln_pos;
             if (isamp) begin
                 if (act && avail_r) begin
                     xL <= aL + (mp1 >>> 8);
@@ -510,13 +518,13 @@ module audio_engine #(
             if (!isamp) n_pos <= {16'd0, ph_n};
             else if (act && avail_r) begin
                 if (!w_dir) begin
-                    if (dE >= 0) begin
-                        if (loopm == 2'd1 && ln > 0) n_pos <= (pn2 >= endfx) ? lsfx[39:0] : pn2[39:0];
-                        else if (loopm == 2'd2 && ln > 0) begin n_pos <= (rf < 0) ? lsfx[39:0] : rf[39:0]; n_dir <= 1'b1; end
+                    if (!dEi[25]) begin
+                        if (loopm == 2'd1 && ln_pos) n_pos <= (pn2i >= $signed({2'b00, c_end})) ? lsfx[39:0] : {pn2i[23:0], pn[15:0]};
+                        else if (loopm == 2'd2 && ln_pos) begin n_pos <= rfi[25] ? lsfx[39:0] : {rfi[23:0], ~pn[15:0]}; n_dir <= 1'b1; end
                         else begin n_pos <= endfx[39:0]; n_done <= 1'b1; end
                     end else n_pos <= pn[39:0];
                 end else begin
-                    if (dS < 0) begin n_pos <= rb[39:0]; n_dir <= 1'b0; end
+                    if (dS_neg) begin n_pos <= {rbi[23:0], rb_f}; n_dir <= 1'b0; end
                     else n_pos <= pn[39:0];
                 end
             end

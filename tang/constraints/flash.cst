@@ -1,0 +1,10 @@
+// The SPI flash (the configuration flash, XT25F64B) on the MSPI pins, used as I/O after
+// configuration (gowin_pack --mspi_as_gpio): rtl/spiflash.v
+IO_LOC "flash_clk" 59;
+IO_PORT "flash_clk" IO_TYPE=LVCMOS33 DRIVE=8;
+IO_LOC "flash_cs_n" 60;
+IO_PORT "flash_cs_n" IO_TYPE=LVCMOS33 DRIVE=8 PULL_MODE=UP;
+IO_LOC "flash_mosi" 61;
+IO_PORT "flash_mosi" IO_TYPE=LVCMOS33 DRIVE=8;
+IO_LOC "flash_miso" 62;
+IO_PORT "flash_miso" IO_TYPE=LVCMOS33 PULL_MODE=UP;

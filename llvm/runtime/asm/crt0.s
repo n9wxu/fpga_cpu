@@ -29,5 +29,12 @@ _start:
         .globl  exit
 exit:
         STW     r2, [0xF00002]          ; simulator: stop with the exit code
-.Lhang:
-        BRA     .Lhang
+.Lhang:                                 ; a ROM (docs/rom.md) left its anchor, "FCRM" at 000020:
+        LDW     r6, [0x000020]          ; back to it (its warm restart at 000024); else stay here
+        CMPI    r6, 0x4346
+        BNE     .Lhang
+        LDW     r6, [0x000022]
+        CMPI    r6, 0x4D52
+        BNE     .Lhang
+        LDP     p1, [0x000024]
+        JR      p1

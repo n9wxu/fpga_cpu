@@ -90,6 +90,8 @@ typedef struct cpu {
     tcfg_t cfg;
     stats_t st;
     uint8_t *sram, *rom;
+    uint32_t rom_base, rom_size; /* the ROM region: FF0000, 64 KB, read-only; --rom: F80000, 512 KB, RAM */
+    int rom_rw;
     uint32_t ram_size;     /* SRAM plus expansion RAM, contiguous from 0 */
     iodev_t dev;
     int trace;
@@ -235,6 +237,13 @@ int cpu_step(cpu_t *c);          /* one instruction; returns 0 if the CPU is hal
 void cpu_reset(cpu_t *c);        /* registers, timing state, statistics and devices; keeps memory */
 void cpu_mem_written(cpu_t *c, uint32_t a, uint32_t n); /* memory changed behind the CPU's back */
 uint16_t cpu_peek16(const cpu_t *c, uint32_t a);        /* side-effect-free read (0 for I/O) */
+void cpu_poke8(cpu_t *c, uint32_t a, uint8_t v);         /* write RAM or the ROM region (a loader) */
+/* the SPI flash (flash.c): --rom IMG loads the image and does the boot copier's job */
+uint32_t flash_load(cpu_t *c, const char *path, int save); /* the entry; 0xFFFFFFFE on error */
+void flash_exit(void);
+int flash_handles(uint32_t a);
+uint16_t flash_read(cpu_t *c, uint32_t a);
+void flash_write(cpu_t *c, uint32_t a, uint16_t v);
 void cpu_free(cpu_t *c);
 
 #endif

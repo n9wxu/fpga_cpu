@@ -42,28 +42,32 @@ SRC_blinky   :=
 SRC_hdmitest := rtl/dvi_tx.v
 SRC_hdmiaudio := rtl/dvi_tx.v rtl/hdmi_audio_cdc.v rtl/hdmi_audio_tone.v
 SRC_hdmiload := rtl/dvi_tx.v rtl/hdmi_audio_cdc.v rtl/hdmi_audio_tone.v rtl/sdram_phy.v
-SRC_system   := $(T1) rtl/dvi_tx.v ../fpga/rtl/video.v ../fpga/rtl/iosys.v ../fpga/rtl/rammux.v rtl/sdram_phy.v ../fpga/rtl/audio_engine.v ../fpga/rtl/audio_regs.v rtl/hdmi_audio_cdc.v rtl/vidx_regs.v rtl/blitter.v
-SIM_system   := sim/sdram_model.v
+SRC_system   := $(T1) rtl/dvi_tx.v ../fpga/rtl/video.v ../fpga/rtl/iosys.v ../fpga/rtl/rammux.v rtl/sdram_phy.v ../fpga/rtl/audio_engine.v ../fpga/rtl/audio_regs.v rtl/hdmi_audio_cdc.v rtl/vidx_regs.v rtl/blitter.v rtl/spiflash.v \
+               ../fpga/rtl/mcaudio/mc_engine.v ../fpga/rtl/mcaudio/mc_core.v ../fpga/rtl/mcaudio/mc_regs.v
+SIM_system   := sim/sdram_model.v sim/spiflash_model.v
 CST_hdmitest := $(HDMI_CST)
 CST_hdmiaudio := $(HDMI_CST)
 CST_hdmiload := $(HDMI_CST) constraints/sdram.cst
-CST_system   := $(HDMI_CST) constraints/sdram.cst
+CST_system   := $(HDMI_CST) constraints/sdram.cst constraints/flash.cst
 DATA_system  := build/font8x14.mem
 FREQ_blinky   := 27
 FREQ_hdmitest := 74.25
 FREQ_hdmiaudio := 74.25
 FREQ_hdmiload := 74.25
 FREQ_system   := 74.25
-# placement seed: the design fills ~99% of the LUT sites (LUTs and ALUs together), so placement
-# depends on the seed. With the synchronous T1F (SYNC), seeds 1-6: 1, 2, 4 do not place, 5 gives
-# fclk 64.2 MHz, 3 67.7, 6 68.5 (needs 67.5)
+# placement seed: the design fills ~96% of the LUT sites (LUTs and ALUs together; the write-only
+# registers freed ~4%), so timing depends on the seed. With the synchronous T1F (SYNC), seeds 1-6
+# give fclk 71.4, (no placement), 66.8, 71.7, 74.0, 75.3 MHz (needs 67.5; with the flash port,
+# rtl/spiflash.v)
 PNR_system    := --seed 6
+# the flash's pins (MSPI) are I/O after configuration: the ROM (rtl/spiflash.v)
+PACK_system   := --mspi_as_gpio
 
 SRC := rtl/$(TOP).v $(SRC_$(TOP))
 CST := constraints/tang20k.cst $(CST_$(TOP))
 DEFS ?=
 
-.PHONY: bit prog sim run clean
+.PHONY: bit prog flash flash-rom sim run clean mcaudio prog-mc
 
 bit: build/$(TOP).fs
 
@@ -85,11 +89,37 @@ build/$(TOP)_pnr.json: build/$(TOP).json build/$(TOP).cst $(wildcard constraints
 	  $(if $(wildcard constraints/$(TOP).sdc),--sdc constraints/$(TOP).sdc) $(PNR_$(TOP))
 	@grep "Max frequency" build/$(TOP)-pnr.log | tail -4
 
+# the microcoded audio engine in place of the fixed one (docs/mcaudio.md, -DMCAUDIO): the
+# same system, built to build/system_mc.*. Seeds 1-6: 66.9, 65.5, 67.7, 67.7, 68.0, 69.5 MHz (needs 67.5)
+PNR_mc ?= --seed 6
+mcaudio: build/system_mc.fs
+prog-mc: build/system_mc.fs
+	$(OSS)/openFPGALoader -b tangnano20k $<
+build/system_mc.json: rtl/system.v $(SRC_system) $(DATA_system)
+	@mkdir -p build
+	$(OSS)/yosys -q -l build/system_mc-yosys.log $(CDEF) $(HDMI_DEF) -DMCAUDIO $(DEFS) -p "read_verilog -defer rtl/system.v $(SRC_system); synth_gowin -top system -json $@ -family gw2a"
+build/system_mc_pnr.json: build/system_mc.json build/system.cst
+	$(OSS)/nextpnr-himbaechel -q -l build/system_mc-pnr.log --json $< --write $@ --device $(DEVICE) \
+	  --vopt family=$(FAMILY) --vopt cst=build/system.cst --freq $(FREQ_system) --sdc constraints/system.sdc $(PNR_mc)
+	@grep "Max frequency" build/system_mc-pnr.log | tail -4
+build/system_mc.fs: build/system_mc_pnr.json
+	$(PACK) -d $(FAMILY) $(PACK_system) -o $@ $< 2>/dev/null
+
 build/$(TOP).fs: build/$(TOP)_pnr.json
-	$(PACK) -d $(FAMILY) -o $@ $< 2>/dev/null
+	$(PACK) -d $(FAMILY) $(PACK_$(TOP)) -o $@ $< 2>/dev/null
 
 prog: build/$(TOP).fs
 	$(OSS)/openFPGALoader -b tangnano20k $<
+
+# the bitstream into the flash (the board then configures itself at power-up), and the ROM image
+# (../rom, docs/rom.md) at its offset in the flash: the copier loads it at power-up
+ROM_IMG ?= ../rom/build/rom.img
+ROM_OFS := 0x400000
+flash: build/$(TOP).fs
+	$(OSS)/openFPGALoader -b tangnano20k -f $<
+
+flash-rom: $(ROM_IMG)
+	$(OSS)/openFPGALoader -b tangnano20k -f -o $(ROM_OFS) --file-type bin $<
 
 sim: $(DATA_$(TOP))
 	@mkdir -p build

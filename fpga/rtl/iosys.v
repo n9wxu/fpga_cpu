@@ -126,20 +126,8 @@ module iosys #(
             16'h000C: rv = {line, 3'b000, vblank};
             16'h0100: rv = 16'hFFFF;        // KBD_DATA: no key
             16'h0104: rv = kbd_ctrl;
-            16'h0200: rv = vid_ctrl;
-            // (the low tier: the video's addresses, scroll, cursor and
-            // backdrop are write-only, read 0: a smaller read multiplexer)
-            16'h0202: rv = HICOL8 ? {13'd0, vid_backdrop} : 16'd0;
-            16'h0204: rv = HICOL8 ? vid_text[15:0] : 16'd0;
-            16'h0206: rv = HICOL8 ? vid_text[31:16] : 16'd0;
-            16'h0208: rv = HICOL8 ? vid_bmp[15:0] : 16'd0;
-            16'h020A: rv = HICOL8 ? vid_bmp[31:16] : 16'd0;
-            16'h020C: rv = HICOL8 ? spr_lo : 16'd0;
-            16'h020E: rv = HICOL8 ? spr_hi : 16'd0;
-            16'h0210: rv = HICOL8 ? {8'd0, pal_index} : 16'd0;
-            16'h0214: rv = HICOL8 ? vid_scrollx : 16'd0;
-            16'h0216: rv = HICOL8 ? vid_scrolly : 16'd0;
-            16'h0218: rv = HICOL8 ? vid_cursor : 16'd0;
+            // (the video registers, F00200-F0021F, are write-only: they read 0, for a smaller read
+            // multiplexer; programs keep their own copies)
             16'h0600: rv = {8'd0, leds};
             16'h0602: rv = {8'd0, switches};
             16'h0604: rv = {12'd0, buttons};

@@ -130,33 +130,23 @@ module audio_regs #(
     end
 
     // ---------------------------------------------------------------- readback
-    reg [15:0] cfgr [0:1023];
+    // (a voice's configuration words, the global settings and the legacy registers are
+    // write-only: they read 0; only what the engine owns reads back)
     reg [15:0] snap [0:127];
-    initial begin
-        for (k = 0; k < 1024; k = k + 1) cfgr[k] = 16'd0;
-        for (k = 0; k < 128; k = k + 1) snap[k] = 16'd0;
-    end
-    always @(posedge clk) if (cfg_we) cfgr[cfg_wa] <= cfg_wd;
+    initial for (k = 0; k < 128; k = k + 1) snap[k] = 16'd0;
     always @(posedge clk) if (sn_we) snap[sn_wa] <= sn_wd;
 
     wire [15:0] ra   = {rd_addr[15:1], 1'b0};
     wire [4:0]  r_v  = ra[10:6];
     wire [4:0]  r_w  = ra[5:1];
-    reg  [15:0] cq = 16'd0, sq = 16'd0, stq = 16'd0, gq = 16'd0, lq = 16'd0;
+    reg  [15:0] sq = 16'd0, stq = 16'd0, gq = 16'd0;
     reg  [15:0] ra_d = 16'd0;
     wire [1:0]  sk = (r_w == 5'd11) ? 2'd0 : (r_w == 5'd12) ? 2'd1 : (r_w == 5'd13) ? 2'd2 : 2'd3;
-    wire [1:0]  lvr = ra[4:3];
     always @(posedge clk) begin
         ra_d <= ra;
-        cq <= cfgr[ra[10:1]];
         sq <= snap[{r_v, sk}];
         stq <= {10'd0, st_arm[r_v], st_under[r_v], st_half[r_v], st_irq[r_v], st_done[r_v], st_run[r_v]};
         case (ra[7:1])
-            7'd0: gq <= master;
-            7'd1: gq <= {13'd0, fmode};
-            7'd2: gq <= fcut;
-            7'd3: gq <= fres;
-            7'd4: gq <= {13'd0, envdiv};
             7'd6: gq <= st_irq[15:0];
             7'd7: gq <= st_irq[31:16];
             7'd8: gq <= scount[15:0];
@@ -165,15 +155,11 @@ module audio_regs #(
             7'd12: gq <= ucount;
             default: gq <= 16'd0;
         endcase
-        lq <= (lvr == 2'd3) ? 16'd0 : (ra[2:1] == 2'd0) ? lf[lvr] : (ra[2:1] == 2'd1) ? {12'd0, lv[lvr]} :
-              (ra[2:1] == 2'd2) ? {14'd0, lw[lvr]} : 16'd0;
     end
     wire h_glob = ra_d[15:8] == BASE[15:8];
     wire h_voic = ra_d[15:11] == (BASE[15:11] + 5'd1);
-    wire h_leg  = ra_d[15:5] == LEG[15:5];
     wire [4:0] d_w = ra_d[5:1];
     always @* rd_data = h_glob ? gq :
                         h_voic ? ((d_w == 5'd11 || d_w == 5'd12 || d_w == 5'd13 || d_w == 5'd15) ? sq :
-                                  (d_w == 5'd14) ? stq : cq) :
-                        h_leg ? lq : 16'd0;
+                                  (d_w == 5'd14) ? stq : 16'd0) : 16'd0;
 endmodule

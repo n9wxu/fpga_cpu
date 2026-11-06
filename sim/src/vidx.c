@@ -44,7 +44,6 @@ static void blit(cpu_t *c)
 
 uint16_t vidx_read(cpu_t *c, uint32_t a)
 {
-    iodev_t *d = &c->dev;
     if (!video_hicol8)
         return 0;
     if (a >= IO_VIDX && a < IO_VIDX + 2 * VX__COUNT) {
@@ -54,16 +53,11 @@ uint16_t vidx_read(cpu_t *c, uint32_t a)
             uint32_t line = dev_line(c->st.cycles);
             return (uint16_t)(vidx_flip_pending(c) | (line >= VISIBLE_LINES) << 1);
         }
-        case VX_SPR_DATA: return d->spr_attr[d->vidx[VX_SPR_INDEX] & 0xFF];
         case VX_SPR_OVER: return 0;         /* the drawing below has no line limit */
-        default: return d->vidx[r];
+        default: return 0;                  /* the rest are write-only */
         }
     }
-    if (a >= IO_BLT && a < IO_BLT + 2 * BL__COUNT) {
-        int r = (int)(a - IO_BLT) / 2;
-        return r == BL_STAT || r == BL_CMD ? 0 : d->blt[r];
-    }
-    return 0;
+    return 0;                               /* the blitter: BLT_STAT reads 0 (never busy), the rest are write-only */
 }
 
 /* 1 if the address was one of ours */

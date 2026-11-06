@@ -41,13 +41,17 @@ static void check(const char *what, int ok, uint32_t v)
     con(what); con(ok ? ": ok " : ": FAIL "); hex(v, 8); con("\n");
     if (!ok) fails++;
 }
+/* CTRL is write-only (it reads 0): the program keeps each voice's own copy */
+static uint16_t ctl[4];
+static void set_ctrl(int v, uint16_t c) { ctl[v] = c; V(v, CTRL) = c; }
+
 static void chip(int v, int src, uint32_t hz, int vl, int vr)
 {
     uint32_t step = (uint32_t)(((uint64_t)hz << 24) / 48000);
     V(v, STEP_LO) = (uint16_t)step; V(v, STEP_HI) = (uint16_t)(step >> 16);
     V(v, VOL_L) = vl; V(v, VOL_R) = vr; V(v, DUTY) = 0x400;
     V(v, ATTACK) = 0x0800; V(v, DECAY) = 0x0040; V(v, SUSTAIN) = 0x8000; V(v, RELEASE) = 0x0080;
-    V(v, CTRL) = (src << 2) | 3;            /* SRC, ENVEN, GATE */
+    set_ctrl(v, (uint16_t)((src << 2) | 3));   /* SRC, ENVEN, GATE */
 }
 
 int main(void)
@@ -73,7 +77,7 @@ int main(void)
     V(1, VOL_L) = 0x80; V(1, VOL_R) = 0x80;
     V(1, POS_F) = 0; V(1, POS_L) = 0; V(1, POS_H) = 0;   /* arms it: the first words are fetched */
     wait_frames(2);                         /* (a gate at once would hold a frame: an underrun) */
-    V(1, CTRL) = 1;                         /* sample, gate, no envelope, one-shot */
+    set_ctrl(1, 1);                         /* sample, gate, no envelope, one-shot */
     wait_frames(SLEN / 2);
     uint16_t pos = V(1, POS_L);
     check("sample plays", pos > SLEN / 4 && pos < SLEN, pos);
@@ -85,14 +89,14 @@ int main(void)
     chip(2, 2, 277, 0x60, 0x20);            /* triangle, left */
     chip(3, 3, 330, 0x20, 0x60);            /* saw, right */
     wait_frames(48000 * 2);
-    V(1, CTRL) = 0; V(1, POS_F) = 0; V(1, POS_L) = 0; V(1, POS_H) = 0;
+    set_ctrl(1, 0); V(1, POS_F) = 0; V(1, POS_L) = 0; V(1, POS_H) = 0;
     wait_frames(2);
-    V(1, CTRL) = 1;
+    set_ctrl(1, 1);
     wait_frames(48000);
-    for (int v = 0; v < 4; v++) V(v, CTRL) = V(v, CTRL) & ~1;   /* release */
+    for (int v = 0; v < 4; v++) set_ctrl(v, ctl[v] & ~1);   /* release */
     wait_frames(48000);
 #endif
-    for (int v = 0; v < 4; v++) V(v, CTRL) = 0;
+    for (int v = 0; v < 4; v++) set_ctrl(v, 0);
     con(fails ? "FAILED\n" : "all ok\n");
     SIM_EXIT = (uint16_t)fails;
     return fails;

@@ -8,6 +8,7 @@
  * Link-time symbols: _end (end of BSS) marks the start of the arena,
  * which runs up to STACK_RESERVE below the initial stack pointer.
  */
+#include <stdlib.h>
 #include "basic.h"
 
 #define IO(a)         (*(volatile uint16_t *)(uintptr_t)(a))
@@ -75,11 +76,11 @@ static int next_key(int wait)
 
 void hal_init(void) {}
 
+/* crt0's exit: EXIT (the simulator stops; tang/tools/run.py ends), then back to the ROM's
+ * shell when a ROM is there (docs/rom.md), else a halt */
 void hal_exit(int code)
 {
-    IO(REG_EXIT) = (uint16_t)code;
-    for (;;)
-        ;
+    exit(code);
 }
 
 uint8_t *hal_arena(uint32_t *size)

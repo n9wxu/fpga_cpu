@@ -31,6 +31,13 @@
 // At any time the four bytes DE AD BE EF hold T1 in reset again. While T1
 // runs, bytes received are CON_IN, CON_OUT bytes are sent, and an EXIT
 // write sends 0x04 and the low byte of the code (tools: tang/tools/run.py).
+`ifndef MC_SINE
+`ifdef SIM
+`define MC_SINE "../../fpga/rtl/mcaudio/mc_sine.mem"   // the simulation runs in build/
+`else
+`define MC_SINE "../fpga/rtl/mcaudio/mc_sine.mem"
+`endif
+`endif
 `ifndef SD_PSDA
 `define SD_PSDA "0000"                     // the SDRAM's clock in phase with fclk: burst reads
                                            // pass at capture 3 on every placement tried (180
@@ -61,7 +68,12 @@ module system #(
     output wire [10:0] O_sdram_addr,
     output wire [1:0]  O_sdram_ba,
     output wire [3:0]  O_sdram_dqm,
-    inout  wire [31:0] IO_sdram_dq
+    inout  wire [31:0] IO_sdram_dq,
+    // the SPI flash (the configuration flash, after configuration: rtl/spiflash.v)
+    output wire        flash_cs_n,
+    output wire        flash_clk,
+    output wire        flash_mosi,
+    input  wire        flash_miso
 );
     // ---- clocks ------------------------------------------------------------------
     (* keep *) wire fclk;                 // kept: constraints/system.sdc names it
@@ -172,7 +184,8 @@ module system #(
     reg         aud_s = 1'b0;               // ... I/O: the audio engine's registers
     // ... or the video extensions' (F00220) and the blitter's (F00800), read through the same latch
     wire        x_vsel = addr[15:5] == 11'h011, x_bsel = addr[15:5] == 11'h040;
-    wire        x_sel = x_vsel || x_bsel;
+    wire        x_fsel = addr[15:2] == 14'h0240;            // F00900: the flash port
+    wire        x_sel = x_vsel || x_bsel || x_fsel;
     reg  [7:0]  aud_q = 8'd0;               // the byte read from them
     reg         t1_wait = 1'b0;             // T1 waits: a line fill, or the write buffer
 
@@ -180,6 +193,12 @@ module system #(
     reg         ld_we = 1'b0;
     reg  [23:0] ld_a = 24'd0;
     reg  [7:0]  ld_d = 8'd0;
+    // ... and the flash's boot copier (below), the same way
+    wire        fb_wr, fb_go, fb_booted;
+    wire [23:0] fb_a, fb_entry;
+    wire [7:0]  fb_d;
+    wire [15:0] fl_rd;                      // the flash port's read data
+    reg         fb_abort = 1'b0;
 
     // ---- memory: the SDRAM, through a cache ------------------------------------------
     // All memory (everything but I/O, F0xxxx) is the SDRAM, repeating every
@@ -246,7 +265,7 @@ module system #(
         if (lat) begin
             cycles_t1 <= cycles;            // SR0/SR1 hold still from here to T1's edge
             src   <= io ? 2'd1 : 2'd0;
-            aud_s <= addr[15:12] == 4'h1 || x_sel;   // F01000-F01FFF: the audio engine; F00220, F00800: below
+            aud_s <= addr[15:12] == 4'h1 || x_sel;   // F01000-F01FFF: the audio engine; F00220, F00800, F00900: below
             io_q2 <= io;
             m_a   <= addr[22:0];
             mem_l <= !io;
@@ -294,9 +313,11 @@ module system #(
         if (ph == PER - 2 && (!run || (PER != 2 && io_q2))) cpu_ce <= 1'b1;
         if (PER == 2 && ph == 4'd1 && io_q2 && run) cpu_ce <= 1'b1;   // I/O done at io_lat
 
-        // the loader
+        // the loader (serial, or the flash's boot copier)
         if (!run && ld_we) begin
             c_req <= 1'b1; c_we <= 1'b1; c_fill <= 1'b0; c_addr <= ld_a[22:0]; c_wd <= ld_d;
+        end else if (!run && fb_wr) begin
+            c_req <= 1'b1; c_we <= 1'b1; c_fill <= 1'b0; c_addr <= fb_a[22:0]; c_wd <= fb_d;
         end
 
         // clearing the cache
@@ -366,6 +387,16 @@ module system #(
     wire        a_req;
     wire [20:0] a_addr;
     wire [4:0]  a_len;
+    // (-DMCAUDIO: the microcoded engine, fpga/rtl/mcaudio, writes its nodes' state back)
+    wire        a_we;
+    wire [31:0] a_wd;
+    wire [3:0]  a_wbe;
+`ifdef MCAUDIO
+    localparam [4:0] A_WMASK = 5'b11101;
+`else
+    localparam [4:0] A_WMASK = 5'b11001;
+    assign a_we = 1'b0; assign a_wd = 32'd0; assign a_wbe = 4'h0;
+`endif
     // port 3: the SDRAM self-test (below), while T1 is held
     reg  [2:0]  sd_cap = 3'd3;              // the PHY's read capture (2-4 clocks): 'K', 'C'
     wire        bt_req, bt_we;
@@ -381,12 +412,12 @@ module system #(
     wire [4:0]  blt_len;
     wire [31:0] blt_wd;
     wire [3:0]  blt_wbe;
-    rammux #(.NP(5), .AW(21), .LW(5), .WMASK(5'b11001)) mux (
+    rammux #(.NP(5), .AW(21), .LW(5), .WMASK(A_WMASK)) mux (
         .clk(fclk),
-        .p_req({blt_req, bt_req, a_req, v_req, c_req}), .p_we({blt_we, bt_we, 2'b00, c_we}),
+        .p_req({blt_req, bt_req, a_req, v_req, c_req}), .p_we({blt_we, bt_we, a_we, 1'b0, c_we}),
         .p_addr({blt_addr, bt_addr, a_addr, dma_addr, c_fill ? {c_addr[22:4], 2'b00} : c_addr[22:2]}),
         .p_len({blt_len, bt_len, a_len, dma_len, c_fill ? 5'd4 : 5'd1}), .p_ack(p_ack),
-        .p_wdata({blt_wd, bt_wd, 64'd0, {4{c_wd}}}), .p_wbe({blt_wbe, bt_wbe, 8'h00, 4'b0001 << c_addr[1:0]}), .p_wnext(p_wnext),
+        .p_wdata({blt_wd, bt_wd, a_wd, 32'd0, {4{c_wd}}}), .p_wbe({blt_wbe, bt_wbe, a_wbe, 4'h0, 4'b0001 << c_addr[1:0]}), .p_wnext(p_wnext),
         .p_rvalid(p_rvalid), .p_rdata(p_rdata),
         .phy_cmd(phy_cmd), .phy_we(phy_we), .phy_addr(phy_addr), .phy_wdata(phy_wdata), .phy_be(phy_be),
         .phy_ready(phy_ready), .phy_rvalid(phy_rvalid), .phy_rdata(phy_rdata));
@@ -459,6 +490,35 @@ module system #(
         .irq_src({3'd0, aud_irq, 3'd0}), .irq(t1_irq)   // source 3: an audio engine voice's interrupt flag
     );
 
+    // ---- the SPI flash: the ROM's boot copy, and the CPU's port (F00900) ------------------
+    // At power-up, once the SDRAM is ready (and S1 is not held), the copier reads the ROM
+    // image from the flash (docs/rom.md) into the SDRAM through the loader's port and starts
+    // T1 at its entry; the serial loader's sync word stops it.
+    // S1 and S2 held together for a second: hold T1 and copy the ROM again (a reboot)
+    reg  [15:0] fb_t = 16'd0;               // ~1 ms after the SDRAM is ready
+    reg  [25:0] fb_hold = 26'd0;
+    reg         fb_start = 1'b0, fb_reboot = 1'b0;
+    always @(posedge fclk) begin
+        fb_start <= 1'b0;
+        fb_reboot <= 1'b0;
+        if (sd_ready && fb_t != 16'hFFFF) begin
+            fb_t <= fb_t + 1'b1;
+            if (fb_t == 16'hFFFE) fb_start <= !s_s[0];
+        end
+        if (s_s != 2'b11) fb_hold <= 26'd0;
+        else if (fb_hold != 26'h3FFFFFF) begin
+            fb_hold <= fb_hold + 1'b1;
+            if (fb_hold == 26'h3FFFFFE) fb_reboot <= 1'b1;
+        end
+        if (fb_reboot) fb_start <= 1'b1;    // a clock later: T1 is held by then
+    end
+    spiflash fl (
+        .clk(fclk), .start(fb_start), .abort(fb_abort), .booted(fb_booted),
+        .wr_ready(!c_req && !ld_we), .wr(fb_wr), .wr_a(fb_a), .wr_d(fb_d),
+        .go(fb_go), .go_entry(fb_entry),
+        .io_wr(io_lat && run && io && wr), .io_addr(addr[15:0]), .io_wdata(dout), .rd(fl_rd),
+        .f_cs_n(flash_cs_n), .f_clk(flash_clk), .f_mosi(flash_mosi), .f_miso(flash_miso));
+
     // ---- audio ---------------------------------------------------------------------------
     // The engine's registers (F01000 global, F01800 voices: docs/audio.md) on
     // the same write strobe as iosys. Reads: the engine's rd_data (16 bits)
@@ -466,7 +526,7 @@ module system #(
     // iosys, the low byte is read live and the word latched, and the high
     // byte comes from the latch when it follows.
     wire [15:0] vx_rd, blt_rd, aud_rd;
-    wire [15:0] aud_or_x = x_vsel ? vx_rd : x_bsel ? blt_rd : aud_rd;
+    wire [15:0] aud_or_x = x_vsel ? vx_rd : x_bsel ? blt_rd : x_fsel ? fl_rd : aud_rd;
     reg  [15:0] aud_latch = 16'd0;
     reg  [15:0] aud_la = 16'hFFFF;
     always @(posedge fclk)
@@ -477,6 +537,19 @@ module system #(
 
     wire        s_valid, s_ready, a_pop, a_under;
     wire [15:0] s_l, s_r, a_l, a_r;
+`ifdef MCAUDIO
+    // the microcoded engine (docs/mcaudio.md): node list and samples in the SDRAM, routines in its
+    // control store; registers at F01000-F0103F
+    mc_engine #(.AW(21), .SINE(`MC_SINE)) aud (
+        .clk(fclk),
+        .io_wr(io_lat && run && io && wr), .io_addr(addr[15:0]), .io_wdata(dout),
+        .rd_addr(addr[15:0]), .rd_data(aud_rd), .irq(aud_irq),
+        .p_req(a_req), .p_we(a_we), .p_addr(a_addr), .p_len(a_len),
+        .p_ack(p_ack[2]), .p_rvalid(p_rvalid[2]), .p_rdata(p_rdata),
+        .p_wdata(a_wd), .p_wbe(a_wbe), .p_wnext(p_wnext[2]),
+        .s_valid(s_valid), .s_l(s_l), .s_r(s_r), .s_ready(s_ready)
+    );
+`else
     audio_engine #(.AW(21)) aud (
         .clk(fclk),
         .io_wr(io_lat && run && io && wr), .io_addr(addr[15:0]), .io_wdata(dout),
@@ -485,6 +558,7 @@ module system #(
         .p_ack(p_ack[2]), .p_rvalid(p_rvalid[2]), .p_rdata(p_rdata),
         .s_valid(s_valid), .s_l(s_l), .s_r(s_r), .s_ready(s_ready)
     );
+`endif
     // to the pixel clock: dvi_tx pops a sample 48,000 times a second, and the
     // engine makes one whenever the FIFO has room
     hdmi_audio_cdc afifo (.s_clk(fclk), .s_valid(s_valid), .s_l(s_l), .s_r(s_r), .s_ready(s_ready),
@@ -807,11 +881,14 @@ module system #(
 
         // serial input: the sync word, the loader, or CON_IN
         bt_go_r <= 1'b0;
+        fb_abort <= 1'b0;
+        if (fb_reboot) run_req <= 1'b0;
+        if (fb_go) begin entry <= fb_entry; run_req <= 1'b1; end   // the ROM, copied from the flash
         if (bt_capw) sd_cap <= bt_cap;
         if (rx_ok) begin
             sync <= {sync[23:0], rx_byte};
             if ({sync[23:0], rx_byte} == 32'hDEADBEEF) begin
-                run_req <= 1'b0; ls <= L_IDLE;
+                run_req <= 1'b0; ls <= L_IDLE; fb_abort <= 1'b1;
             end else if (run)
                 con_in <= {1'b0, rx_byte};
             else case (ls)

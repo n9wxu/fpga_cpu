@@ -274,6 +274,8 @@ uint16_t dev_read(cpu_t *c, uint32_t a)
     a &= ~1u;
     if (ps2_handles(a))
         return ps2_read(c, a);
+    if (flash_handles(a))
+        return flash_read(c, a);
     switch (a) {
     case IO_CYCLO: return (uint16_t)c->st.cycles;
     case IO_CYCHI: return (uint16_t)(c->st.cycles >> 16);
@@ -320,16 +322,14 @@ uint16_t dev_read(cpu_t *c, uint32_t a)
     case IO_KBD_MOD: return d->kbd_mod;
     case IO_KBD_CTRL: return d->kbd_ctrl;
     }
-    if (a >= IO_VID && a < IO_VID + 2 * V__COUNT) {
-        int r = (int)(a - IO_VID) / 2;
-        return r == V_PAL_DATA ? 0 : d->vid[r];
-    }
+    if (a >= IO_VID && a < IO_VID + 2 * V__COUNT)
+        return 0;                                 /* the video registers are write-only */
     if ((a >= IO_VIDX && a < IO_VIDX + 0x20) || (a >= IO_BLT && a < IO_BLT + 0x20))
         return vidx_read(c, a);
     if (!video_hicol8 && a >= IO_SND && a < IO_SND + 0x40)
         return audlo_read(c, a);                  /* the low tier: only STR_POS reads */
     if (a >= IO_SND && a < IO_SND + 24)
-        return (a & 7) < 6 ? d->snd[(a - IO_SND) / 8][(a & 7) / 2] : 0;
+        return 0;                                 /* the sound registers are write-only */
     switch (a) {
     case IO_FS + 0x02: return 0; /* never busy */
     case IO_FS + 0x04: return d->fs_handle;
@@ -359,6 +359,7 @@ static void set_hi(uint32_t *r, uint32_t v) { *r = (*r & 0xFFFF) | (v & 0xFFFF) 
 void dev_write(cpu_t *c, uint32_t a, uint32_t v)
 {
     iodev_t *d = &c->dev;
+    if (flash_handles(a)) { flash_write(c, a, (uint16_t)v); return; }
     a &= ~1u;
     v &= 0xFFFF;
     switch (a) {
