@@ -73,7 +73,7 @@ prog("demo80s", "demo", "tang", "demo80s", "the 80s home computers, then the Tan
 prog("demo-tang", "demo", "tang", "FPGA demo (Tang)", "the six-section demo of fpga/demo, the Tang build",
      lambda t: fcc(os.path.join(t, "demo-tang.bin"), ["fpga/demo/demo.c"], "-DTANG", "--stack", "0x1000"))
 prog("demo-s3", "demo", "spartan3", "FPGA demo (Spartan-3)", "the six-section demo of fpga/demo, for the low tier",
-     lambda t: fcc(os.path.join(t, "demo-s3.bin"), ["fpga/demo/demo.c"], "--stack", "0x20000"))
+     lambda t: fcc(os.path.join(t, "demo-s3.bin"), ["fpga/demo/demo.c", "fpga/lib/sid.c"], "--stack", "0x20000"))
 prog("paint", "app", "spartan3", "Paint", "an 8-colour paint program with windows, for the PS/2 mouse (apps/paint)",
      lambda t: make("apps/paint", "build/paint.bin"))
 for n, about in (("video", "every display layer and a double-buffered sprite"),

@@ -15,7 +15,7 @@ BUILD  := build
 EMCC   ?= emcc
 -include local.mk
 
-CORE   := $(SIM)/src/cpu.c $(SIM)/src/dev.c $(SIM)/src/video.c $(SIM)/src/vidx.c $(SIM)/src/audlo.c $(SIM)/src/ps2.c \
+CORE   := $(SIM)/src/cpu.c $(SIM)/src/dev.c $(SIM)/src/video.c $(SIM)/src/vidx.c $(SIM)/src/audlo.c $(SIM)/src/ps2.c $(SIM)/src/pads.c $(SIM)/src/flash.c \
           $(SIM)/src/front.c $(SIM)/src/dbg.c $(SIM)/src/font8x14.c \
           $(SIM)/src/gen/isa_gen.c $(SIM)/src/gen/exec_gen.c
 ROMS   := $(BASIC)/build/basic.A.bin $(BASIC)/build/basic.B.bin

@@ -16,9 +16,9 @@
 #define F_BALL (SCR_FREE + 0x10100UL)           /* the sphere sprite, 32 x 32 */
 #define F_STAR (SCR_FREE + 0x10500UL)           /* the star sprite, 8 x 8 */
 #define F_RAMP (SCR_FREE + 0x10600UL)           /* vortex colour ramps: 4 sets x 3 flash levels x 256 words */
-/* the sprite buffer layer, 4 bpp (115,200 bytes): just after the program's BSS, below the stack (0x40000) */
-extern char _end[];
-static uint32_t f_sbuf;
+/* the sprite buffer layer, 4 bpp (115,200 bytes): above the first MB, clear of the program and the video regions */
+#define F_SBUF 0x100000UL
+static uint32_t f_sbuf;                         /* F_SBUF once the logo is drawn */
 #define SBUF f_sbuf
 #define F_CUBE 192                              /* 192-239: the cube's texture in three light levels */
 #define F_SPH  240                              /* 240-255: the spheres */
@@ -356,11 +356,7 @@ COLD static void f_cell(int x0, int y0, uint16_t w, uint16_t h, uint8_t v)
 COLD static void f_logo(void)
 {
     int n, r, b, pass;
-    f_sbuf = ((uint32_t)_end + 0xFFFUL) & ~0xFFFUL;
-    if (f_sbuf + 115200UL > 0x40000UL - 0x1800UL) {    /* no room: no logo (6 KB kept for the stack) */
-        f_sbuf = 0;
-        return;
-    }
+    f_sbuf = F_SBUF;
     blt_fill(SBUF, 320, 320, 360, 0x88);
     for (pass = 0; pass < 2; pass++)            /* the black edge, then the letters */
         for (n = 0; n < 2; n++) {

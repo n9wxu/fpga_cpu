@@ -22,8 +22,8 @@ music: src/music_mods.h
 build/demo80s.bin: $(SRCS) $(HDRS) src/music_mods.h
 	@mkdir -p build
 	$(FCC) -O2 --stack 0x40000 $(INC) -o $@ $(SRCS)
-	@# room for the finale's sprite buffer (115,200 bytes after the program) and 6 KB of stack below 0x40000
-	@$(PY) -c "import os,sys; e=0x1000+os.path.getsize('$@')+0x2000; sys.exit('program too big: %#x' % e) if ((e+0xFFF)&~0xFFF)+115200 > 0x40000-0x1800 else None"
+	@# 6 KB of stack below 0x40000 (the finale's sprite buffer is at 0x100000, src/sec_finale.c)
+	@$(PY) -c "import os,sys; e=0x1000+os.path.getsize('$@')+0x2000; sys.exit('program too big: %#x' % e) if e > 0x40000-0x1800 else None"
 
 shot: $(SRCS) $(HDRS) src/music_mods.h
 	@mkdir -p build out
