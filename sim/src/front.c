@@ -44,8 +44,8 @@ void opts_usage(int gui)
             "  --ps2 A,B         the PS/2 ports' devices: kbd, mouse or none (default kbd,mouse)\n"
             "  --pad N,TYPE,BTNS a Sega Genesis pad in port N (1, 2), TYPE 3 or 6 buttons,\n"
             "                    BTNS held (fpga/lib/pad.h: bit 0 Up ... 11 Mode)\n"
-            "  --ps2keys STRING  type into the PS/2 keyboard (\\n = Enter, \\e = Esc)\n"
-            "  --ps2mouse MOVES  move the PS/2 mouse: \"dx,dy,buttons;...\"\n"
+            "  --ps2keys STRING  type into the PS/2 keyboard (\\n = Enter, \\e = Esc, \\p = 100 ms)\n"
+            "  --ps2mouse MOVES  move the PS/2 mouse: \"dx,dy,buttons[,wheel];...\"\n"
             "  --screenshot FILE write the 1280x720 display as PPM at exit\n",
             gui ? "fsim-gui" : "fsim", gui ? "none" : "2000000000");
     if (gui)

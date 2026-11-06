@@ -151,7 +151,7 @@ void pads_write(struct cpu *c, uint32_t a, uint16_t v);
 void pads_reset(void);
 int pads_config(const char *s);           /* --pad N,TYPE,BUTTONS */
 void ps2_key(int usage, int down);        /* a key (USB HID usage = SDL scancode) */
-void ps2_mouse(int dx, int dy, int buttons);
+void ps2_mouse(int dx, int dy, int buttons, int wheel);   /* wheel: + is away from the user */
 /* 0: the low video tier, the Spartan-3 (--no-hicolor): no hi-color, no palette */
 extern int video_hicol8;
 int write_ppm(const char *path, const uint32_t *px, int w, int h);
