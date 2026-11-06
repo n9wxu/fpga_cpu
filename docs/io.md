@@ -293,14 +293,20 @@ expansion connector (pin 7 clock, pin 8 data).
   keyboard answers FA AB 83 and a mouse FA 00 (03 or 04 for a wheel
   mouse). A device plugged in later sends AA by itself.
 
-`ps2_init()` in `fpga/lib/ps2.c` does this for both ports. It turns on
-the mouse's reporting (`F4`), and it decodes set-2 scan codes into the
-`KBD_DATA` key codes (`kbd_get()`) and mouse packets into movement
-(`ps2_mouse_get()`), from the interrupts.
+`ps2_init()` in `fpga/lib/ps2.c` does this for both ports. It turns on a
+wheel if the mouse has one (the IntelliMouse sequence: sample rates 200,
+100, 80 (`F3`), after which the mouse identifies as 03 and sends a fourth
+packet byte, the wheel's movement), sets 100 samples a second and 8
+counts a millimetre, and turns on the mouse's reporting (`F4`). It
+decodes set-2 scan codes into the `KBD_DATA` key codes (`kbd_get()`) and
+mouse packets into movement (`ps2_mouse_get()`, or `ps2_mouse_read()`
+with the wheel and the buttons pressed since the last call), from the
+interrupts.
 
-The simulator plugs a keyboard into A and a mouse into B (`--ps2 A,B`
-with `kbd`, `mouse` or `none`). The GUI's keyboard and mouse drive them;
-headless, `--ps2keys` types and `--ps2mouse "dx,dy,buttons;..."` moves.
+The simulator plugs a keyboard into A and a mouse with a wheel into B
+(`--ps2 A,B` with `kbd`, `mouse` or `none`). The GUI's keyboard and mouse
+drive them; headless, `--ps2keys` types and `--ps2mouse
+"dx,dy,buttons[,wheel];..."` moves.
 
 ## Memory layout (C runtime convention)
 

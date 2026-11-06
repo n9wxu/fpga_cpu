@@ -36,8 +36,8 @@ void opts_usage(int gui)
             "  --no-hicolor      the low tier (Spartan-3): no hi-color, no palette; its sound device\n"
             "  --wav FILE        with --no-hicolor: write the sound (16-bit stereo, 48828 Hz)\n"
             "  --ps2 A,B         the PS/2 ports' devices: kbd, mouse or none (default kbd,mouse)\n"
-            "  --ps2keys STRING  type into the PS/2 keyboard (\\n = Enter, \\e = Esc)\n"
-            "  --ps2mouse MOVES  move the PS/2 mouse: \"dx,dy,buttons;...\"\n"
+            "  --ps2keys STRING  type into the PS/2 keyboard (\\n = Enter, \\e = Esc, \\p = 100 ms)\n"
+            "  --ps2mouse MOVES  move the PS/2 mouse: \"dx,dy,buttons[,wheel];...\"\n"
             "  --screenshot FILE write the 1280x720 display as PPM at exit\n",
             gui ? "fsim-gui" : "fsim", gui ? "none" : "2000000000");
     if (gui)
