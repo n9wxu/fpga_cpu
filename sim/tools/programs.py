@@ -107,6 +107,10 @@ prog("sym40", "app", "tang-mc", "Symphony No. 40", "Mozart for orchestra on the 
      "falling-notes visualizer (apps/sym40)", lambda t: make("apps/sym40", "build/sym40.bin"))
 prog("toccata", "app", "tang-mc", "Toccata and Fugue", "Bach on a 64-node pipe organ, the microcoded audio engine "
      "(apps/toccata)", lambda t: make("apps/toccata", "build/toccata.bin"))
+for nm, title, about in (("demo", "T1M: Neon Circuit", "the T1M demo song: every feature of the format (apps/t1mplay)"),
+                         ("sym40", "T1M: Mozart 40", "Symphony No. 40, I, as a T1M module, on the T1M player (apps/t1mplay)"),
+                         ("toccata", "T1M: Toccata and Fugue", "Bach's Toccata and Fugue, complete, as a T1M module (apps/t1mplay)")):
+    prog("t1m-" + nm, "app", "tang-mc", title, about, (lambda nm: lambda t: make("apps/t1mplay", "build/%s.bin" % nm))(nm))
 prog("mcdemo", "demo", "tang-mc", "Microcoded audio", "the microcoded audio engine feature by feature, with its "
      "dataflow on screen (apps/mcdemo)", lambda t: make("apps/mcdemo", "build/mcdemo.bin"))
 
