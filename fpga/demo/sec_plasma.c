@@ -116,7 +116,11 @@ static void pl_run(int32_t frames)
 
 #else
 /* ===================================================================== high tier */
-#define PL_BMP  ((uint8_t *)BUF2)              /* 230,400 bytes: BUF2 and most of BUF3 */
+/* 230,400 bytes above the first megabyte, where no section draws: it is
+ * computed once at start-up, and the platform game (BUF3) and the shooter
+ * (BUF2) run before it every time round the loop */
+#define PL_ADDR 0x100000UL
+#define PL_BMP  ((uint8_t *)PL_ADDR)
 static uint16_t pl_pal[256];
 static int8_t   pl_colx[W];
 static uint8_t  pl_colu[W];
@@ -219,7 +223,7 @@ static void pl_run(int32_t frames)
     for (int i = 0; i < 256; i++) PAL_DATA = pl_pal[i];
     for (int i = 0; i < NSTARS; i++) { pl_star_new(i, (uint8_t)(20 + rnd16() % 236)); pl_nsaved[i] = 0; }
     BACKDROP = WHITE;
-    gfx_show(BUF2);
+    gfx_show(PL_ADDR);
     VID_CTRL = VC_TEXT | VC_BMP | VC_HICOL;
     uint8_t phase = 0;
     uint16_t fc = 0;

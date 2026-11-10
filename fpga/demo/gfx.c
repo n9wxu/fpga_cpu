@@ -16,6 +16,7 @@
  *   SCRATCH 0x020000-0x05FFFF  for the running section (salloc)
  *   BUF0-3  0x060000, 0x080000, 0x0A0000, 0x0C0000   four bitmaps
  *   TEXT    0x0FC000   the text layer
+ *   (Tang only) 0x100000-0x1383FF  the 256-colour plasma, kept for the whole run
  * int is 16 bits: anything that can pass 32767 (bitmap offsets, products)
  * must be 32-bit. */
 #include <stdint.h>
